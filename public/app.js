@@ -59,7 +59,7 @@ async function syncJobs() {
 
   try {
     const result = await fetchJson('/api/jobs/sync', { method: 'POST' });
-    state.syncStatus = `已同步 ${result.syncedCount} 个职位，时间 ${formatDateTime(result.syncedAt)}`;
+    state.syncStatus = result.message || `已触发职位同步，任务 ${result.runId}`;
     await loadData();
   } catch (error) {
     state.syncStatus = `同步失败：${error.message}`;

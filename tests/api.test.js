@@ -60,8 +60,8 @@ test('GET /api/jobs returns job list payload', async () => {
   assert.equal(response.body.items[0].job_key, '健康顾问_B0047007');
 });
 
-test('POST /api/jobs/sync returns sync result payload', async () => {
-  let syncTriggered = false;
+test('POST /api/jobs/sync triggers job sync run payload', async () => {
+  let syncPayload = null;
 
   const app = createApp({
     services: {
@@ -74,11 +74,14 @@ test('POST /api/jobs/sync returns sync result payload', async () => {
         async listJobs() {
           return [];
         },
-        async syncJobsFromSource() {
-          syncTriggered = true;
+        async triggerSync() {
+          syncPayload = true;
           return {
-            syncedCount: 3,
-            syncedAt: '2026-03-24T12:00:00.000Z'
+            ok: true,
+            runId: 12,
+            runKey: 'sync_jobs:all:2026-03-24T12:00:00.000Z',
+            status: 'running',
+            message: '职位同步任务已触发'
           };
         }
       },
@@ -93,8 +96,39 @@ test('POST /api/jobs/sync returns sync result payload', async () => {
   const response = await request(app).post('/api/jobs/sync');
 
   assert.equal(response.status, 200);
-  assert.equal(syncTriggered, true);
-  assert.equal(response.body.syncedCount, 3);
+  assert.equal(syncPayload, true);
+  assert.equal(response.body.runId, 12);
+  assert.equal(response.body.status, 'running');
+});
+
+test('POST /api/jobs/sync returns 503 when nanobot daily limit is reached', async () => {
+  const app = createApp({
+    services: {
+      dashboard: {
+        async getSummary() {
+          return { kpis: {}, queues: {}, health: {} };
+        }
+      },
+      jobs: {
+        async listJobs() {
+          return [];
+        },
+        async triggerSync() {
+          throw new Error('nanobot_daily_limit_reached');
+        }
+      },
+      candidates: {
+        async listCandidates() {
+          return [];
+        }
+      }
+    }
+  });
+
+  const response = await request(app).post('/api/jobs/sync');
+
+  assert.equal(response.status, 503);
+  assert.equal(response.body.error, 'nanobot_daily_limit_reached');
 });
 
 test('POST /api/agent/runs/:runId/actions records action through agent API', async () => {
@@ -465,4 +499,61 @@ test('POST /api/schedules/:id/trigger executes schedule', async () => {
   assert.equal(response.status, 200);
   assert.equal(capturedScheduleId, '1');
   assert.equal(response.body.scheduledRunId, 5);
+});
+
+test('JobService triggerSync creates sync run and calls nanobot', async () => {
+  const queryCalls = [];
+  const nanobotCalls = [];
+  const pool = {
+    async query(sql, params = []) {
+      queryCalls.push({ sql, params });
+
+      if (sql.includes('select job_key') && sql.includes('limit 1')) {
+        return { rows: [{ job_key: '健康顾问_B0047007' }] };
+      }
+
+      if (sql.includes('from jobs') && sql.includes('job_key = $1')) {
+        return { rows: [{ id: 8 }] };
+      }
+
+      if (sql.includes('insert into sourcing_runs')) {
+        return { rows: [{ id: 33, runKey: params[0], status: 'pending' }] };
+      }
+
+      if (sql.includes('update sourcing_runs')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes('insert into sourcing_run_events')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+
+  const { AgentService } = require('../src/services/agent-service');
+  const { JobService } = require('../src/services/job-service');
+
+  const agentService = new AgentService({
+    pool,
+    nanobotRunner: {
+      async run(payload) {
+        nanobotCalls.push(payload);
+        return { ok: true, stdout: 'synced' };
+      }
+    }
+  });
+
+  const service = new JobService({ pool, agentService });
+
+  const result = await service.triggerSync();
+
+  assert.equal(result.ok, true);
+  assert.equal(result.runId, 33);
+  assert.equal(result.status, 'running');
+  assert.match(result.runKey, /^sync_jobs:__all__:/);
+  assert.equal(nanobotCalls.length, 1);
+  assert.match(nanobotCalls[0].message, /\/boss-sourcing --sync-jobs/);
+  assert.match(nanobotCalls[0].message, /--run-id "33"/);
 });

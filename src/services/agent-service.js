@@ -505,6 +505,15 @@ class AgentService {
     const message = `/boss-sourcing --job "${jobKey}" ${modeFlag}`;
     return this.nanobotRunner.run({ message });
   }
+
+  async runNanobotForJobSync({ runId }) {
+    if (!this.nanobotRunner) {
+      throw new Error('nanobot_runner_not_configured');
+    }
+
+    const message = `/boss-sourcing --sync-jobs --run-id "${runId}"`;
+    return this.nanobotRunner.run({ message });
+  }
 }
 
 module.exports = {

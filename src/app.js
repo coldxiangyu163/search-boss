@@ -30,7 +30,7 @@ function createApp({ services = {}, config = {} } = {}) {
 
   app.post('/api/jobs/sync', async (_req, res, next) => {
     try {
-      const result = await services.jobs.syncJobsFromSource();
+      const result = await services.jobs.triggerSync();
       res.json(result);
     } catch (error) {
       next(error);
@@ -191,6 +191,22 @@ function createApp({ services = {}, config = {} } = {}) {
   });
 
   app.use((error, _req, res, _next) => {
+    if (error.message === 'nanobot_daily_limit_reached') {
+      res.status(503).json({
+        error: 'nanobot_daily_limit_reached',
+        message: 'nanobot 当日额度已用尽，未实际触发职位同步。'
+      });
+      return;
+    }
+
+    if (error.message === 'nanobot_provider_error') {
+      res.status(502).json({
+        error: 'nanobot_provider_error',
+        message: 'nanobot 调用上游模型失败，未实际触发职位同步。'
+      });
+      return;
+    }
+
     res.status(500).json({
       error: error.message
     });

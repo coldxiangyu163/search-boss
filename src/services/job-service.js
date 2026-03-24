@@ -1,6 +1,7 @@
 class JobService {
-  constructor({ pool }) {
+  constructor({ pool, agentService }) {
     this.pool = pool;
+    this.agentService = agentService;
   }
 
   async listJobs() {
@@ -26,19 +27,73 @@ class JobService {
     return result.rows;
   }
 
-  async syncJobsFromSource() {
-    const result = await this.pool.query(`
-      update jobs
-      set last_synced_at = now(),
-          updated_at = now()
-      where source = 'boss'
-      returning id
-    `);
+  async triggerSync() {
+    if (!this.agentService) {
+      throw new Error('agent_service_not_configured');
+    }
 
     return {
-      syncedCount: result.rowCount,
-      syncedAt: new Date().toISOString()
+      ok: true,
+      ...(await this.#startSyncRun())
     };
+  }
+
+  async #startSyncRun() {
+    const timestamp = new Date().toISOString();
+    const runKey = `sync_jobs:__all__:${timestamp}`;
+    const jobKey = await this.#resolveSyncAnchorJobKey();
+    const run = await this.agentService.createRun({
+      runKey,
+      jobKey,
+      mode: 'sync_jobs'
+    });
+
+    await this.agentService.recordRunEvent({
+      runId: run.id,
+      eventId: `job-sync:start:${run.id}`,
+      occurredAt: timestamp,
+      eventType: 'job_sync_requested',
+      stage: 'bootstrap',
+      message: 'job sync requested',
+      payload: { scope: 'all_jobs' }
+    });
+
+    await this.pool.query(
+      `
+        update sourcing_runs
+        set status = 'running',
+            started_at = $2,
+            updated_at = now()
+        where id = $1
+      `,
+      [run.id, timestamp]
+    );
+
+    await this.agentService.runNanobotForJobSync({ runId: run.id });
+
+    return {
+      runId: run.id,
+      runKey: run.runKey,
+      status: 'running',
+      message: '职位同步任务已触发'
+    };
+  }
+
+  async #resolveSyncAnchorJobKey() {
+    const result = await this.pool.query(
+      `
+        select job_key
+        from jobs
+        order by updated_at desc, id desc
+        limit 1
+      `
+    );
+
+    if (!result.rows[0]) {
+      throw new Error('job_not_found');
+    }
+
+    return result.rows[0].job_key;
   }
 }
 

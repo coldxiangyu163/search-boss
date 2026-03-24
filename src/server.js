@@ -18,7 +18,7 @@ const schedulerService = new SchedulerService({ pool, agentService });
 const app = createApp({
   services: {
     dashboard: new DashboardService({ pool }),
-    jobs: new JobService({ pool }),
+    jobs: new JobService({ pool, agentService }),
     candidates: new CandidateService({ pool }),
     agent: agentService,
     scheduler: schedulerService
