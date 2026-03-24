@@ -1,6 +1,6 @@
 ---
 name: boss-sourcing
-description: Use when operating BOSS recruitment sourcing workflows from a logged-in Chrome session, including syncing jobs, sourcing candidates, following up for resumes, and downloading resumes without duplication.
+description: Use when operating BOSS recruitment sourcing workflows from a logged-in Chrome session and the system must sync jobs, source candidates, follow up for resumes, and download resume attachments with backend-enforced idempotency.
 metadata:
   nanobot:
     emoji: 👔
@@ -13,35 +13,35 @@ allowed-tools: mcp__chrome-devtools__*
 
 ## Overview
 
-通过 `chrome-devtools` MCP 驱动已登录的 Chrome 招聘端，完成四类业务动作：
+通过 `chrome-devtools` MCP 驱动已登录的 Chrome 招聘端，完成以下业务动作：
 
-1. 同步岗位到本地后台和数据库
+1. 同步岗位到本地后台
 2. 推荐牛人寻源与打招呼
-3. 定时执行沟通跟进，核心目标是索取简历
-4. 下载候选人已发送的简历，写入本地目录并记录数据库路径，避免重复下载
+3. 定时处理候选人回复并在允许时索要简历
+4. 下载候选人发送的简历附件并记录到后台
 
 核心原则：
 
-- 本地后台数据库是主存储
-- PostgreSQL 是唯一运行态事实来源
-- 每个关键步骤都要调用本地后台 API，实时写入任务进度和候选人状态
-- 所有回复策略都以“获取简历”为中心
+- 后台 API 和 PostgreSQL 是唯一运行态事实来源
+- skill 是浏览器执行层，不是业务规则层
+- 每一步都必须实时写后台，禁止任务结束后一次性补写
+- 所有重复控制都以后台返回结果为准
 
 ## When To Use
 
 在以下场景触发本 skill：
 
 - 需要从 BOSS 招聘端同步最新岗位列表
-- 需要按岗位批量筛选推荐牛人并打招呼
-- 需要定时检查候选人回复并继续追要简历
-- 需要识别聊天里的简历附件并下载到本地
-- 需要把岗位、候选人、简历路径、任务进度实时写入本地后台数据库
+- 需要按岗位抓取推荐牛人并打招呼
+- 需要按定时任务处理候选人回复并继续索简历
+- 需要识别和下载候选人简历附件
 
 不适用场景：
 
 - Chrome 未登录 BOSS 招聘端
 - `chrome-devtools` MCP 不可用
-- 本地后台服务未启动
+- 本地后台未启动
+- 后台返回该候选人处于 `do_not_contact`、`manual_hold` 或岗位已关闭
 
 ## Required Runtime Inputs
 
@@ -50,7 +50,8 @@ allowed-tools: mcp__chrome-devtools__*
 - `项目目录`
 - `本地后台 API`
 - `Agent Token`
-- `运行任务 ID`，仅寻源/跟进/下载流程必填
+- `运行任务 ID`
+- `运行尝试 ID` (`attempt_id`)
 - `目标岗位` 和 `目标岗位名称`
 
 如果调用方未显式提供这些变量，默认：
@@ -59,6 +60,7 @@ allowed-tools: mcp__chrome-devtools__*
 PROJECT_ROOT = ~/work/百融云创/search-boss
 RESUME_DIR   = $PROJECT_ROOT/resumes
 LOCAL_API    = http://127.0.0.1:3000
+API_VERSION  = 2026-03-24
 ```
 
 ## Modes
@@ -74,27 +76,44 @@ LOCAL_API    = http://127.0.0.1:3000
 
 模式定义：
 
-- `--sync`：同步岗位
-- `--source`：推荐牛人寻源并打招呼
-- `--chat`：处理回复并继续索要简历
-- `--download`：下载已收到的简历
-- `--followup`：等价于 `--chat --download`
-- `--status`：读取本地后台或快照，输出当前统计
+- `--sync`: 同步岗位
+- `--source`: 推荐牛人寻源并打招呼
+- `--chat`: 处理回复并在允许时继续索简历
+- `--download`: 下载已收到的简历
+- `--followup`: 等价于 `--chat + --download`
+- `--status`: 读取本地后台统计
 
-## Local API Contract
+## Baseline Failure Scenarios To Guard Against
 
-所有请求默认使用：
+这是当前系统最容易出错的场景，skill 必须显式规避：
 
-```js
-const API_BASE = "http://127.0.0.1:3000";
-const TOKEN = "search-boss-local-agent";
-```
+1. 候选人 10 分钟前刚被索要简历，定时任务又发一次，造成重复催要。
+2. 候选人已经发过简历，系统只看聊天列表没看后台状态，重复下载和重复写库。
+3. 同一条聊天消息被反复拉取，导致回复数、索简历数重复累计。
+4. 上一次 run 的迟到回调写回当前 run，覆盖最新状态。
+5. 跟进任务在入队时可执行，但真正执行时候选人已被人工处理，仍然继续自动发消息。
+
+## Versioned Local API Contract
+
+所有请求都必须带上：
+
+- `token`
+- `v=2026-03-24`
+- `run_id`
+- `attempt_id`
+- `event_id`
+- `sequence`
+- `occurred_at`
 
 调用方式示例：
 
 ```js
+const API_BASE = "http://127.0.0.1:3000";
+const TOKEN = "search-boss-local-agent";
+const API_VERSION = "2026-03-24";
+
 async function postLocal(path, payload) {
-  const resp = await fetch(`${API_BASE}${path}?token=${encodeURIComponent(TOKEN)}`, {
+  const resp = await fetch(`${API_BASE}${path}?token=${encodeURIComponent(TOKEN)}&v=${API_VERSION}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
@@ -104,22 +123,42 @@ async function postLocal(path, payload) {
 }
 
 async function getLocal(path) {
-  const resp = await fetch(`${API_BASE}${path}?token=${encodeURIComponent(TOKEN)}`);
+  const resp = await fetch(`${API_BASE}${path}?token=${encodeURIComponent(TOKEN)}&v=${API_VERSION}`);
   if (resp.status === 404) return null;
   if (!resp.ok) throw new Error(`Local API failed: ${resp.status}`);
   return resp.json();
 }
 ```
 
-必须使用的接口：
+必用接口：
 
 - `POST /api/agent/jobs/batch`
-- `GET /api/agent/jobs/:jobKey/candidates/:geekId`
 - `POST /api/agent/runs/:runId/events`
-- `POST /api/agent/runs/:runId/candidates`
 - `POST /api/agent/runs/:runId/progress`
+- `POST /api/agent/runs/:runId/candidates`
+- `POST /api/agent/runs/:runId/messages`
+- `POST /api/agent/runs/:runId/actions`
+- `POST /api/agent/runs/:runId/attachments`
+- `GET /api/agent/jobs/:jobKey/candidates/:geekId`
+- `GET /api/agent/candidates/:candidateId/followup-decision`
 - `POST /api/agent/runs/:runId/complete`
 - `POST /api/agent/runs/:runId/fail`
+
+## Event Identity Rules
+
+每次回写都必须唯一可重放：
+
+- `event_id`: 当前回写事件的全局唯一 ID
+- `sequence`: 同一个 run/attempt 内单调递增
+- `attempt_id`: 同一个 `run_id` 下的当前执行尝试
+
+推荐 key：
+
+- 岗位同步: `job-sync:<jobKey>`
+- 候选人同步: `candidate-sync:<runId>:<attemptId>:<geekId>:<pageNo>`
+- 消息写入: `message:<jobCandidateId or geekId>:<bossMessageId>`
+- 索简历动作: `resume-request:<jobCandidateId>:<timeBucket>`
+- 简历下载动作: `resume-download:<jobCandidateId>:<bossAttachmentId or sha256>`
 
 ## Workflow
 
@@ -127,17 +166,16 @@ async function getLocal(path) {
 
 1. 确认 Chrome 已打开并连接到 `chrome-devtools`
 2. 确认 BOSS 招聘端已登录
-3. 确保本地目录存在
-
-```bash
-mkdir -p ~/work/百融云创/search-boss/data
-mkdir -p ~/work/百融云创/search-boss/resumes
-```
-
-4. 如果是带 `运行任务 ID` 的流程，先写一条启动事件：
+3. 确认本地后台可访问
+4. 如果带 `运行任务 ID`，先写启动事件：
 
 ```js
 await postLocal(`/api/agent/runs/${RUN_ID}/events`, {
+  runId: RUN_ID,
+  attemptId: ATTEMPT_ID,
+  eventId: `bootstrap:${RUN_ID}:${ATTEMPT_ID}`,
+  sequence: 1,
+  occurredAt: new Date().toISOString(),
   eventType: 'agent_bootstrap',
   stage: 'bootstrap',
   message: '已进入 BOSS 招聘端，准备执行任务',
@@ -161,36 +199,51 @@ await postLocal(`/api/agent/runs/${RUN_ID}/events`, {
 }
 ```
 
-3. 更新 `DATA_FILE.jobs`
-4. 立即调用：
+3. 立即调用：
 
 ```js
-await postLocal('/api/agent/jobs/batch', { jobs });
+await postLocal('/api/agent/jobs/batch', {
+  runId: null,
+  attemptId: null,
+  eventId: `job-sync:${Date.now()}`,
+  sequence: 1,
+  occurredAt: new Date().toISOString(),
+  jobs
+});
 ```
+
+禁止写入任何本地 JSON 作为运行态存储。
 
 ### 2. 寻源打招呼 `--source`
 
 业务目标：
 
 - 选定岗位，抓取推荐牛人
-- 按 JD 和岗位城市/学历要求筛选
+- 按岗位要求筛选
 - 只对未打过招呼的人打招呼
-- 候选人状态、任务进度、统计实时写库
+- 每个候选人的事实、动作、进度实时写后台
 
 每页流程：
 
-1. 发送 `page_fetch_started`
+1. 写 `page_fetch_started` 事件
 2. 拉取推荐牛人
 3. 对每个候选人：
-   - 判断是否满足岗位要求
-   - 若命中且未打过招呼，执行打招呼
-   - 立即调用 `/api/agent/runs/:runId/candidates`
+   - 先调用 `GET /api/agent/jobs/:jobKey/candidates/:geekId`
+   - 若后台显示已打招呼或处于不可联系状态，直接跳过
+   - 否则执行打招呼
+   - 立即写候选人当前快照
+   - 再写一条 `greet` 动作
 4. 每页结束调用 `/progress`
 
-候选人实时写库示例：
+候选人快照示例：
 
 ```js
 await postLocal(`/api/agent/runs/${RUN_ID}/candidates`, {
+  runId: RUN_ID,
+  attemptId: ATTEMPT_ID,
+  eventId: `candidate-sync:${RUN_ID}:${ATTEMPT_ID}:${geek.encryptGeekId}:page-${PAGE}`,
+  sequence: nextSequence(),
+  occurredAt: new Date().toISOString(),
   bossEncryptGeekId: geek.encryptGeekId,
   name: geek.name,
   education: geek.degree,
@@ -211,30 +264,84 @@ await postLocal(`/api/agent/runs/${RUN_ID}/candidates`, {
 });
 ```
 
-### 3. 沟通跟进 `--chat`
+动作写入示例：
+
+```js
+await postLocal(`/api/agent/runs/${RUN_ID}/actions`, {
+  runId: RUN_ID,
+  attemptId: ATTEMPT_ID,
+  eventId: `greet:${RUN_ID}:${ATTEMPT_ID}:${geek.encryptGeekId}`,
+  sequence: nextSequence(),
+  occurredAt: new Date().toISOString(),
+  actionType: 'greet_sent',
+  dedupeKey: `greet:${JOB_KEY}:${geek.encryptGeekId}`,
+  bossEncryptGeekId: geek.encryptGeekId,
+  payload: { page: PAGE }
+});
+```
+
+### 3. 消息处理 `--chat`
 
 业务目标：
 
-- 定时处理候选人回复
-- 回复的第一优先级永远是获取简历
+- 读取候选人新消息
+- 按消息粒度写后台
+- 只有后台允许时才继续索简历
 
-回复策略：
+#### 3a. 先写消息，再做决策
 
-- 候选人感兴趣：先简述岗位亮点，再索取简历
-- 询问薪资福利：给范围，但落点仍然是“发简历便于推进”
-- 只问地点/上班方式：简答后继续索要简历
-- 明确拒绝：标记 `rejected`
-- 已发简历：标记 `resume_received`
-
-每次读取到候选人新消息后：
+每读到一条消息，先写：
 
 ```js
-await postLocal(`/api/agent/runs/${RUN_ID}/candidates`, {
+await postLocal(`/api/agent/runs/${RUN_ID}/messages`, {
+  runId: RUN_ID,
+  attemptId: ATTEMPT_ID,
+  eventId: `message:${bossMessageId}`,
+  sequence: nextSequence(),
+  occurredAt: messageTime,
   bossEncryptGeekId: geekId,
-  name,
-  status: hasResume ? 'resume_received' : isRejected ? 'rejected' : 'responded',
-  lastMessageAt: new Date().toISOString(),
-  notes: summary
+  bossMessageId,
+  direction: 'inbound',
+  messageType: 'text',
+  contentText: messageText,
+  rawPayload: rawMessage
+});
+```
+
+#### 3b. 跟进前必须问后台
+
+在发送下一条消息前，必须查询：
+
+```js
+const decision = await getLocal(`/api/agent/candidates/${candidateId}/followup-decision`);
+```
+
+只有 `decision.allowed === true` 才允许继续索简历。
+
+如果 `allowed === false`：
+
+- 不发送消息
+- 写一条 `followup_skipped` 动作
+- 原因使用后台返回的 `reason`
+
+#### 3c. 允许发送时再写动作
+
+发送索简历消息后：
+
+```js
+await postLocal(`/api/agent/runs/${RUN_ID}/actions`, {
+  runId: RUN_ID,
+  attemptId: ATTEMPT_ID,
+  eventId: `resume-request:${candidateId}:${decision.timeBucket}`,
+  sequence: nextSequence(),
+  occurredAt: new Date().toISOString(),
+  actionType: 'resume_request_sent',
+  dedupeKey: `resume-request:${candidateId}:${decision.timeBucket}`,
+  bossEncryptGeekId: geekId,
+  payload: {
+    templateType: decision.recommendedAction,
+    reason: decision.reason
+  }
 });
 ```
 
@@ -244,35 +351,68 @@ await postLocal(`/api/agent/runs/${RUN_ID}/candidates`, {
 
 - 识别聊天中的简历附件
 - 下载到 `resumes/{jobKey}/`
-- 数据库保存 `resumePath`
-- 不重复下载
+- 以附件 ID 或 SHA 去重
 
-下载前必须先查询本地后台：
+下载前必须做两次检查：
+
+1. 查询候选人当前状态：
 
 ```js
 const existing = await getLocal(`/api/agent/jobs/${encodeURIComponent(JOB_KEY)}/candidates/${encodeURIComponent(GEEK_ID)}`);
-if (existing?.resumeDownloaded && existing?.resumePath) {
-  // 已下载，直接跳过
-}
 ```
 
-下载规则：
-
-- 目录：`resumes/{jobKey}/`
-- 文件名：`{候选人姓名}_{encryptGeekId}.pdf`
-- 如果本地已存在同名文件，也视为已下载，直接写库确认即可
-
-下载完成后立即写库：
+2. 先登记附件元信息：
 
 ```js
-await postLocal(`/api/agent/runs/${RUN_ID}/candidates`, {
-  bossEncryptGeekId: geekId,
-  name,
-  status: 'resume_downloaded',
-  lastMessageAt: new Date().toISOString(),
-  resumeDownloaded: true,
-  resumePath: `resumes/${JOB_KEY}/${fileName}`,
-  notes: '已下载简历'
+const attachmentRecord = await postLocal(`/api/agent/runs/${RUN_ID}/attachments`, {
+  runId: RUN_ID,
+  attemptId: ATTEMPT_ID,
+  eventId: `attachment:${bossAttachmentId}`,
+  sequence: nextSequence(),
+  occurredAt: new Date().toISOString(),
+  bossEncryptGeekId: GEEK_ID,
+  bossAttachmentId,
+  fileName,
+  mimeType,
+  fileSize,
+  sha256: null,
+  status: 'discovered'
+});
+```
+
+如果后台返回 `alreadyProcessed=true`，直接跳过，不下载。
+
+下载完成后再回写：
+
+```js
+await postLocal(`/api/agent/runs/${RUN_ID}/attachments`, {
+  runId: RUN_ID,
+  attemptId: ATTEMPT_ID,
+  eventId: `attachment-downloaded:${bossAttachmentId}`,
+  sequence: nextSequence(),
+  occurredAt: new Date().toISOString(),
+  bossEncryptGeekId: GEEK_ID,
+  bossAttachmentId,
+  fileName,
+  sha256,
+  storedPath: `resumes/${JOB_KEY}/${fileName}`,
+  status: 'downloaded'
+});
+```
+
+然后写一条动作：
+
+```js
+await postLocal(`/api/agent/runs/${RUN_ID}/actions`, {
+  runId: RUN_ID,
+  attemptId: ATTEMPT_ID,
+  eventId: `resume-download:${candidateId}:${bossAttachmentId || sha256}`,
+  sequence: nextSequence(),
+  occurredAt: new Date().toISOString(),
+  actionType: 'resume_downloaded',
+  dedupeKey: `resume-download:${candidateId}:${bossAttachmentId || sha256}`,
+  bossEncryptGeekId: GEEK_ID,
+  payload: { storedPath: `resumes/${JOB_KEY}/${fileName}` }
 });
 ```
 
@@ -282,6 +422,11 @@ await postLocal(`/api/agent/runs/${RUN_ID}/candidates`, {
 
 ```js
 await postLocal(`/api/agent/runs/${RUN_ID}/complete`, {
+  runId: RUN_ID,
+  attemptId: ATTEMPT_ID,
+  eventId: `run-complete:${RUN_ID}:${ATTEMPT_ID}`,
+  sequence: nextSequence(),
+  occurredAt: new Date().toISOString(),
   pagesProcessed,
   candidatesSeen,
   candidatesMatched,
@@ -294,38 +439,51 @@ await postLocal(`/api/agent/runs/${RUN_ID}/complete`, {
 
 ```js
 await postLocal(`/api/agent/runs/${RUN_ID}/fail`, {
+  runId: RUN_ID,
+  attemptId: ATTEMPT_ID,
+  eventId: `run-fail:${RUN_ID}:${ATTEMPT_ID}`,
+  sequence: nextSequence(),
+  occurredAt: new Date().toISOString(),
   message: error.message
 });
 ```
 
 ## Scheduled Follow-up
 
-定时任务的目标不是“聊天活跃度”，而是“尽快拿到简历”。
+定时任务目标不是“保持聊天活跃”，而是“在合适时机拿到简历”。
 
-建议调度频率：
+推荐频率：
 
-- `--chat`：每 10 到 15 分钟执行一次
-- `--download`：每 10 到 15 分钟执行一次
+- `--chat`: 每 10-15 分钟一次
+- `--download`: 每 10-15 分钟一次
 - 或统一执行 `--followup`
 
-外部调度示例：
+但注意：即使任务被调度，也必须在执行时再次读取后台决策。任务排队不等于允许发消息。
 
-```bash
-uv run nanobot agent --config "/Users/coldxiangyu/.nanobot-boss/config.json" --message "/boss-sourcing --job \"健康顾问_B0047007\" --followup"
-```
+## Quick Reference
 
-## Error Handling
-
-- 登录过期：立即停止并上报 `run_failed`
-- API 返回非 0：记录事件，跳过当前候选人
-- 本地后台 API 失败：重试 1 次，仍失败则停止当前任务并调用 `/fail`
-- 候选人已是好友：跳过打招呼，但仍可跟进聊天
-- 简历已下载：禁止重复下载
+| 场景 | 必做动作 | 禁止动作 |
+|---|---|---|
+| 新候选人同步 | 写 candidate 快照 | 只打印日志不写库 |
+| 打招呼成功 | 写 candidate + `greet_sent` action | 仅更新 status |
+| 收到候选人回复 | 先写 `messages` | 先回复再补写消息 |
+| 准备索简历 | 先查 `followup-decision` | 直接发消息 |
+| 发现附件 | 先登记 attachment | 先下载后判断是否重复 |
+| 下载完成 | 写 attachment + `resume_downloaded` action | 只改 `resumeDownloaded=true` |
 
 ## Common Mistakes
 
-- 只在任务结束时一次性写库，不在关键步骤实时写库
-- 依赖 `candidates.json` 或其他本地文件作为运行态存储
-- 下载简历前不查询候选人当前状态，导致重复下载
-- 回复候选人时只答问题，不继续索要简历
-- 任务结束后没有调用 `/complete` 或 `/fail`
+- 只在任务结束时一次性写后台
+- 不带 `attempt_id`、`event_id`、`sequence`
+- 定时任务不查后台 decision 就重复索简历
+- 看到附件就直接下载，不先登记附件元信息
+- 只更新 candidate `status`，不写 `messages/actions/attachments`
+- 仍然依赖本地 JSON 或隐式本地状态判断是否已处理
+
+## Error Handling
+
+- 登录过期: 立即停止并调用 `/fail`
+- 本地后台 API 失败: 重试 1 次，仍失败则终止当前任务
+- API 返回“不允许发送”: 记录 `followup_skipped`，不要硬发
+- 发现重复附件: 记录跳过事件，不下载
+- 发现旧 `attempt_id` 被拒绝: 立即停止当前 run，避免覆盖新执行
