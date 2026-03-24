@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>寻源进度看板 - BOSS直聘</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
+
+  :root {
+    --boss-blue: #00a6ff;
+    --boss-blue-deep: #0066cc;
+    --boss-blue-glow: rgba(0, 166, 255, 0.12);
+    --surface: #ffffff;
+    --surface-alt: #f6f8fb;
+    --surface-hover: #eef2f7;
+    --border: #e4e9f0;
+    --border-light: #f0f3f7;
+    --text-primary: #1a2332;
+    --text-secondary: #5a6b82;
+    --text-tertiary: #8d9bb0;
+    --green: #10b981;
+    --green-bg: #ecfdf5;
+    --blue: #3b82f6;
+    --blue-bg: #eff6ff;
+    --purple: #8b5cf6;
+    --purple-bg: #f5f3ff;
+    --gray: #94a3b8;
+    --gray-bg: #f1f5f9;
+    --orange: #f59e0b;
+    --orange-bg: #fffbeb;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02);
+    --shadow-md: 0 4px 16px rgba(0,0,0,0.06), 0 1px 4px rgba(0,0,0,0.04);
+    --shadow-lg: 0 8px 32px rgba(0,0,0,0.08), 0 2px 8px rgba(0,0,0,0.04);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Noto Sans SC', -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: var(--surface-alt);
+    color: var(--text-primary);
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* Top accent bar */
+  .accent-bar {
+    height: 3px;
+    background: linear-gradient(90deg, var(--boss-blue-deep), var(--boss-blue), #38bdf8);
+  }
+
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 32px 24px 48px;
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 28px;
+    animation: fadeDown 0.5s ease-out;
+  }
+
+  .header-left h1 {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .header-left h1 .logo-icon {
+    width: 32px;
+    height: 32px;
+    background: linear-gradient(135deg, var(--boss-blue-deep), var(--boss-blue));
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 16px;
+    font-weight: 700;
+    font-family: 'DM Mono', monospace;
+    flex-shrink: 0;
+  }
+
+  .header-meta {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-top: 6px;
+    font-size: 13px;
+    color: var(--text-tertiary);
+  }
+
+  .header-meta .dot {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: var(--text-tertiary);
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .date-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 8px 14px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    font-family: 'DM Mono', 'Noto Sans SC', monospace;
+  }
+
+  .date-badge .pulse {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  /* Stats row */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 20px;
+    animation: fadeDown 0.5s ease-out 0.1s both;
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    padding: 22px 20px;
+    box-shadow: var(--shadow-sm);
+    position: relative;
+    overflow: hidden;
+    transition: box-shadow 0.2s, transform 0.2s;
+  }
+
+  .stat-card:hover {
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+  }
+
+  .stat-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+  }
+
+  .stat-card.accent-green::before { background: var(--green); }
+  .stat-card.accent-blue::before { background: var(--blue); }
+  .stat-card.accent-purple::before { background: var(--purple); }
+  .stat-card.accent-orange::before { background: var(--orange); }
+
+  .stat-card .stat-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    margin-bottom: 12px;
+  }
+
+  .stat-card.accent-green .stat-icon { background: var(--green-bg); }
+  .stat-card.accent-blue .stat-icon { background: var(--blue-bg); }
+  .stat-card.accent-purple .stat-icon { background: var(--purple-bg); }
+  .stat-card.accent-orange .stat-icon { background: var(--orange-bg); }
+
+  .stat-number {
+    font-family: 'DM Mono', monospace;
+    font-size: 32px;
+    font-weight: 500;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+
+  .stat-card.accent-green .stat-number { color: var(--green); }
+  .stat-card.accent-blue .stat-number { color: var(--blue); }
+  .stat-card.accent-purple .stat-number { color: var(--purple); }
+  .stat-card.accent-orange .stat-number { color: var(--orange); }
+
+  .stat-label {
+    font-size: 13px;
+    color: var(--text-tertiary);
+    font-weight: 400;
+  }
+
+  /* Job info strip */
+  .job-strip {
+    background: var(--surface);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    padding: 16px 22px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    box-shadow: var(--shadow-sm);
+    animation: fadeDown 0.5s ease-out 0.2s both;
+  }
+
+  .job-strip-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    flex-shrink: 0;
+  }
+
+  .job-strip-divider {
+    width: 1px;
+    height: 20px;
+    background: var(--border);
+    flex-shrink: 0;
+  }
+
+  .job-tags {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .job-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 12px;
+    background: var(--boss-blue-glow);
+    border: 1px solid rgba(0, 166, 255, 0.15);
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--boss-blue-deep);
+  }
+
+  /* Table section */
+  .table-section {
+    background: var(--surface);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+    animation: fadeDown 0.5s ease-out 0.3s both;
+  }
+
+  .table-header {
+    padding: 18px 22px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .table-header h2 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .table-header .count-badge {
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    font-weight: 500;
+    background: var(--boss-blue-glow);
+    color: var(--boss-blue-deep);
+    padding: 2px 8px;
+    border-radius: 10px;
+  }
+
+  .table-wrapper {
+    overflow-x: auto;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  thead th {
+    text-align: left;
+    padding: 12px 16px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-tertiary);
+    background: var(--surface-alt);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    letter-spacing: 0.02em;
+  }
+
+  thead th:first-child { padding-left: 22px; }
+  thead th:last-child { padding-right: 22px; }
+
+  tbody tr {
+    transition: background 0.15s;
+  }
+
+  tbody tr:hover {
+    background: var(--surface-hover);
+  }
+
+  tbody td {
+    padding: 14px 16px;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border-light);
+    white-space: nowrap;
+  }
+
+  tbody td:first-child { padding-left: 22px; }
+  tbody td:last-child { padding-right: 22px; }
+
+  tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  .name-cell {
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .edu-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .edu-benke {
+    background: #dbeafe;
+    color: #1d4ed8;
+  }
+
+  .edu-dazhuan {
+    background: #e0e7ff;
+    color: #4338ca;
+  }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .status-badge::before {
+    content: '';
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .status-greeted {
+    background: var(--green-bg);
+    color: #059669;
+  }
+  .status-greeted::before { background: var(--green); }
+
+  .status-responded {
+    background: var(--blue-bg);
+    color: #2563eb;
+  }
+  .status-responded::before { background: var(--blue); }
+
+  .status-resume_downloaded {
+    background: var(--purple-bg);
+    color: #7c3aed;
+  }
+  .status-resume_downloaded::before { background: var(--purple); }
+
+  .status-unknown {
+    background: var(--gray-bg);
+    color: #64748b;
+  }
+  .status-unknown::before { background: var(--gray); }
+
+  .time-cell {
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    color: var(--text-tertiary);
+  }
+
+  .salary-cell {
+    font-family: 'DM Mono', monospace;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  /* Error state */
+  .error-state {
+    text-align: center;
+    padding: 80px 24px;
+    animation: fadeDown 0.5s ease-out;
+  }
+
+  .error-state .error-icon {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: #fef2f2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    margin: 0 auto 16px;
+  }
+
+  .error-state h2 {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--text-primary);
+  }
+
+  .error-state p {
+    font-size: 14px;
+    color: var(--text-secondary);
+    max-width: 500px;
+    margin: 0 auto;
+    line-height: 1.7;
+  }
+
+  .error-state code {
+    display: inline-block;
+    margin-top: 16px;
+    background: var(--surface-alt);
+    border: 1px solid var(--border);
+    padding: 8px 16px;
+    border-radius: var(--radius-sm);
+    font-family: 'DM Mono', monospace;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
+  /* Loading */
+  .loading-state {
+    text-align: center;
+    padding: 120px 24px;
+    animation: fadeDown 0.5s ease-out;
+  }
+
+  .loading-spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--border);
+    border-top-color: var(--boss-blue);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin: 0 auto 16px;
+  }
+
+  .loading-state p {
+    font-size: 14px;
+    color: var(--text-tertiary);
+  }
+
+  /* Footer */
+  .footer {
+    text-align: center;
+    padding: 24px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+  }
+
+  /* Animations */
+  @keyframes fadeDown {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* Responsive */
+  @media (max-width: 900px) {
+    .stats-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+    .header {
+      flex-direction: column;
+      gap: 12px;
+    }
+  }
+
+  @media (max-width: 600px) {
+    .container { padding: 20px 16px 32px; }
+    .stats-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+    .stat-card { padding: 16px 14px; }
+    .stat-number { font-size: 24px; }
+    .job-strip { flex-wrap: wrap; gap: 10px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="accent-bar"></div>
+
+<div class="container">
+  <div id="app">
+    <div class="loading-state">
+      <div class="loading-spinner"></div>
+      <p>正在加载数据...</p>
+    </div>
+  </div>
+</div>
+
+<script>
+(async function() {
+  const app = document.getElementById('app');
+
+  const STATUS_MAP = {
+    greeted: { label: '已打招呼', cls: 'status-greeted' },
+    responded: { label: '已回复', cls: 'status-responded' },
+    resume_downloaded: { label: '简历已下载', cls: 'status-resume_downloaded' },
+  };
+
+  function formatTime(isoStr) {
+    if (!isoStr) return '—';
+    const d = new Date(isoStr);
+    if (isNaN(d)) return '—';
+    return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+
+  function formatDateTime(isoStr) {
+    if (!isoStr) return '—';
+    const d = new Date(isoStr);
+    if (isNaN(d)) return '—';
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+  }
+
+  function getLocalToday() {
+    return new Date().toLocaleDateString('sv');
+  }
+
+  function escapeHtml(str) {
+    if (!str) return '—';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  // Load data
+  let data;
+  try {
+    const res = await fetch('./data/candidates.json');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    data = res.json ? await res.json() : JSON.parse(await res.text());
+  } catch (e) {
+    app.innerHTML = `
+      <div class="error-state">
+        <div class="error-icon">&#x26A0;&#xFE0F;</div>
+        <h2>无法加载数据</h2>
+        <p>请通过本地服务器打开页面，或使用 Firefox 直接打开。<br>
+        Chrome/Edge 不支持从本地文件直接加载数据。</p>
+        <code>python3 -m http.server 8080</code>
+      </div>`;
+    return;
+  }
+
+  // Validate structure
+  if (!data.metadata || !data.jobs || !data.dailyStats || !data.candidates) {
+    app.innerHTML = `
+      <div class="error-state">
+        <div class="error-icon">&#x26A0;&#xFE0F;</div>
+        <h2>数据格式异常</h2>
+        <p>请检查 candidates.json 文件结构，确保包含 metadata、jobs、dailyStats、candidates 字段。</p>
+      </div>`;
+    return;
+  }
+
+  // Extract data
+  const jobKey = Object.keys(data.jobs)[0];
+  const job = data.jobs[jobKey] || {};
+  const candidates = data.candidates || [];
+
+  // Get daily stats - today or most recent
+  const today = getLocalToday();
+  let statsDate = today;
+  let stats = data.dailyStats[today];
+  if (!stats) {
+    const dates = Object.keys(data.dailyStats).sort();
+    statsDate = dates[dates.length - 1] || today;
+    stats = data.dailyStats[statsDate] || { greetingsSent: 0, responsesReceived: 0, resumesDownloaded: 0 };
+  }
+
+  const greetings = stats.greetingsSent || 0;
+  const responses = stats.responsesReceived || 0;
+  const resumes = stats.resumesDownloaded || 0;
+  const responseRate = greetings > 0 ? ((responses / greetings) * 100).toFixed(1) : '0.0';
+
+  const dateSubtitle = statsDate !== today
+    ? `<span style="color:var(--orange);font-size:12px;margin-left:6px;">(数据日期: ${escapeHtml(statsDate)})</span>`
+    : '';
+
+  // Build candidate rows
+  const rows = candidates.map(c => {
+    const statusInfo = STATUS_MAP[c.status] || { label: c.status || '—', cls: 'status-unknown' };
+    const eduCls = c.education === '本科' ? 'edu-benke' : c.education === '大专' ? 'edu-dazhuan' : '';
+
+    return `<tr>
+      <td class="name-cell">${escapeHtml(c.name)}</td>
+      <td><span class="edu-badge ${eduCls}">${escapeHtml(c.education)}</span></td>
+      <td>${escapeHtml(c.experience)}</td>
+      <td class="salary-cell">${escapeHtml(c.expectedSalary)}</td>
+      <td>${escapeHtml(c.age)}</td>
+      <td>${escapeHtml(c.position)}</td>
+      <td><span class="status-badge ${statusInfo.cls}">${escapeHtml(statusInfo.label)}</span></td>
+      <td class="time-cell">${formatTime(c.greetedAt)}</td>
+    </tr>`;
+  }).join('');
+
+  // Render
+  app.innerHTML = `
+    <div class="header">
+      <div class="header-left">
+        <h1>
+          <span class="logo-icon">B</span>
+          寻源进度看板
+        </h1>
+        <div class="header-meta">
+          <span>数据更新: ${formatDateTime(data.metadata.lastUpdated)}</span>
+          <span class="dot"></span>
+          <span>${escapeHtml(job.jobName || '—')}</span>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="date-badge">
+          <span class="pulse"></span>
+          ${escapeHtml(statsDate)}${dateSubtitle}
+        </div>
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card accent-green">
+        <div class="stat-icon">&#x1F44B;</div>
+        <div class="stat-number">${greetings}</div>
+        <div class="stat-label">已打招呼</div>
+      </div>
+      <div class="stat-card accent-blue">
+        <div class="stat-icon">&#x1F4AC;</div>
+        <div class="stat-number">${responses}</div>
+        <div class="stat-label">已回复</div>
+      </div>
+      <div class="stat-card accent-purple">
+        <div class="stat-icon">&#x1F4C4;</div>
+        <div class="stat-number">${resumes}</div>
+        <div class="stat-label">简历已下载</div>
+      </div>
+      <div class="stat-card accent-orange">
+        <div class="stat-icon">&#x1F4C8;</div>
+        <div class="stat-number">${responseRate}%</div>
+        <div class="stat-label">回复率</div>
+      </div>
+    </div>
+
+    <div class="job-strip">
+      <span class="job-strip-label">当前岗位</span>
+      <span class="job-strip-divider"></span>
+      <div class="job-tags">
+        <span class="job-tag">&#x1F4BC; ${escapeHtml(job.jobName || '—')}</span>
+        <span class="job-tag">&#x1F4B0; ${escapeHtml(job.salary || '—')}</span>
+        <span class="job-tag">&#x1F4CD; ${escapeHtml(job.city || '—')}</span>
+      </div>
+    </div>
+
+    <div class="table-section">
+      <div class="table-header">
+        <h2>
+          候选人列表
+          <span class="count-badge">${candidates.length}</span>
+        </h2>
+      </div>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>姓名</th>
+              <th>学历</th>
+              <th>经验</th>
+              <th>期望薪资</th>
+              <th>年龄</th>
+              <th>当前职位</th>
+              <th>状态</th>
+              <th>打招呼时间</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="footer">
+      BOSS直聘寻源看板 &middot; 数据来源: candidates.json
+    </div>
+  `;
+})();
+</script>
+
+</body>
+</html>

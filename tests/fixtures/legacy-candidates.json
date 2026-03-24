@@ -1,0 +1,41 @@
+{
+  "metadata": {
+    "lastUpdated": "2026-03-24T13:23:08+08:00"
+  },
+  "jobs": {
+    "健康顾问_B0047007": {
+      "encryptJobId": "job_encrypt_001",
+      "jobName": "健康顾问（B0047007）",
+      "salary": "5-6K",
+      "city": "重庆",
+      "jdPath": "健康顾问_B0047007.md"
+    }
+  },
+  "dailyStats": {
+    "2026-03-24": {
+      "greetingsSent": 3,
+      "responsesReceived": 1,
+      "resumesDownloaded": 0
+    }
+  },
+  "candidates": [
+    {
+      "encryptGeekId": "geek_encrypt_001",
+      "name": "测试候选人",
+      "jobName": "健康顾问_B0047007",
+      "education": "大专",
+      "experience": "3年",
+      "expectedSalary": "5-6K",
+      "city": "重庆",
+      "age": "27岁",
+      "school": "重庆医药高等专科学校",
+      "position": "健康顾问",
+      "greetedAt": "2026-03-24T10:00:00+08:00",
+      "status": "greeted",
+      "lastMessageAt": null,
+      "resumeDownloaded": false,
+      "resumePath": null,
+      "notes": ""
+    }
+  ]
+}

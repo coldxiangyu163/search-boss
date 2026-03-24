@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Search Boss Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="page-shell">
+    <aside class="side-rail">
+      <div class="rail-badge">BOSS</div>
+      <div class="rail-copy">
+        <p class="eyebrow">Search Boss Admin</p>
+        <h1>寻源中台</h1>
+        <p class="lead">岗位同步、寻源执行、候选人沉淀、实时进度，一页完成。</p>
+      </div>
+
+      <section class="control-card">
+        <div class="section-head">
+          <span class="section-kicker">Nanobot 执行</span>
+          <h2>后台执行入口</h2>
+        </div>
+        <div class="runtime-note">
+          <p>当前按钮会直接调用本机 `nanobot agent`，并复用你已经加载的 `boss-sourcing` skill。</p>
+          <p>执行前请确认：</p>
+          <ul>
+            <li>Chrome 已打开并登录 BOSS 招聘端</li>
+            <li>`chrome-devtools` MCP 可连接 `127.0.0.1:9222`</li>
+            <li>nanobot 配置与 workspace 可用</li>
+          </ul>
+        </div>
+        <div class="button-row">
+          <button id="sync-jobs-button" class="button primary">同步岗位</button>
+          <button id="refresh-button" class="button ghost">刷新概览</button>
+        </div>
+        <p id="sync-status" class="muted-copy">等待同步</p>
+      </section>
+
+      <section class="control-card compact">
+        <div class="section-head">
+          <span class="section-kicker">实时信号</span>
+          <h2>事件流</h2>
+        </div>
+        <div class="signal-row">
+          <span class="signal-dot"></span>
+          <span id="stream-status">正在连接 SSE</span>
+        </div>
+      </section>
+    </aside>
+
+    <main class="main-stage">
+      <section class="hero-strip">
+        <div class="hero-copy">
+          <p class="eyebrow">Operations Console</p>
+          <h2>岗位管理与寻源执行台</h2>
+          <p>左侧负责接 Boss 职位，右侧把选定岗位变成可追踪的寻源任务和候选人资产。</p>
+        </div>
+        <div class="stats-grid" id="summary-grid"></div>
+      </section>
+
+      <section class="workspace-grid scheduler-grid">
+        <div class="panel schedule-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">定时任务</p>
+              <h3>任务管理</h3>
+            </div>
+            <span id="schedule-count" class="mono-badge">0 schedules</span>
+          </div>
+          <form id="schedule-form" class="schedule-form">
+            <label>
+              <span class="field-label">任务名称</span>
+              <input id="schedule-name" class="form-input" name="name" placeholder="例如：健康顾问定时跟进">
+            </label>
+            <label>
+              <span class="field-label">任务类型</span>
+              <select id="schedule-job-type" class="form-select" name="jobType">
+                <option value="sync_jobs">岗位同步</option>
+                <option value="followup">简历跟进</option>
+              </select>
+            </label>
+            <label>
+              <span class="field-label">Cron 表达式</span>
+              <input id="schedule-cron" class="form-input" name="cronExpression" placeholder="*/15 * * * *">
+            </label>
+            <label>
+              <span class="field-label">岗位 Key</span>
+              <input id="schedule-job-key" class="form-input" name="jobKey" placeholder="仅跟进任务必填">
+            </label>
+            <label class="toggle-label">
+              <span class="field-label">启用状态</span>
+              <input id="schedule-enabled" type="checkbox" checked>
+            </label>
+            <div class="schedule-actions">
+              <button class="button primary" type="submit">保存任务</button>
+              <button id="schedule-reset" class="button ghost" type="button">新建</button>
+            </div>
+          </form>
+          <div id="schedule-status" class="muted-copy">还没有创建定时任务。</div>
+          <div id="schedule-list" class="jobs-list"></div>
+        </div>
+
+        <div class="panel schedule-runs-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">调度执行</p>
+              <h3>最近运行记录</h3>
+            </div>
+            <span id="schedule-run-count" class="mono-badge">0 runs</span>
+          </div>
+          <div id="schedule-runs" class="timeline"></div>
+        </div>
+      </section>
+
+      <section class="workspace-grid">
+        <div class="panel jobs-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">岗位管理</p>
+              <h3>岗位列表</h3>
+            </div>
+            <span id="job-count" class="mono-badge">0 jobs</span>
+          </div>
+          <div id="jobs-list" class="jobs-list"></div>
+        </div>
+
+        <div class="panel detail-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">选中岗位</p>
+              <h3 id="selected-job-title">尚未选择岗位</h3>
+            </div>
+            <span id="selected-job-badge" class="status-pill neutral">待选择</span>
+          </div>
+
+          <div id="job-detail" class="job-detail empty-state">
+            请选择左侧岗位，查看筛选条件、启动寻源、并监控执行过程。
+          </div>
+        </div>
+      </section>
+
+      <section class="workspace-grid lower">
+        <div class="panel run-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">任务时间线</p>
+              <h3>寻源进度流</h3>
+            </div>
+            <span id="run-status-pill" class="status-pill neutral">空闲</span>
+          </div>
+          <div id="run-summary" class="run-summary empty-state">发起寻源后，这里会逐步刷新任务进度。</div>
+          <div id="timeline" class="timeline"></div>
+        </div>
+
+        <div class="panel candidates-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-kicker">候选人资产</p>
+              <h3>候选人列表</h3>
+            </div>
+            <span id="candidate-count" class="mono-badge">0 candidates</span>
+          </div>
+          <div class="table-shell">
+            <table>
+              <thead>
+                <tr>
+                  <th>姓名</th>
+                  <th>学历</th>
+                  <th>经验</th>
+                  <th>城市</th>
+                  <th>职位</th>
+                  <th>状态</th>
+                  <th>打招呼时间</th>
+                </tr>
+              </thead>
+              <tbody id="candidates-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
