@@ -12,23 +12,34 @@ class NanobotRunner {
     };
   }
 
-  run({ message }) {
+  run({ message, onStdoutLine, onStderrLine }) {
     const { command, args } = this.buildCommand({ message });
 
     return new Promise((resolve, reject) => {
       const child = spawn(command, args, { stdio: 'pipe' });
       let stdout = '';
       let stderr = '';
+      let stdoutBuffer = '';
+      let stderrBuffer = '';
 
       child.stdout.on('data', (chunk) => {
-        stdout += chunk.toString();
+        const text = chunk.toString();
+        stdout += text;
+        stdoutBuffer += text;
+        stdoutBuffer = flushLines(stdoutBuffer, onStdoutLine);
       });
 
       child.stderr.on('data', (chunk) => {
-        stderr += chunk.toString();
+        const text = chunk.toString();
+        stderr += text;
+        stderrBuffer += text;
+        stderrBuffer = flushLines(stderrBuffer, onStderrLine);
       });
 
       child.on('close', (code) => {
+        flushLastLine(stdoutBuffer, onStdoutLine);
+        flushLastLine(stderrBuffer, onStderrLine);
+
         if (code === 0) {
           const limitError = this.#extractProviderLimitError({ stdout, stderr });
           if (limitError) {
@@ -57,6 +68,25 @@ class NanobotRunner {
     }
 
     return null;
+  }
+}
+
+function flushLines(buffer, callback) {
+  if (!callback) {
+    return buffer;
+  }
+
+  const lines = buffer.split(/\r?\n/);
+  const remaining = lines.pop() ?? '';
+  for (const line of lines) {
+    callback(line);
+  }
+  return remaining;
+}
+
+function flushLastLine(buffer, callback) {
+  if (callback && buffer.trim()) {
+    callback(buffer);
   }
 }
 

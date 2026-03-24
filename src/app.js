@@ -37,6 +37,17 @@ function createApp({ services = {}, config = {} } = {}) {
     }
   });
 
+  app.get('/api/runs/:runId/events', async (req, res, next) => {
+    try {
+      const result = await services.agent.listRunEvents(req.params.runId, {
+        afterId: Number(req.query.afterId || 0)
+      });
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get('/api/candidates', async (req, res, next) => {
     try {
       const items = await services.candidates.listCandidates({
@@ -194,7 +205,7 @@ function createApp({ services = {}, config = {} } = {}) {
     if (error.message === 'nanobot_daily_limit_reached') {
       res.status(503).json({
         error: 'nanobot_daily_limit_reached',
-        message: 'nanobot 当日额度已用尽，未实际触发职位同步。'
+        message: '小聘AGENT 当日额度已用尽，未实际触发职位同步。'
       });
       return;
     }
@@ -202,7 +213,7 @@ function createApp({ services = {}, config = {} } = {}) {
     if (error.message === 'nanobot_provider_error') {
       res.status(502).json({
         error: 'nanobot_provider_error',
-        message: 'nanobot 调用上游模型失败，未实际触发职位同步。'
+        message: '小聘AGENT 调用上游模型失败，未实际触发职位同步。'
       });
       return;
     }

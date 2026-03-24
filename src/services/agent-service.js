@@ -496,6 +496,34 @@ class AgentService {
     );
   }
 
+  async listRunEvents(runId, { afterId = 0, limit = 100 } = {}) {
+    const result = await this.pool.query(
+      `
+        select
+          id,
+          run_id as "runId",
+          attempt_id as "attemptId",
+          event_id as "eventId",
+          sequence,
+          stage,
+          event_type as "eventType",
+          message,
+          payload,
+          occurred_at as "occurredAt"
+        from sourcing_run_events
+        where run_id = $1
+          and id > $2
+        order by id asc
+        limit $3
+      `,
+      [runId, afterId, limit]
+    );
+
+    return {
+      items: result.rows
+    };
+  }
+
   async runNanobotForSchedule({ jobKey, mode }) {
     if (!this.nanobotRunner) {
       throw new Error('nanobot_runner_not_configured');
@@ -512,8 +540,48 @@ class AgentService {
     }
 
     const message = `/boss-sourcing --sync-jobs --run-id "${runId}"`;
-    return this.nanobotRunner.run({ message });
+    let sequence = 1000;
+    const emitStreamEvent = async (line, stream) => {
+      const sanitized = sanitizeNanobotLog(line);
+      if (!sanitized) {
+        return;
+      }
+
+      await this.recordRunEvent({
+        runId,
+        eventId: `nanobot_stream:${stream}:${sequence}`,
+        sequence,
+        occurredAt: new Date().toISOString(),
+        eventType: 'nanobot_stream',
+        stage: 'nanobot',
+        message: sanitized,
+        payload: { stream }
+      });
+      sequence += 1;
+    };
+
+    return this.nanobotRunner.run({
+      message,
+      onStdoutLine: (line) => emitStreamEvent(line, 'stdout'),
+      onStderrLine: (line) => emitStreamEvent(line, 'stderr')
+    });
   }
+}
+
+function sanitizeNanobotLog(line) {
+  if (!line) {
+    return '';
+  }
+
+  const trimmed = String(line).trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  return trimmed
+    .replace(/\/Users\/[^\s"]+/g, '[path]')
+    .replace(/sk-[A-Za-z0-9_-]+/g, '[redacted]')
+    .replace(/xox[baprs]-[A-Za-z0-9-]+/g, '[redacted]');
 }
 
 module.exports = {

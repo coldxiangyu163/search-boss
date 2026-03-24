@@ -4,7 +4,18 @@ const state = {
   jobs: [],
   candidates: [],
   schedules: [],
-  syncStatus: ''
+  syncStatus: '',
+  syncModal: {
+    open: false,
+    runId: null,
+    status: 'idle',
+    startedAt: null,
+    error: '',
+    events: [],
+    isExpanded: true,
+    pollTimer: null,
+    lastEventId: 0
+  }
 };
 
 const titles = {
@@ -55,14 +66,33 @@ async function syncJobs() {
   button.disabled = true;
   button.textContent = '同步中...';
   state.syncStatus = '';
+  openSyncModal();
   render();
 
   try {
     const result = await fetchJson('/api/jobs/sync', { method: 'POST' });
     state.syncStatus = result.message || `已触发职位同步，任务 ${result.runId}`;
+    state.syncModal.runId = result.runId;
+    state.syncModal.status = result.status || 'running';
+    state.syncModal.startedAt = new Date().toISOString();
+    appendSyncEvent({
+      eventType: 'job_sync_requested',
+      stage: 'bootstrap',
+      message: state.syncStatus,
+      occurredAt: state.syncModal.startedAt
+    });
+    startSyncPolling();
     await loadData();
   } catch (error) {
     state.syncStatus = `同步失败：${error.message}`;
+    state.syncModal.status = 'failed';
+    state.syncModal.error = error.message;
+    appendSyncEvent({
+      eventType: 'sync_failed',
+      stage: 'complete',
+      message: state.syncStatus,
+      occurredAt: new Date().toISOString()
+    });
     render();
   } finally {
     button.disabled = false;
@@ -72,10 +102,11 @@ async function syncJobs() {
 
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
+  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    throw new Error(data.message || data.error || `Request failed: ${response.status}`);
   }
-  return response.json();
+  return data;
 }
 
 function render() {
@@ -112,6 +143,93 @@ function render() {
   }
 
   app.innerHTML = renderHealth();
+}
+
+function openSyncModal() {
+  stopSyncPolling();
+  state.syncModal = {
+    open: true,
+    runId: null,
+    status: 'starting',
+    startedAt: new Date().toISOString(),
+    error: '',
+    events: [],
+    isExpanded: true,
+    pollTimer: null,
+    lastEventId: 0
+  };
+}
+
+function closeSyncModal() {
+  stopSyncPolling();
+  state.syncModal.open = false;
+  render();
+}
+
+function toggleSyncLogPanel() {
+  state.syncModal.isExpanded = !state.syncModal.isExpanded;
+  render();
+}
+
+function appendSyncEvent(event) {
+  state.syncModal.events = [...state.syncModal.events, event].slice(-100);
+}
+
+function startSyncPolling() {
+  stopSyncPolling();
+  if (!state.syncModal.runId) {
+    render();
+    return;
+  }
+
+  pollSyncEvents();
+  state.syncModal.pollTimer = window.setInterval(pollSyncEvents, 1500);
+}
+
+function stopSyncPolling() {
+  if (state.syncModal.pollTimer) {
+    window.clearInterval(state.syncModal.pollTimer);
+    state.syncModal.pollTimer = null;
+  }
+}
+
+async function pollSyncEvents() {
+  if (!state.syncModal.runId) {
+    return;
+  }
+
+  try {
+    const result = await fetchJson(`/api/runs/${state.syncModal.runId}/events?afterId=${state.syncModal.lastEventId}`);
+    for (const event of result.items || []) {
+      state.syncModal.lastEventId = Math.max(state.syncModal.lastEventId, event.id || 0);
+      appendSyncEvent(event);
+      applySyncEventStatus(event);
+    }
+    render();
+  } catch (error) {
+    state.syncModal.error = error.message;
+    state.syncModal.status = 'failed';
+    stopSyncPolling();
+    render();
+  }
+}
+
+function applySyncEventStatus(event) {
+  if (event.eventType === 'run_completed') {
+    state.syncModal.status = 'completed';
+    stopSyncPolling();
+    loadData().catch(() => {});
+    return;
+  }
+
+  if (/failed|error/i.test(event.eventType) || /失败|error/i.test(event.message || '')) {
+    state.syncModal.status = 'failed';
+    state.syncModal.error = event.message || state.syncModal.error;
+    stopSyncPolling();
+    return;
+  }
+
+  state.syncModal.status = 'running';
 }
 
 function renderCommandCenter() {
@@ -270,6 +388,7 @@ function renderJobs() {
         </tbody>
       </table>
     </section>
+    ${renderSyncModal()}
   `;
 }
 
@@ -412,7 +531,7 @@ function renderHealth() {
           <div class="list-item">
             <div>
               <p class="list-title">机器人执行接入</p>
-              <p class="list-desc">补充 nanobot 实际执行与反馈回流。</p>
+              <p class="list-desc">补充小聘AGENT实际执行与反馈回流。</p>
             </div>
           </div>
           <div class="list-item">
@@ -441,4 +560,99 @@ function metricCard(label, value, footnote) {
       <div class="metric-footnote">${footnote || ''}</div>
     </article>
   `;
+}
+
+function renderSyncModal() {
+  if (!state.syncModal.open) {
+    return '';
+  }
+
+  const statusMap = {
+    starting: '准备启动',
+    running: '同步进行中',
+    completed: '同步完成',
+    failed: '同步失败',
+    idle: '待开始'
+  };
+
+  return `
+    <div class="modal-backdrop" onclick="closeSyncModal()">
+      <section class="sync-modal" onclick="event.stopPropagation()">
+        <div class="card-header">
+          <div>
+            <p class="eyebrow">职位同步</p>
+            <h3 class="card-title">小聘AGENT 执行过程</h3>
+            <p class="card-subtitle">任务 ${state.syncModal.runId || '-'} · ${statusMap[state.syncModal.status] || '处理中'}</p>
+          </div>
+          <button class="button-secondary" onclick="closeSyncModal()">关闭</button>
+        </div>
+        <div class="sync-summary-grid">
+          <div class="status-box">
+            <span class="muted">开始时间</span>
+            <strong>${formatDateTime(state.syncModal.startedAt)}</strong>
+          </div>
+          <div class="status-box">
+            <span class="muted">当前状态</span>
+            <strong>${statusMap[state.syncModal.status] || '处理中'}</strong>
+          </div>
+        </div>
+        ${state.syncModal.error ? `<div class="inline-status inline-status-error">${state.syncModal.error}</div>` : ''}
+        <div class="sync-timeline">
+          ${buildSyncStages().map((item) => `
+            <div class="sync-timeline-item ${item.active ? 'is-active' : ''} ${item.done ? 'is-done' : ''}">
+              <div class="sync-timeline-dot"></div>
+              <div>
+                <div class="list-title">${item.label}</div>
+                <div class="list-desc">${item.desc}</div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+        <div class="sync-log-panel">
+          <button class="sync-log-toggle" onclick="toggleSyncLogPanel()">
+            ${state.syncModal.isExpanded ? '收起详细日志' : '展开详细日志'}
+          </button>
+          ${state.syncModal.isExpanded ? `
+            <div class="sync-log-list">
+              ${(state.syncModal.events.length ? state.syncModal.events : [{ message: '等待任务输出...', occurredAt: state.syncModal.startedAt }]).map((event) => `
+                <div class="sync-log-item">
+                  <span class="sync-log-time">${formatDateTime(event.occurredAt)}</span>
+                  <span>${event.message || event.eventType}</span>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function buildSyncStages() {
+  const events = state.syncModal.events;
+  const hasRequested = events.some((event) => event.eventType === 'job_sync_requested');
+  const hasNanobot = events.some((event) => event.eventType === 'nanobot_stream');
+  const hasCompleted = state.syncModal.status === 'completed';
+  const hasFailed = state.syncModal.status === 'failed';
+
+  return [
+    {
+      label: '创建同步任务',
+      desc: hasRequested ? '已生成同步 run 并开始跟踪。' : '正在创建任务...',
+      active: !hasRequested,
+      done: hasRequested
+    },
+    {
+      label: '启动小聘AGENT',
+      desc: hasNanobot ? '已接收到小聘AGENT实时输出。' : '等待小聘AGENT输出...',
+      active: hasRequested && !hasNanobot && !hasCompleted && !hasFailed,
+      done: hasNanobot
+    },
+    {
+      label: hasFailed ? '同步异常' : '完成同步',
+      desc: hasFailed ? (state.syncModal.error || '任务执行出现异常。') : (hasCompleted ? '职位同步已完成。' : '等待最终结果...'),
+      active: !hasCompleted && !hasFailed && hasNanobot,
+      done: hasCompleted || hasFailed
+    }
+  ];
 }

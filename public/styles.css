@@ -401,6 +401,12 @@ tbody tr:hover {
   color: var(--muted);
 }
 
+.inline-status-error {
+  background: rgba(212, 72, 72, 0.08);
+  border-color: rgba(212, 72, 72, 0.18);
+  color: #b93535;
+}
+
 .highlight-panel {
   background: linear-gradient(180deg, #fbfcff 0%, #f4f8ff 100%);
   border: 1px solid #dbe6fb;
@@ -439,6 +445,116 @@ tbody tr:hover {
   font-size: 16px;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 20;
+}
+
+.sync-modal {
+  width: min(920px, 100%);
+  max-height: 85vh;
+  overflow: auto;
+  background: var(--panel);
+  border-radius: 24px;
+  padding: 24px;
+  box-shadow: 0 30px 80px rgba(15, 23, 42, 0.24);
+}
+
+.sync-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.sync-timeline {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.sync-timeline-item {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: var(--panel-soft);
+  border: 1px solid var(--line-soft);
+}
+
+.sync-timeline-item.is-active {
+  border-color: rgba(31, 94, 255, 0.28);
+  background: #f6f9ff;
+}
+
+.sync-timeline-item.is-done {
+  border-color: rgba(31, 157, 85, 0.22);
+}
+
+.sync-timeline-dot {
+  width: 12px;
+  height: 12px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: #c8d3ea;
+}
+
+.sync-timeline-item.is-active .sync-timeline-dot {
+  background: var(--accent);
+}
+
+.sync-timeline-item.is-done .sync-timeline-dot {
+  background: var(--success);
+}
+
+.sync-log-panel {
+  margin-top: 20px;
+  border: 1px solid var(--line-soft);
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+.sync-log-toggle {
+  width: 100%;
+  border: none;
+  background: #f8fbff;
+  color: var(--accent);
+  padding: 14px 18px;
+  text-align: left;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sync-log-list {
+  max-height: 280px;
+  overflow: auto;
+  padding: 12px 18px 18px;
+  display: grid;
+  gap: 10px;
+  background: #0f172a;
+  color: #dbe5f5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.sync-log-item {
+  display: grid;
+  grid-template-columns: 156px 1fr;
+  gap: 12px;
+  line-height: 1.5;
+}
+
+.sync-log-time {
+  color: #7dd3fc;
+}
+
 @media (max-width: 960px) {
   .layout-shell,
   .split,
@@ -453,5 +569,10 @@ tbody tr:hover {
   .topbar-actions {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .sync-summary-grid,
+  .sync-log-item {
+    grid-template-columns: 1fr;
   }
 }

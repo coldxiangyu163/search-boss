@@ -131,6 +131,38 @@ test('POST /api/jobs/sync returns 503 when nanobot daily limit is reached', asyn
   assert.equal(response.body.error, 'nanobot_daily_limit_reached');
 });
 
+test('GET /api/runs/:runId/events returns run events payload', async () => {
+  let capturedRunId = null;
+  let capturedAfterId = null;
+
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: { async listSchedules() { return []; }, async upsertSchedule() { return {}; } },
+      agent: {
+        async listRunEvents(runId, { afterId }) {
+          capturedRunId = runId;
+          capturedAfterId = afterId;
+          return {
+            items: [
+              { id: 11, event_type: 'job_sync_requested', message: 'job sync requested' }
+            ]
+          };
+        }
+      }
+    }
+  });
+
+  const response = await request(app).get('/api/runs/33/events?afterId=10');
+
+  assert.equal(response.status, 200);
+  assert.equal(capturedRunId, '33');
+  assert.equal(capturedAfterId, 10);
+  assert.equal(response.body.items[0].id, 11);
+});
+
 test('POST /api/agent/runs/:runId/actions records action through agent API', async () => {
   let capturedPayload = null;
 
@@ -556,4 +588,63 @@ test('JobService triggerSync creates sync run and calls nanobot', async () => {
   assert.equal(nanobotCalls.length, 1);
   assert.match(nanobotCalls[0].message, /\/boss-sourcing --sync-jobs/);
   assert.match(nanobotCalls[0].message, /--run-id "33"/);
+});
+
+test('JobService triggerSync records stream events from nanobot output', async () => {
+  const events = [];
+  const pool = {
+    async query(sql, params = []) {
+      if (sql.includes('select job_key') && sql.includes('limit 1')) {
+        return { rows: [{ job_key: '健康顾问_B0047007' }] };
+      }
+
+      if (sql.includes('from jobs') && sql.includes('job_key = $1')) {
+        return { rows: [{ id: 8 }] };
+      }
+
+      if (sql.includes('insert into sourcing_runs')) {
+        return { rows: [{ id: 33, runKey: params[0], status: 'pending' }] };
+      }
+
+      if (sql.includes('update sourcing_runs')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes('insert into sourcing_run_events')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+
+  const { AgentService } = require('../src/services/agent-service');
+  const { JobService } = require('../src/services/job-service');
+
+  const agentService = new AgentService({
+    pool,
+    nanobotRunner: {
+      async run({ onStdoutLine, onStderrLine }) {
+        onStdoutLine?.('Starting sync');
+        onStderrLine?.('Warning line');
+        return { ok: true, stdout: 'done' };
+      }
+    }
+  });
+
+  const originalRecordRunEvent = agentService.recordRunEvent.bind(agentService);
+  agentService.recordRunEvent = async (payload) => {
+    events.push(payload);
+    return originalRecordRunEvent(payload);
+  };
+
+  const service = new JobService({ pool, agentService });
+
+  await service.triggerSync();
+
+  const streamedMessages = events
+    .filter((event) => event.eventType === 'nanobot_stream')
+    .map((event) => event.message);
+
+  assert.deepEqual(streamedMessages, ['Starting sync', 'Warning line']);
 });
