@@ -57,17 +57,14 @@ async function setupPool({ projectRoot, jsonPath }) {
   return pool;
 }
 
-async function startServer({ pool, nanobotRunner, projectRoot, dataFilePath, useRealScheduler = false }) {
+async function startServer({ pool, nanobotRunner, projectRoot, useRealScheduler = false }) {
   const eventBus = createEventBus();
   const services = buildServices({
     pool,
     eventBus,
     nanobotRunner,
     projectRoot,
-    dataFilePath,
-    importLegacyDataFn: importLegacyData,
     agentToken,
-    agentApiBaseUrl: "http://127.0.0.1",
   });
 
   let schedulerService;
@@ -133,7 +130,6 @@ test("dashboard summary and jobs API return imported data", async () => {
     pool,
     nanobotRunner,
     projectRoot: fixture.root,
-    dataFilePath: fixture.jsonPath,
   });
 
   try {
@@ -159,22 +155,28 @@ test("dashboard summary and jobs API return imported data", async () => {
   }
 });
 
-test("BOSS sync API triggers nanobot and imports the latest JSON snapshot", async () => {
+test("BOSS sync API triggers nanobot and writes jobs via Agent API", async () => {
   const fixture = await makeProjectFixture();
   const pool = await setupPool({ projectRoot: fixture.root, jsonPath: fixture.jsonPath });
+  let serverBaseUrl;
   const nanobotRunner = {
     async runJobSync({ onStdout }) {
       onStdout?.("开始同步岗位");
 
-      const snapshot = JSON.parse(await fs.readFile(fixture.jsonPath, "utf8"));
-      snapshot.jobs["客服_B0099001"] = {
-        encryptJobId: "job_encrypt_new",
-        jobName: "客服（B0099001）",
-        salary: "8-10K",
-        city: "上海",
-        jdPath: null,
-      };
-      await fs.writeFile(fixture.jsonPath, JSON.stringify(snapshot, null, 2));
+      await fetch(`${serverBaseUrl}/api/agent/jobs/batch?token=${agentToken}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jobs: [{
+            jobKey: "客服_B0099001",
+            encryptJobId: "job_encrypt_new",
+            jobName: "客服（B0099001）",
+            salary: "8-10K",
+            city: "上海",
+            status: "open",
+          }],
+        }),
+      });
 
       onStdout?.("岗位同步完成");
       return { exitCode: 0 };
@@ -185,15 +187,13 @@ test("BOSS sync API triggers nanobot and imports the latest JSON snapshot", asyn
     pool,
     nanobotRunner,
     projectRoot: fixture.root,
-    dataFilePath: fixture.jsonPath,
   });
+  serverBaseUrl = server.baseUrl;
 
   try {
     const response = await fetch(`${server.baseUrl}/api/boss/jobs/sync`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
 
@@ -205,7 +205,7 @@ test("BOSS sync API triggers nanobot and imports the latest JSON snapshot", asyn
     const jobs = await jobsResponse.json();
 
     assert.equal(jobs.length, 2);
-    assert.equal(jobs[1].jobName, "客服（B0099001）");
+    assert.ok(jobs.some((j) => j.jobName === "客服（B0099001）"));
   } finally {
     await server.close();
     await pool.end();
@@ -213,7 +213,7 @@ test("BOSS sync API triggers nanobot and imports the latest JSON snapshot", asyn
   }
 });
 
-test("sourcing run API executes nanobot, stores streamed events, and imports updated candidates", async () => {
+test("sourcing run API executes nanobot and persists stepwise DB updates from Agent API", async () => {
   const fixture = await makeProjectFixture();
   const pool = await setupPool({ projectRoot: fixture.root, jsonPath: fixture.jsonPath });
   let serverBaseUrl;
@@ -255,7 +255,6 @@ test("sourcing run API executes nanobot, stores streamed events, and imports upd
     pool,
     nanobotRunner,
     projectRoot: fixture.root,
-    dataFilePath: fixture.jsonPath,
   });
   serverBaseUrl = server.baseUrl;
 
@@ -310,6 +309,60 @@ test("sourcing run API executes nanobot, stores streamed events, and imports upd
   }
 });
 
+test("sourcing run stays DB-only and fails if agent never completes through Agent API", async () => {
+  const fixture = await makeProjectFixture();
+  const pool = await setupPool({ projectRoot: fixture.root, jsonPath: fixture.jsonPath });
+  const nanobotRunner = {
+    async runSourcing({ onStdout }) {
+      onStdout?.("开始第 1 页寻源");
+      onStdout?.("未调用完成接口，直接退出");
+      return { exitCode: 0 };
+    },
+  };
+
+  const server = await startServer({
+    pool,
+    nanobotRunner,
+    projectRoot: fixture.root,
+  });
+
+  try {
+    const jobsResult = await pool.query("SELECT id FROM jobs ORDER BY id LIMIT 1");
+    const jobId = jobsResult.rows[0].id;
+
+    const response = await fetch(`${server.baseUrl}/api/jobs/${jobId}/sourcing-runs`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ maxPages: 1, autoGreet: true }),
+    });
+
+    const payload = await response.json();
+    assert.equal(response.status, 202);
+
+    const failedRun = await waitFor(async () => {
+      const runResponse = await fetch(`${server.baseUrl}/api/sourcing-runs/${payload.id}`);
+      const run = await runResponse.json();
+      return run.status === "failed" ? run : null;
+    });
+
+    assert.match(failedRun.errorMessage, /did not call \/complete or \/fail/i);
+
+    const candidateCount = await pool.query("SELECT COUNT(*)::int AS count FROM candidates");
+    assert.equal(candidateCount.rows[0].count, 1);
+
+    const eventsResponse = await fetch(`${server.baseUrl}/api/sourcing-runs/${payload.id}/events`);
+    const events = await eventsResponse.json();
+    assert.equal(events.at(-1).eventType, "run_failed");
+    assert.match(events.at(-1).message, /did not call \/complete or \/fail/i);
+  } finally {
+    await server.close();
+    await pool.end();
+    await fs.rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("agent APIs upsert jobs and candidate progress without duplicate resume downloads", async () => {
   const fixture = await makeProjectFixture();
   const pool = await setupPool({ projectRoot: fixture.root, jsonPath: fixture.jsonPath });
@@ -326,7 +379,6 @@ test("agent APIs upsert jobs and candidate progress without duplicate resume dow
     pool,
     nanobotRunner,
     projectRoot: fixture.root,
-    dataFilePath: fixture.jsonPath,
   });
 
   try {
@@ -507,7 +559,6 @@ test("scheduled job APIs create jobs and Graphile Worker can execute run-now fol
     pool,
     nanobotRunner,
     projectRoot: fixture.root,
-    dataFilePath: fixture.jsonPath,
     useRealScheduler: true,
   });
 
@@ -584,7 +635,6 @@ test("scheduled job API rejects invalid cron expressions without persisting the 
     pool,
     nanobotRunner,
     projectRoot: fixture.root,
-    dataFilePath: fixture.jsonPath,
     useRealScheduler: true,
   });
 

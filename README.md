@@ -10,7 +10,7 @@
 - 简历下载防重，避免重复落盘
 - 通过 SSE 在后台页面实时看到任务进度
 - 在后台页面创建、启停、编辑、删除定时任务，并查看最近执行记录
-- 从现有 `data/candidates.json` 和 JD markdown 导入历史数据
+- 从现有 `data/candidates.json` 和 JD markdown 做一次性历史导入
 - 通过本机 `nanobot agent` 复用 `boss-sourcing` skill 执行同步与寻源
 - 通过 Graphile Worker + PostgreSQL 执行跨平台定时调度
 
@@ -21,7 +21,7 @@
 - `nanobot agent` 是执行器，负责调用你已经加载的 `boss-sourcing` skill
 - `boss-sourcing` skill 通过本地 Agent API 实时写库
 - Graphile Worker 负责按 cron 表达式触发定时任务
-- `data/candidates.json` 继续保留为兼容快照，任务结束后会再导入一次兜底
+- `data/candidates.json` 只保留为历史导入来源，不参与运行态读写
 
 ## 默认数据库
 
@@ -99,7 +99,7 @@ npm start
 ## 说明
 
 - 后台按钮不会直接请求 BOSS 接口，而是调用本机 `nanobot agent`，由 nanobot 复用你现有的 `boss-sourcing` skill 执行。
-- nanobot 执行过程中会优先调用本地后台 API 实时写 PostgreSQL，同时继续更新 `data/candidates.json` 作为兼容快照；任务结束后后台会再做一次快照导入兜底。
+- nanobot 执行过程中必须通过本地后台 API 实时写 PostgreSQL；运行态不再写入或导入 `data/candidates.json`。
 - `followup` 模式会复用同一个 skill，但执行目标不是重新全量寻源，而是检查回复、继续沟通、获取简历、下载新简历。
 - 简历文件路径会写入候选人表；如果数据库中已标记 `resume_downloaded=true`，skill 会跳过重复下载。
 - 旧的 [`dashboard.html`](/Users/coldxiangyu/work/百融云创/search-boss/dashboard.html) 仍然保留，可作为历史静态看板参考。

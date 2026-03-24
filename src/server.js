@@ -6,7 +6,6 @@ import { getConfig } from "./config.js";
 import { ensureDatabase, initializeSchema } from "./db/init.js";
 import { createPool } from "./db/pool.js";
 import { createEventBus } from "./services/event-bus.js";
-import { importLegacyData } from "./services/import-service.js";
 import { buildServices } from "./services/index.js";
 import { createNanobotRunner } from "./services/nanobot-runner.js";
 import { createSchedulerService } from "./services/scheduler-service.js";
@@ -32,10 +31,7 @@ async function main() {
       agentToken: config.agentApi.token,
     }),
     projectRoot: config.projectRoot,
-    dataFilePath: config.data.legacyJsonPath,
-    importLegacyDataFn: importLegacyData,
     agentToken: config.agentApi.token,
-    agentApiBaseUrl: config.agentApi.baseUrl,
   });
 
   const schedulerService = createSchedulerService({

@@ -23,7 +23,7 @@ allowed-tools: mcp__chrome-devtools__*
 核心原则：
 
 - 本地后台数据库是主存储
-- `data/candidates.json` 是兼容快照，不再是唯一事实来源
+- PostgreSQL 是唯一运行态事实来源
 - 每个关键步骤都要调用本地后台 API，实时写入任务进度和候选人状态
 - 所有回复策略都以“获取简历”为中心
 
@@ -48,7 +48,6 @@ allowed-tools: mcp__chrome-devtools__*
 执行时优先从调用方消息中读取以下变量：
 
 - `项目目录`
-- `数据文件`
 - `本地后台 API`
 - `Agent Token`
 - `运行任务 ID`，仅寻源/跟进/下载流程必填
@@ -58,7 +57,6 @@ allowed-tools: mcp__chrome-devtools__*
 
 ```text
 PROJECT_ROOT = ~/work/百融云创/search-boss
-DATA_FILE    = $PROJECT_ROOT/data/candidates.json
 RESUME_DIR   = $PROJECT_ROOT/resumes
 LOCAL_API    = http://127.0.0.1:3000
 ```
@@ -320,13 +318,14 @@ uv run nanobot agent --config "/Users/coldxiangyu/.nanobot-boss/config.json" --m
 
 - 登录过期：立即停止并上报 `run_failed`
 - API 返回非 0：记录事件，跳过当前候选人
-- 本地后台 API 失败：重试 1 次，仍失败则停止当前任务
+- 本地后台 API 失败：重试 1 次，仍失败则停止当前任务并调用 `/fail`
 - 候选人已是好友：跳过打招呼，但仍可跟进聊天
 - 简历已下载：禁止重复下载
 
 ## Common Mistakes
 
-- 只更新 `candidates.json`，不调用本地后台 API
+- 只在任务结束时一次性写库，不在关键步骤实时写库
+- 依赖 `candidates.json` 或其他本地文件作为运行态存储
 - 下载简历前不查询候选人当前状态，导致重复下载
 - 回复候选人时只答问题，不继续索要简历
 - 任务结束后没有调用 `/complete` 或 `/fail`

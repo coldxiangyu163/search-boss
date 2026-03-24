@@ -314,7 +314,6 @@ async function runSourcingFlow({
   pool,
   eventBus,
   nanobotRunner,
-  dataFilePath,
   projectRoot,
   runId,
   job,
@@ -345,7 +344,6 @@ async function runSourcingFlow({
       maxPages,
       autoGreet,
       projectRoot,
-      dataFilePath,
       session,
       onStdout: async (line) => {
         await createRunEvent({
@@ -373,8 +371,8 @@ async function runSourcingFlow({
       throw new Error(runnerResult.stderr || runnerResult.stdout || `nanobot exited with code ${runnerResult.exitCode}`);
     }
 
-    // Agent is expected to call /complete or /fail via the Agent API.
-    // Check if agent already completed the run; if not, mark it complete as fallback.
+    // Agent is required to finalize the run through the Agent API so the UI
+    // can reflect stepwise progress directly from the database.
     const currentRunResult = await pool.query("SELECT status, pages_processed, candidates_seen, candidates_matched, greetings_sent FROM sourcing_runs WHERE id = $1", [runId]);
     const currentRun = currentRunResult.rows[0];
 
@@ -382,43 +380,7 @@ async function runSourcingFlow({
       return;
     }
 
-    // Fallback: agent exited without calling /complete — mark as completed with whatever stats were recorded
-    const pagesProcessed = currentRun?.pages_processed || maxPages;
-    const candidatesSeen = Number(currentRun?.candidates_seen || 0);
-    const candidatesMatched = Number(currentRun?.candidates_matched || 0);
-    const greetingsSent = Number(currentRun?.greetings_sent || 0);
-
-    await pool.query(
-      `
-        UPDATE sourcing_runs
-        SET
-          status = 'completed',
-          pages_processed = $2,
-          candidates_seen = $3,
-          candidates_matched = $4,
-          greetings_sent = $5,
-          ended_at = NOW(),
-          updated_at = NOW()
-        WHERE id = $1 AND status = 'running'
-      `,
-      [runId, pagesProcessed, candidatesSeen, candidatesMatched, greetingsSent],
-    );
-
-    await createRunEvent({
-      pool,
-      eventBus,
-      runId,
-      eventType: "run_completed",
-      stage: "completed",
-      message: `寻源任务完成，共抓取 ${candidatesSeen} 人，命中 ${candidatesMatched} 人，打招呼 ${greetingsSent} 人`,
-      progressPercent: 100,
-      payload: {
-        pagesProcessed,
-        candidatesSeen,
-        candidatesMatched,
-        greetingsSent,
-      },
-    });
+    throw new Error("Agent exited without finalizing the run; it did not call /complete or /fail");
   } catch (error) {
     await pool.query(
       `
@@ -452,11 +414,8 @@ export function buildServices({
   pool,
   eventBus,
   nanobotRunner,
-  importLegacyDataFn,
-  dataFilePath,
   projectRoot,
   agentToken,
-  agentApiBaseUrl,
 }) {
   const streamSubscriptions = new Map();
   let schedulerService = null;
@@ -554,7 +513,6 @@ export function buildServices({
     async syncBossJobs() {
       const result = await nanobotRunner.runJobSync({
         projectRoot,
-        dataFilePath,
         session: `sync-jobs-${Date.now()}`,
       });
 
@@ -562,18 +520,15 @@ export function buildServices({
         throw new Error(result.stderr || result.stdout || `nanobot exited with code ${result.exitCode}`);
       }
 
-      const importSummary = await importLegacyDataFn({
-        pool,
-        jsonPath: dataFilePath,
-        projectRoot,
-      });
+      const countResult = await pool.query("SELECT COUNT(*) AS count FROM jobs");
+      const summary = { jobsImported: Number(countResult.rows[0].count) };
 
       eventBus.emit({
         channel: "boss_jobs_synced",
-        ...importSummary,
+        ...summary,
       });
 
-      return importSummary;
+      return summary;
     },
 
     async agentUpsertJobs({ token, jobs }) {
@@ -639,7 +594,6 @@ export function buildServices({
         pool,
         eventBus,
         nanobotRunner,
-        dataFilePath,
         projectRoot,
         runId: run.id,
         job,
@@ -1078,7 +1032,6 @@ export function buildServices({
         if (scheduledJob.job_type === "sync_jobs") {
           const runnerResult = await nanobotRunner.runJobSync({
             projectRoot,
-            dataFilePath,
             session: `scheduled-sync-${scheduledJobId}-${scheduledRun.id}`,
           });
 
@@ -1086,12 +1039,8 @@ export function buildServices({
             throw new Error(runnerResult.stderr || runnerResult.stdout || `nanobot exited with code ${runnerResult.exitCode}`);
           }
 
-          const importSummary = await importLegacyDataFn({
-            pool,
-            jsonPath: dataFilePath,
-            projectRoot,
-          });
-          summary = `岗位 ${importSummary.jobsImported} 条，候选人 ${importSummary.candidatesImported} 条`;
+          const countResult = await pool.query("SELECT COUNT(*) AS count FROM jobs");
+          summary = `岗位同步完成，当前共 ${countResult.rows[0].count} 条`;
         } else if (scheduledJob.job_type === "followup") {
           const payload = scheduledJob.payload || {};
           const jobKey = payload.jobKey;
@@ -1116,7 +1065,6 @@ export function buildServices({
             jobName: jobLookup.rows[0].job_name,
             runId: sourcingRunId,
             projectRoot,
-            dataFilePath,
             session: `scheduled-followup-${scheduledJobId}-${scheduledRun.id}`,
           });
 
@@ -1126,14 +1074,7 @@ export function buildServices({
 
           const runState = await pool.query("SELECT * FROM sourcing_runs WHERE id = $1", [sourcingRunId]);
           if (runState.rowCount > 0 && runState.rows[0].status === "running") {
-            await pool.query(
-              `
-                UPDATE sourcing_runs
-                SET status = 'completed', ended_at = NOW(), updated_at = NOW()
-                WHERE id = $1
-              `,
-              [sourcingRunId],
-            );
+            throw new Error(`Agent exited without finalizing followup run ${sourcingRunId}; it did not call /complete or /fail`);
           }
           summary = `岗位 ${jobKey} 定时跟进执行完成`;
         } else {
