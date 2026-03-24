@@ -1,0 +1,23 @@
+{
+  "name": "search-boss",
+  "version": "1.0.0",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "db:setup": "node scripts/setup-db.js",
+    "db:bootstrap-real": "node scripts/bootstrap-real-data.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "BOSS 寻源管理系统",
+  "dependencies": {
+    "express": "^5.2.1",
+    "graphile-worker": "^0.16.6",
+    "pg": "^8.20.0"
+  },
+  "devDependencies": {
+    "supertest": "^7.2.2"
+  }
+}
