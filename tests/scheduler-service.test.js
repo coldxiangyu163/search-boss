@@ -76,6 +76,7 @@ test('SchedulerService triggerJobTask returns immediately and completes manual t
   assert.equal(result.jobKey, '健康顾问_B0047007');
   assert.equal(nanobotCalls.length, 1);
   assert.deepEqual(nanobotCalls[0], {
+    runId: 41,
     jobKey: '健康顾问_B0047007',
     mode: 'followup'
   });

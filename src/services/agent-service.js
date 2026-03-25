@@ -556,14 +556,14 @@ class AgentService {
     };
   }
 
-  async runNanobotForSchedule({ jobKey, mode }) {
+  async runNanobotForSchedule({ runId, jobKey, mode }) {
     if (!this.nanobotRunner) {
       throw new Error('nanobot_runner_not_configured');
     }
 
     const modeFlag = mode === 'followup' ? '--followup' : '--source';
     const message = `/boss-sourcing --job "${jobKey}" ${modeFlag}`;
-    return this.nanobotRunner.run({ message });
+    return this.#runNanobotWithStreaming({ runId, message });
   }
 
   async runNanobotForJobSync({ runId }) {
@@ -575,6 +575,14 @@ class AgentService {
       `/boss-sourcing --sync --run-id "${runId}"`,
       '只执行岗位同步：采集职位列表和职位详情，并调用 /api/agent/jobs/batch 回写本地后台。禁止进入推荐牛人、打招呼、聊天跟进、下载简历。'
     ].join('\n');
+    return this.#runNanobotWithStreaming({ runId, message });
+  }
+
+  #runNanobotWithStreaming({ runId, message }) {
+    if (!runId) {
+      return this.nanobotRunner.run({ message });
+    }
+
     let sequence = 1000;
     const emitStreamEvent = async (line, stream) => {
       const sanitized = sanitizeNanobotLog(line);

@@ -1174,3 +1174,47 @@ test('JobService triggerSync records stream events from nanobot output', async (
 
   assert.deepEqual(streamedMessages, ['Starting sync', 'Warning line']);
 });
+
+test('AgentService runNanobotForSchedule records stream events from nanobot output', async () => {
+  const events = [];
+  const pool = {
+    async query(sql) {
+      if (sql.includes('insert into sourcing_run_events')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+
+  const { AgentService } = require('../src/services/agent-service');
+
+  const agentService = new AgentService({
+    pool,
+    nanobotRunner: {
+      async run({ onStdoutLine, onStderrLine }) {
+        onStdoutLine?.('Starting followup');
+        onStderrLine?.('Minor warning');
+        return { ok: true, stdout: 'done' };
+      }
+    }
+  });
+
+  const originalRecordRunEvent = agentService.recordRunEvent.bind(agentService);
+  agentService.recordRunEvent = async (payload) => {
+    events.push(payload);
+    return originalRecordRunEvent(payload);
+  };
+
+  await agentService.runNanobotForSchedule({
+    runId: 88,
+    jobKey: '健康顾问_B0047007',
+    mode: 'followup'
+  });
+
+  const streamedMessages = events
+    .filter((event) => event.eventType === 'nanobot_stream')
+    .map((event) => event.message);
+
+  assert.deepEqual(streamedMessages, ['Starting followup', 'Minor warning']);
+});

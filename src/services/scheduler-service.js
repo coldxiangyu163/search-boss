@@ -186,6 +186,7 @@ class SchedulerService {
   async #executeJobTask({ runId, jobKey, taskType, scheduledJobId = null, scheduledRunId = null, schedule = null }) {
     try {
       await this.agentService.runNanobotForSchedule({
+        runId,
         jobKey,
         mode: taskType
       });
