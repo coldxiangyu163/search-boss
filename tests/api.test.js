@@ -163,6 +163,52 @@ test('GET /api/runs/:runId/events returns run events payload', async () => {
   assert.equal(response.body.items[0].id, 11);
 });
 
+test('POST /api/agent/jobs/batch upserts jobs through agent API', async () => {
+  let capturedPayload = null;
+
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: {
+        async listJobs() { return []; },
+        async upsertJobsBatch(payload) {
+          capturedPayload = payload;
+          return { ok: true, syncedCount: payload.jobs.length };
+        }
+      },
+      candidates: { async listCandidates() { return []; } }
+    },
+    config: {
+      agentToken: 'search-boss-local-agent'
+    }
+  });
+
+  const response = await request(app)
+    .post('/api/agent/jobs/batch?token=search-boss-local-agent')
+    .send({
+      runId: 12,
+      eventId: 'job-sync:1',
+      sequence: 1,
+      occurredAt: '2026-03-24T12:00:00.000Z',
+      jobs: [
+        {
+          jobKey: '健康顾问_B0047007',
+          encryptJobId: 'enc-1',
+          jobName: '健康顾问（B0047007）',
+          salary: '5-6K',
+          city: '重庆',
+          status: 'open'
+        }
+      ]
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.syncedCount, 1);
+  assert.equal(capturedPayload.runId, 12);
+  assert.equal(capturedPayload.jobs[0].jobKey, '健康顾问_B0047007');
+});
+
 test('POST /api/agent/runs/:runId/actions records action through agent API', async () => {
   let capturedPayload = null;
 
@@ -586,8 +632,263 @@ test('JobService triggerSync creates sync run and calls nanobot', async () => {
   assert.equal(result.status, 'running');
   assert.match(result.runKey, /^sync_jobs:__all__:/);
   assert.equal(nanobotCalls.length, 1);
-  assert.match(nanobotCalls[0].message, /\/boss-sourcing --sync-jobs/);
-  assert.match(nanobotCalls[0].message, /--run-id "33"/);
+  assert.equal(
+    nanobotCalls[0].message,
+    '/boss-sourcing --sync --run-id "33"\n只执行岗位同步：采集职位列表并调用 /api/agent/jobs/batch 回写本地后台。禁止进入推荐牛人、打招呼、聊天跟进、下载简历。'
+  );
+});
+
+test('JobService upsertJobsBatch writes agent synced jobs into jobs table and records sync event', async () => {
+  const queryCalls = [];
+  const recordedEvents = [];
+  const pool = {
+    async query(sql, params = []) {
+      queryCalls.push({ sql, params });
+      return { rows: [{ id: 9 }], rowCount: 1 };
+    }
+  };
+
+  const { JobService } = require('../src/services/job-service');
+  const service = new JobService({
+    pool,
+    agentService: {
+      async recordRunEvent(payload) {
+        recordedEvents.push(payload);
+        return { ok: true };
+      }
+    }
+  });
+
+  const result = await service.upsertJobsBatch({
+    runId: 33,
+    occurredAt: '2026-03-24T12:00:00.000Z',
+    jobs: [
+      {
+        jobKey: '健康顾问_B0047007',
+        encryptJobId: 'enc-1',
+        jobName: '健康顾问（B0047007）',
+        salary: '5-6K',
+        city: '重庆',
+        status: 'open'
+      },
+      {
+        jobKey: '销售顾问_B0099001',
+        encryptJobId: 'enc-2',
+        jobName: '销售顾问（B0099001）',
+        salary: '8-10K',
+        city: '上海',
+        status: 'open'
+      }
+    ]
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.syncedCount, 2);
+  assert.equal(queryCalls.length, 2);
+  assert.match(queryCalls[0].sql, /insert into jobs/i);
+  assert.deepEqual(queryCalls[0].params.slice(0, 6), [
+    '健康顾问_B0047007',
+    'enc-1',
+    '健康顾问（B0047007）',
+    '重庆',
+    '5-6K',
+    'open'
+  ]);
+  assert.equal(recordedEvents.length, 1);
+  assert.equal(recordedEvents[0].runId, 33);
+  assert.equal(recordedEvents[0].eventType, 'jobs_batch_synced');
+});
+
+test('JobService triggerSync returns immediately and completes run asynchronously', async () => {
+  const events = [];
+  let releaseNanobot = null;
+  let completeRunResolve = null;
+  let jobsBatchSynced = false;
+  const completeRunDone = new Promise((resolve) => {
+    completeRunResolve = resolve;
+  });
+  const pool = {
+    async query(sql, params = []) {
+      if (sql.includes('select job_key') && sql.includes('limit 1')) {
+        return { rows: [{ job_key: '健康顾问_B0047007' }] };
+      }
+
+      if (sql.includes('from jobs') && sql.includes('job_key = $1')) {
+        return { rows: [{ id: 8 }] };
+      }
+
+      if (sql.includes('insert into sourcing_runs')) {
+        return { rows: [{ id: 33, runKey: params[0], status: 'pending' }] };
+      }
+
+      if (sql.includes('update sourcing_runs')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes('insert into sourcing_run_events')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes("from sourcing_run_events") && sql.includes("event_type = 'jobs_batch_synced'")) {
+        return { rows: jobsBatchSynced ? [{ id: 1 }] : [] };
+      }
+
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+
+  const { AgentService } = require('../src/services/agent-service');
+  const { JobService } = require('../src/services/job-service');
+
+  const agentService = new AgentService({
+    pool,
+    nanobotRunner: {
+      async run() {
+        await new Promise((resolve) => {
+          releaseNanobot = resolve;
+        });
+        return { ok: true, stdout: 'synced' };
+      }
+    }
+  });
+
+  const originalRecordRunEvent = agentService.recordRunEvent.bind(agentService);
+  agentService.recordRunEvent = async (payload) => {
+    events.push(payload);
+    return originalRecordRunEvent(payload);
+  };
+  const originalCompleteRun = agentService.completeRun.bind(agentService);
+  agentService.completeRun = async (payload) => {
+    const result = await originalCompleteRun(payload);
+    completeRunResolve(result);
+    return result;
+  };
+
+  const service = new JobService({ pool, agentService });
+
+  const result = await service.triggerSync();
+
+  assert.equal(result.status, 'running');
+  assert.equal(events.some((event) => event.eventType === 'run_completed'), false);
+  jobsBatchSynced = true;
+  releaseNanobot();
+  await completeRunDone;
+  assert.equal(events.some((event) => event.eventType === 'run_completed'), true);
+});
+
+test('JobService triggerSync marks run failed when nanobot exits without jobs batch sync event', async () => {
+  const events = [];
+  const pool = {
+    async query(sql, params = []) {
+      if (sql.includes('select job_key') && sql.includes('limit 1')) {
+        return { rows: [{ job_key: '健康顾问_B0047007' }] };
+      }
+
+      if (sql.includes('from jobs') && sql.includes('job_key = $1')) {
+        return { rows: [{ id: 8 }] };
+      }
+
+      if (sql.includes('insert into sourcing_runs')) {
+        return { rows: [{ id: 33, runKey: params[0], status: 'pending' }] };
+      }
+
+      if (sql.includes('update sourcing_runs')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes('insert into sourcing_run_events')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes("from sourcing_run_events") && sql.includes("event_type = 'jobs_batch_synced'")) {
+        return { rows: [] };
+      }
+
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+
+  const { AgentService } = require('../src/services/agent-service');
+  const { JobService } = require('../src/services/job-service');
+
+  const agentService = new AgentService({
+    pool,
+    nanobotRunner: {
+      async run() {
+        return { ok: true, stdout: 'synced' };
+      }
+    }
+  });
+
+  const originalRecordRunEvent = agentService.recordRunEvent.bind(agentService);
+  agentService.recordRunEvent = async (payload) => {
+    events.push(payload);
+    return originalRecordRunEvent(payload);
+  };
+
+  const service = new JobService({ pool, agentService });
+
+  const result = await service.triggerSync();
+
+  assert.equal(result.status, 'running');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(events.some((event) => event.eventType === 'run_failed'), true);
+  assert.equal(events.some((event) => event.message === 'job_sync_not_persisted'), true);
+});
+
+test('JobService triggerSync marks run failed when nanobot fails asynchronously', async () => {
+  const events = [];
+  const pool = {
+    async query(sql, params = []) {
+      if (sql.includes('select job_key') && sql.includes('limit 1')) {
+        return { rows: [{ job_key: '健康顾问_B0047007' }] };
+      }
+
+      if (sql.includes('from jobs') && sql.includes('job_key = $1')) {
+        return { rows: [{ id: 8 }] };
+      }
+
+      if (sql.includes('insert into sourcing_runs')) {
+        return { rows: [{ id: 33, runKey: params[0], status: 'pending' }] };
+      }
+
+      if (sql.includes('update sourcing_runs')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes('insert into sourcing_run_events')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+
+  const { AgentService } = require('../src/services/agent-service');
+  const { JobService } = require('../src/services/job-service');
+
+  const agentService = new AgentService({
+    pool,
+    nanobotRunner: {
+      async run() {
+        throw new Error('nanobot_provider_error');
+      }
+    }
+  });
+
+  const originalRecordRunEvent = agentService.recordRunEvent.bind(agentService);
+  agentService.recordRunEvent = async (payload) => {
+    events.push(payload);
+    return originalRecordRunEvent(payload);
+  };
+
+  const service = new JobService({ pool, agentService });
+
+  const result = await service.triggerSync();
+
+  assert.equal(result.status, 'running');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(events.some((event) => event.eventType === 'run_failed'), true);
 });
 
 test('JobService triggerSync records stream events from nanobot output', async () => {

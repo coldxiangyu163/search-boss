@@ -27,6 +27,69 @@ class JobService {
     return result.rows;
   }
 
+  async upsertJobsBatch({ runId, eventId, sequence, occurredAt, jobs = [] }) {
+    const syncedAt = occurredAt || new Date().toISOString();
+
+    for (const job of jobs) {
+      await this.pool.query(
+        `
+          insert into jobs (
+            job_key,
+            boss_encrypt_job_id,
+            job_name,
+            city,
+            salary,
+            status,
+            source,
+            sync_metadata,
+            last_synced_at
+          )
+          values ($1, $2, $3, $4, $5, $6, 'boss', coalesce($7, '{}'::jsonb), $8)
+          on conflict (job_key) do update
+          set boss_encrypt_job_id = excluded.boss_encrypt_job_id,
+              job_name = excluded.job_name,
+              city = excluded.city,
+              salary = excluded.salary,
+              status = excluded.status,
+              source = excluded.source,
+              sync_metadata = excluded.sync_metadata,
+              last_synced_at = excluded.last_synced_at,
+              updated_at = now()
+          returning id
+        `,
+        [
+          job.jobKey,
+          job.encryptJobId || job.bossEncryptJobId || null,
+          job.jobName,
+          job.city || null,
+          job.salary || null,
+          job.status || 'open',
+          job.metadata || {},
+          syncedAt
+        ]
+      );
+    }
+
+    if (runId && this.agentService) {
+      await this.agentService.recordRunEvent({
+        runId,
+        eventId: eventId || `jobs-batch:${runId}:${syncedAt}`,
+        sequence,
+        occurredAt: syncedAt,
+        eventType: 'jobs_batch_synced',
+        stage: 'sync',
+        message: `synced ${jobs.length} jobs to local database`,
+        payload: { syncedCount: jobs.length }
+      });
+    }
+
+    return {
+      ok: true,
+      syncedCount: jobs.length,
+      syncedAt
+    };
+  }
+
   async triggerSync() {
     if (!this.agentService) {
       throw new Error('agent_service_not_configured');
@@ -69,7 +132,7 @@ class JobService {
       [run.id, timestamp]
     );
 
-    await this.agentService.runNanobotForJobSync({ runId: run.id });
+    void this.#executeSyncRun({ runId: run.id });
 
     return {
       runId: run.id,
@@ -77,6 +140,50 @@ class JobService {
       status: 'running',
       message: '职位同步任务已触发'
     };
+  }
+
+  async #executeSyncRun({ runId }) {
+    try {
+      await this.agentService.runNanobotForJobSync({ runId });
+      const hasPersistedJobs = await this.#hasJobsBatchSynced(runId);
+      if (!hasPersistedJobs) {
+        throw new Error('job_sync_not_persisted');
+      }
+      await this.agentService.completeRun({
+        runId,
+        eventId: `job-sync:complete:${runId}`,
+        occurredAt: new Date().toISOString(),
+        payload: { scope: 'all_jobs' }
+      });
+    } catch (error) {
+      try {
+        await this.agentService.failRun({
+          runId,
+          eventId: `job-sync:failed:${runId}`,
+          occurredAt: new Date().toISOString(),
+          message: error.message,
+          payload: { scope: 'all_jobs' }
+        });
+      } catch (failError) {
+        console.error('job sync failure recording failed', failError);
+      }
+    }
+  }
+
+  async #hasJobsBatchSynced(runId) {
+    const result = await this.pool.query(
+      `
+        select id
+        from sourcing_run_events
+        where run_id = $1
+          and event_type = 'jobs_batch_synced'
+        order by id desc
+        limit 1
+      `,
+      [runId]
+    );
+
+    return Boolean(result.rows[0]);
   }
 
   async #resolveSyncAnchorJobKey() {

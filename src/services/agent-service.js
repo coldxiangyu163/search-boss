@@ -99,6 +99,38 @@ class AgentService {
     };
   }
 
+  async failRun({ runId, eventId, attemptId, sequence, occurredAt, message, payload = {} }) {
+    await this.pool.query(
+      `
+        update sourcing_runs
+        set status = 'failed',
+            completed_at = $2,
+            updated_at = now()
+        where id = $1
+      `,
+      [runId, occurredAt || new Date().toISOString()]
+    );
+
+    if (eventId) {
+      await this.recordRunEvent({
+        runId,
+        attemptId,
+        eventId,
+        sequence,
+        occurredAt,
+        eventType: 'run_failed',
+        stage: 'complete',
+        message: message || 'run failed',
+        payload
+      });
+    }
+
+    return {
+      ok: true,
+      status: 'failed'
+    };
+  }
+
   async recordAction({
     runId,
     attemptId,
@@ -539,7 +571,10 @@ class AgentService {
       throw new Error('nanobot_runner_not_configured');
     }
 
-    const message = `/boss-sourcing --sync-jobs --run-id "${runId}"`;
+    const message = [
+      `/boss-sourcing --sync --run-id "${runId}"`,
+      '只执行岗位同步：采集职位列表并调用 /api/agent/jobs/batch 回写本地后台。禁止进入推荐牛人、打招呼、聊天跟进、下载简历。'
+    ].join('\n');
     let sequence = 1000;
     const emitStreamEvent = async (line, stream) => {
       const sanitized = sanitizeNanobotLog(line);

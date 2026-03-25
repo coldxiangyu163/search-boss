@@ -37,6 +37,20 @@ function createApp({ services = {}, config = {} } = {}) {
     }
   });
 
+  app.post('/api/agent/jobs/batch', async (req, res, next) => {
+    try {
+      if (req.query.token !== config.agentToken) {
+        res.status(401).json({ error: 'unauthorized' });
+        return;
+      }
+
+      const result = await services.jobs.upsertJobsBatch(req.body);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get('/api/runs/:runId/events', async (req, res, next) => {
     try {
       const result = await services.agent.listRunEvents(req.params.runId, {
