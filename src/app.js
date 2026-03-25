@@ -101,6 +101,18 @@ function createApp({ services = {}, config = {} } = {}) {
     }
   });
 
+  app.post('/api/jobs/:jobKey/tasks/:taskType/trigger', async (req, res, next) => {
+    try {
+      const result = await services.scheduler.triggerJobTask(
+        req.params.jobKey,
+        req.params.taskType
+      );
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post('/api/agent/runs/:runId/actions', async (req, res, next) => {
     try {
       if (req.query.token !== config.agentToken) {
@@ -228,6 +240,14 @@ function createApp({ services = {}, config = {} } = {}) {
       res.status(502).json({
         error: 'nanobot_provider_error',
         message: '小聘AGENT 调用上游模型失败，未实际触发职位同步。'
+      });
+      return;
+    }
+
+    if (error.message === 'schedule_not_found') {
+      res.status(404).json({
+        error: 'schedule_not_found',
+        message: '未找到对应的自动化任务配置。'
       });
       return;
     }

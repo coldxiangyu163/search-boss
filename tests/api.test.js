@@ -579,6 +579,45 @@ test('POST /api/schedules/:id/trigger executes schedule', async () => {
   assert.equal(response.body.scheduledRunId, 5);
 });
 
+test('POST /api/jobs/:jobKey/tasks/:taskType/trigger executes schedule by job and task type', async () => {
+  let capturedJobKey = null;
+  let capturedTaskType = null;
+
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: {
+        async listSchedules() { return []; },
+        async upsertSchedule() { return {}; },
+        async triggerJobTask(jobKey, taskType) {
+          capturedJobKey = jobKey;
+          capturedTaskType = taskType;
+          return { ok: true, scheduledRunId: 8, runId: 21 };
+        }
+      },
+      agent: {
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return { allowed: true }; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; },
+        async createRun() { return { id: 1 }; },
+        async recordRunEvent() { return { ok: true }; },
+        async completeRun() { return { ok: true, status: 'completed' }; }
+      }
+    },
+    config: { agentToken: 'search-boss-local-agent' }
+  });
+
+  const response = await request(app).post('/api/jobs/%E5%81%A5%E5%BA%B7%E9%A1%BE%E9%97%AE_B0047007/tasks/followup/trigger');
+
+  assert.equal(response.status, 200);
+  assert.equal(capturedJobKey, '健康顾问_B0047007');
+  assert.equal(capturedTaskType, 'followup');
+  assert.equal(response.body.runId, 21);
+});
+
 test('JobService triggerSync creates sync run and calls nanobot', async () => {
   const queryCalls = [];
   const nanobotCalls = [];

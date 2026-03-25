@@ -5,6 +5,7 @@ const state = {
   candidates: [],
   schedules: [],
   syncStatus: '',
+  triggeringTaskKey: '',
   syncModal: {
     open: false,
     runId: null,
@@ -14,9 +15,16 @@ const state = {
     events: [],
     isExpanded: true,
     pollTimer: null,
-    lastEventId: 0
+    lastEventId: 0,
+    taskType: 'sync_jobs'
   }
 };
+
+const {
+  formatJobStatus,
+  getJobStatusBadgeClass,
+  isJobActionEnabled
+} = window.JobUiHelpers;
 
 const titles = {
   command: ['运营总览', '今日招聘运营看板', '聚焦核心招聘指标、待办事项与系统运行情况。'],
@@ -30,6 +38,44 @@ document.addEventListener('DOMContentLoaded', () => {
   bindEvents();
   loadData();
 });
+
+function getTaskMeta(taskType) {
+  const taskMeta = {
+    sync_jobs: {
+      eyebrow: '职位同步',
+      buttonLabel: '同步职位',
+      inlineSuccess: '已触发职位同步',
+      emptyLogMessage: '等待职位同步输出...'
+    },
+    source: {
+      eyebrow: '寻源打招呼',
+      buttonLabel: '寻源打招呼',
+      inlineSuccess: '已手动触发寻源打招呼',
+      emptyLogMessage: '等待寻源打招呼任务输出...'
+    },
+    followup: {
+      eyebrow: '主动沟通拉简历',
+      buttonLabel: '主动沟通拉简历',
+      inlineSuccess: '已手动触发主动沟通拉简历',
+      emptyLogMessage: '等待主动沟通拉简历任务输出...'
+    }
+  };
+
+  return taskMeta[taskType] || {
+    eyebrow: '任务执行',
+    buttonLabel: '执行任务',
+    inlineSuccess: '已触发任务执行',
+    emptyLogMessage: '等待任务输出...'
+  };
+}
+
+function getTaskActionKey(jobKey, taskType) {
+  return `${jobKey}:${taskType}`;
+}
+
+function hasSchedule(jobKey, taskType) {
+  return state.schedules.some((schedule) => schedule.job_key === jobKey && schedule.task_type === taskType);
+}
 
 function bindEvents() {
   document.querySelectorAll('.nav-item').forEach((button) => {
@@ -62,16 +108,17 @@ async function loadData() {
 async function syncJobs() {
   const button = document.querySelector('.jobs-header-actions .button-secondary');
   const previousText = button.textContent;
+  const taskMeta = getTaskMeta('sync_jobs');
 
   button.disabled = true;
   button.textContent = '同步中...';
   state.syncStatus = '';
-  openSyncModal();
+  openSyncModal('sync_jobs');
   render();
 
   try {
     const result = await fetchJson('/api/jobs/sync', { method: 'POST' });
-    state.syncStatus = result.message || `已触发职位同步，任务 ${result.runId}`;
+    state.syncStatus = result.message || `${taskMeta.inlineSuccess}，任务 ${result.runId}`;
     state.syncModal.runId = result.runId;
     state.syncModal.status = result.status || 'running';
     state.syncModal.startedAt = new Date().toISOString();
@@ -97,6 +144,61 @@ async function syncJobs() {
   } finally {
     button.disabled = false;
     button.textContent = previousText;
+  }
+}
+
+async function triggerJobTask(jobKey, taskType) {
+  const taskMeta = getTaskMeta(taskType);
+  const actionKey = getTaskActionKey(jobKey, taskType);
+
+  state.triggeringTaskKey = actionKey;
+  state.syncStatus = '';
+  openSyncModal(taskType);
+  render();
+
+  try {
+    const result = await fetchJson(
+      `/api/jobs/${encodeURIComponent(jobKey)}/tasks/${encodeURIComponent(taskType)}/trigger`,
+      { method: 'POST' }
+    );
+
+    state.syncStatus = result.message || `${taskMeta.inlineSuccess}，职位 ${jobKey}`;
+    state.syncModal.runId = result.runId;
+    state.syncModal.status = result.status || 'completed';
+    appendSyncEvent({
+      eventType: 'schedule_triggered',
+      stage: 'bootstrap',
+      message: `${taskMeta.buttonLabel}已触发：${jobKey}`,
+      occurredAt: state.syncModal.startedAt
+    });
+
+    await pollSyncEvents();
+
+    if (!state.syncModal.events.some((event) => event.eventType === 'run_completed')) {
+      appendSyncEvent({
+        eventType: 'run_completed',
+        stage: 'complete',
+        message: result.message || `${taskMeta.buttonLabel}执行完成`,
+        occurredAt: new Date().toISOString()
+      });
+      state.syncModal.status = 'completed';
+    }
+
+    await loadData();
+    render();
+  } catch (error) {
+    state.syncStatus = `${taskMeta.buttonLabel}失败：${error.message}`;
+    state.syncModal.status = 'failed';
+    state.syncModal.error = error.message;
+    appendSyncEvent({
+      eventType: 'run_failed',
+      stage: 'complete',
+      message: state.syncStatus,
+      occurredAt: new Date().toISOString()
+    });
+    render();
+  } finally {
+    state.triggeringTaskKey = '';
   }
 }
 
@@ -145,7 +247,7 @@ function render() {
   app.innerHTML = renderHealth();
 }
 
-function openSyncModal() {
+function openSyncModal(taskType = 'sync_jobs') {
   stopSyncPolling();
   state.syncModal = {
     open: true,
@@ -156,7 +258,8 @@ function openSyncModal() {
     events: [],
     isExpanded: true,
     pollTimer: null,
-    lastEventId: 0
+    lastEventId: 0,
+    taskType
   };
 }
 
@@ -367,10 +470,12 @@ function renderJobs() {
             <th>职位</th>
             <th>城市</th>
             <th>薪资</th>
+            <th>状态</th>
             <th>候选人</th>
             <th>已打招呼</th>
             <th>已回复</th>
             <th>已下载简历</th>
+            <th>手动触发</th>
           </tr>
         </thead>
         <tbody>
@@ -379,10 +484,12 @@ function renderJobs() {
               <td>${job.job_name}<div class="muted">${job.job_key}</div></td>
               <td>${job.city || '-'}</td>
               <td>${job.salary || '-'}</td>
+              <td><span class="${getJobStatusBadgeClass(job.status)}">${formatJobStatus(job.status)}</span></td>
               <td>${job.candidate_count}</td>
               <td>${job.greeted_count}</td>
               <td>${job.responded_count}</td>
               <td>${job.resume_downloaded_count}</td>
+              <td>${renderJobActions(job)}</td>
             </tr>
           `).join('')}
         </tbody>
@@ -400,6 +507,50 @@ function formatDateTime(value) {
   return new Date(value).toLocaleString('zh-CN', {
     hour12: false
   });
+}
+
+function renderJobActions(job) {
+  const actionEnabled = isJobActionEnabled(job.status);
+  const disabledHint = '仅招聘中的职位支持寻源和拉取简历';
+
+  return `
+    <div class="table-actions">
+      ${renderTaskTriggerButton(job.job_key, 'source', {
+        enabled: actionEnabled,
+        hint: actionEnabled
+          ? (hasSchedule(job.job_key, 'source') ? '已配置定时任务，也支持手动触发' : '未配置定时任务，当前按手动执行处理')
+          : disabledHint
+      })}
+      ${renderTaskTriggerButton(job.job_key, 'followup', {
+        enabled: actionEnabled,
+        hint: actionEnabled
+          ? (hasSchedule(job.job_key, 'followup') ? '已配置定时任务，也支持手动触发' : '未配置定时任务，当前按手动执行处理')
+          : disabledHint
+      })}
+    </div>
+  `;
+}
+
+function renderTaskTriggerButton(jobKey, taskType, { enabled = true, compact = false, hint = '' } = {}) {
+  const taskMeta = getTaskMeta(taskType);
+  const actionKey = getTaskActionKey(jobKey, taskType);
+  const isLoading = state.triggeringTaskKey === actionKey;
+  const classes = ['button-secondary'];
+
+  if (compact) {
+    classes.push('button-compact');
+  }
+
+  return `
+    <button
+      class="${classes.join(' ')}"
+      onclick='triggerJobTask(${JSON.stringify(jobKey)}, ${JSON.stringify(taskType)})'
+      ${!enabled || isLoading ? 'disabled' : ''}
+      title="${enabled ? (hint || `手动执行${taskMeta.buttonLabel}`) : `未配置${taskMeta.buttonLabel}定时任务`}"
+    >
+      ${isLoading ? '执行中...' : taskMeta.buttonLabel}
+    </button>
+  `;
 }
 
 function renderCandidates() {
@@ -463,6 +614,7 @@ function renderAutomation() {
               <th>执行规则</th>
               <th>是否启用</th>
               <th>最近执行</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody>
@@ -473,6 +625,7 @@ function renderAutomation() {
                 <td>${schedule.cron_expression}</td>
                 <td>${schedule.enabled ? '已启用' : '未启用'}</td>
                 <td>${schedule.last_run_at || '-'}</td>
+                <td>${renderTaskTriggerButton(schedule.job_key, schedule.task_type, { compact: true })}</td>
               </tr>
             `).join('')}
           </tbody>
@@ -567,11 +720,13 @@ function renderSyncModal() {
     return '';
   }
 
+  const taskMeta = getTaskMeta(state.syncModal.taskType);
+
   const statusMap = {
     starting: '准备启动',
-    running: '同步进行中',
-    completed: '同步完成',
-    failed: '同步失败',
+    running: '执行中',
+    completed: '执行完成',
+    failed: '执行失败',
     idle: '待开始'
   };
 
@@ -580,7 +735,7 @@ function renderSyncModal() {
       <section class="sync-modal" onclick="event.stopPropagation()">
         <div class="card-header">
           <div>
-            <p class="eyebrow">职位同步</p>
+            <p class="eyebrow">${taskMeta.eyebrow}</p>
             <h3 class="card-title">小聘AGENT 执行过程</h3>
             <p class="card-subtitle">任务 ${state.syncModal.runId || '-'} · ${statusMap[state.syncModal.status] || '处理中'}</p>
           </div>
@@ -614,7 +769,7 @@ function renderSyncModal() {
           </button>
           ${state.syncModal.isExpanded ? `
             <div class="sync-log-list">
-              ${(state.syncModal.events.length ? state.syncModal.events : [{ message: '等待任务输出...', occurredAt: state.syncModal.startedAt }]).map((event) => `
+              ${(state.syncModal.events.length ? state.syncModal.events : [{ message: taskMeta.emptyLogMessage, occurredAt: state.syncModal.startedAt }]).map((event) => `
                 <div class="sync-log-item">
                   <span class="sync-log-time">${formatDateTime(event.occurredAt)}</span>
                   <span>${event.message || event.eventType}</span>
@@ -630,27 +785,29 @@ function renderSyncModal() {
 
 function buildSyncStages() {
   const events = state.syncModal.events;
-  const hasRequested = events.some((event) => event.eventType === 'job_sync_requested');
+  const hasRequested = events.some((event) => ['job_sync_requested', 'schedule_triggered'].includes(event.eventType));
   const hasNanobot = events.some((event) => event.eventType === 'nanobot_stream');
   const hasCompleted = state.syncModal.status === 'completed';
   const hasFailed = state.syncModal.status === 'failed';
 
   return [
     {
-      label: '创建同步任务',
-      desc: hasRequested ? '已生成同步 run 并开始跟踪。' : '正在创建任务...',
+      label: '创建执行任务',
+      desc: hasRequested ? '已生成 run 并开始跟踪。' : '正在创建任务...',
       active: !hasRequested,
       done: hasRequested
     },
     {
       label: '启动小聘AGENT',
-      desc: hasNanobot ? '已接收到小聘AGENT实时输出。' : '等待小聘AGENT输出...',
+      desc: hasNanobot
+        ? '已接收到小聘AGENT实时输出。'
+        : (hasCompleted || hasFailed ? '任务已结束，本次未采集到实时流式日志。' : '等待小聘AGENT输出...'),
       active: hasRequested && !hasNanobot && !hasCompleted && !hasFailed,
-      done: hasNanobot
+      done: hasNanobot || hasCompleted || hasFailed
     },
     {
-      label: hasFailed ? '同步异常' : '完成同步',
-      desc: hasFailed ? (state.syncModal.error || '任务执行出现异常。') : (hasCompleted ? '职位同步已完成。' : '等待最终结果...'),
+      label: hasFailed ? '执行异常' : '完成执行',
+      desc: hasFailed ? (state.syncModal.error || '任务执行出现异常。') : (hasCompleted ? '任务已执行完成。' : '等待最终结果...'),
       active: !hasCompleted && !hasFailed && hasNanobot,
       done: hasCompleted || hasFailed
     }

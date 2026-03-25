@@ -200,6 +200,19 @@ button {
   gap: 12px;
 }
 
+.table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.button-compact {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
 .topbar-actions {
   display: flex;
   align-items: center;
@@ -338,6 +351,11 @@ tbody tr:hover {
 .badge-warning {
   background: rgba(217, 140, 29, 0.14);
   color: var(--warning);
+}
+
+.badge-neutral {
+  background: rgba(107, 120, 144, 0.12);
+  color: var(--muted);
 }
 
 .overview-grid {
@@ -574,5 +592,9 @@ tbody tr:hover {
   .sync-summary-grid,
   .sync-log-item {
     grid-template-columns: 1fr;
+  }
+
+  .table-actions {
+    min-width: 180px;
   }
 }
