@@ -67,21 +67,41 @@ API_VERSION  = 2026-03-24
 
 ```text
 /boss-sourcing --sync
-/boss-sourcing --job "<job_key>" --source
-/boss-sourcing --job "<job_key>" --chat
-/boss-sourcing --job "<job_key>" --download
-/boss-sourcing --job "<job_key>" --followup
+/boss-sourcing --job "<job_key>" --source --run-id "<run_id>"
+/boss-sourcing --job "<job_key>" --chat --run-id "<run_id>"
+/boss-sourcing --job "<job_key>" --download --run-id "<run_id>"
+/boss-sourcing --job "<job_key>" --followup --run-id "<run_id>"
 /boss-sourcing --status
 ```
 
 模式定义：
 
 - `--sync`: 同步岗位
-- `--source`: 推荐牛人寻源并打招呼
-- `--chat`: 处理回复并在允许时继续索简历
-- `--download`: 下载已收到的简历
-- `--followup`: 等价于 `--chat + --download`
+- `--source`: 推荐牛人寻源并打招呼，必须透传 `--run-id`
+- `--chat`: 处理回复并在允许时继续索简历，必须透传 `--run-id`
+- `--download`: 下载已收到的简历，必须透传 `--run-id`
+- `--followup`: 等价于 `--chat + --download`，必须透传 `--run-id`
 - `--status`: 读取本地后台统计
+
+## Run Journal Contract
+
+对 `--source`、`--chat`、`--download`、`--followup`，优先使用本地 run journal，再通过接口批量导入数据库。
+
+推荐目录：
+
+```text
+RUN_ROOT      = ~/.nanobot-boss/workspace/runs
+RUN_DIR       = $RUN_ROOT/YYYY-MM-DD/<mode>/<run_id>
+EVENTS_FILE   = $RUN_DIR/events.jsonl
+SUMMARY_FILE  = $RUN_DIR/summary.json
+SYNC_STATE    = $RUN_DIR/sync-state.json
+```
+
+导入流程：
+
+1. 任务过程中持续把关键事实追加到 `EVENTS_FILE`
+2. 任务结束后调用 `POST /api/agent/runs/:runId/import-events`
+3. 导入成功后再调用 `POST /api/agent/runs/:runId/complete`
 
 ## Baseline Failure Scenarios To Guard Against
 
@@ -218,21 +238,41 @@ await postLocal('/api/agent/jobs/batch', {
 
 业务目标：
 
-- 选定岗位，抓取推荐牛人
-- 按岗位要求筛选
+- 选定岗位后，先读取职位详情，整理本轮寻源画像，再开始看人
+- 不能只看推荐列表卡片就打招呼；必须进入候选人详情页看具体简历内容后再决定
+- 打招呼次数是稀缺资源，优先留给高匹配候选人，不为了“打满次数”而联系低质人选
+- 按岗位要求筛选，只对明确匹配或高潜匹配的人打招呼
 - 只对未打过招呼的人打招呼
 - 每个候选人的事实、动作、进度实时写后台
+
+执行前必须先做岗位画像：
+
+1. 调用 `GET /api/jobs/:jobKey` 读取职位详情，拿到 `jdText`、`city`、`salary`、`sync_metadata`
+2. 如果职位画像缺少关键字段，先回到 BOSS 职位详情页补读，再继续 `--source`
+3. 整理出本轮筛选标准：
+   - `mustHave`: 硬条件，例如城市、学历、经验、核心岗位经历
+   - `preferred`: 加分项，例如销售转化、电话沟通、咨询、相关行业经验
+   - `redFlags`: 排除项，例如城市明显不符、经历方向严重错位、频繁短期跳槽
+   - `greetingPriority`: `A`/`B`/`C`
+4. 未完成岗位画像前，禁止开始批量打招呼
+
+候选人判断必须分两层：
+
+- 第一层，列表粗筛：决定要不要点进详情页，不负责最终是否打招呼
+- 第二层，详情精筛：结合完整简历、经历和求职意向做最终判断
 
 每页流程：
 
 1. 写 `page_fetch_started` 事件
 2. 拉取推荐牛人
 3. 对每个候选人：
-   - 先调用 `GET /api/agent/jobs/:jobKey/candidates/:geekId`
-   - 若后台显示已打招呼或处于不可联系状态，直接跳过
-   - 否则执行打招呼
-   - 立即写候选人当前快照
-   - 再写一条 `greet` 动作
+   - 先看列表卡片做粗筛；明显不符合硬条件的直接跳过，但仍要写观察事件
+   - 对通过粗筛的人，必须点进候选人详情页读取更完整的简历信息
+   - 先写候选人当前快照，记录详情页里看到的核心信息
+   - 产出 `A`/`B`/`C` 档匹配判断和简短理由
+   - 只有 `A` 档，或满足硬条件且值得消耗名额的 `B` 档，才执行打招呼
+   - 若后台显示已打过招呼或处于不可联系状态，直接跳过
+   - 打招呼后再写一条 `greet` 动作
 4. 每页结束调用 `/progress`
 
 候选人快照示例：
@@ -259,7 +299,12 @@ await postLocal(`/api/agent/runs/${RUN_ID}/candidates`, {
     expectId: geek.expectId,
     lid: geek.lid,
     securityId: geek.securityId,
-    isFriend: geek.isFriend
+    isFriend: geek.isFriend,
+    resumeHighlights: profile.resumeHighlights,
+    recentCompanies: profile.recentCompanies,
+    matchTier: matchDecision.tier,
+    matchReasons: matchDecision.reasons,
+    redFlags: matchDecision.redFlags
   }
 });
 ```
@@ -276,9 +321,20 @@ await postLocal(`/api/agent/runs/${RUN_ID}/actions`, {
   actionType: 'greet_sent',
   dedupeKey: `greet:${JOB_KEY}:${geek.encryptGeekId}`,
   bossEncryptGeekId: geek.encryptGeekId,
-  payload: { page: PAGE }
+  payload: {
+    page: PAGE,
+    matchTier: matchDecision.tier,
+    matchReasons: matchDecision.reasons
+  }
 });
 ```
+
+强制要求：
+
+- `--source` 的第一步必须是确认岗位详情，而不是直接开始看推荐列表
+- 禁止只依据列表摘要直接打招呼；没有进入详情页就不算完成评估
+- 每个候选人都必须给出 `greet_now`、`hold_for_quota`、`skip_mismatch` 之一
+- 名额紧张时默认只联系 `A` 档，`B` 档必须有明确转化理由
 
 ### 3. 消息处理 `--chat`
 

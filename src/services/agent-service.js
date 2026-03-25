@@ -45,7 +45,7 @@ class AgentService {
     message,
     payload = {}
   }) {
-    await this.pool.query(
+    const result = await this.pool.query(
       `
         insert into sourcing_run_events (
           run_id,
@@ -64,7 +64,69 @@ class AgentService {
       [runId, attemptId || null, eventId, sequence || null, stage || null, eventType, message || eventType, payload, occurredAt || new Date().toISOString()]
     );
 
-    return { ok: true };
+    return { ok: true, duplicated: result.rowCount === 0 };
+  }
+
+  async importRunEvents({ runId, attemptId, sourceFile, events = [] }) {
+    const importEvents = Array.isArray(events) ? events : [];
+    let importedCount = 0;
+    let projectedCount = 0;
+    let duplicateCount = 0;
+    const items = [];
+
+    for (const rawEvent of importEvents) {
+      const event = normalizeImportedEvent(rawEvent, { attemptId, sourceFile });
+      const recordResult = await this.recordRunEvent({
+        runId,
+        attemptId: event.attemptId || attemptId || null,
+        eventId: event.eventId,
+        sequence: event.sequence || null,
+        occurredAt: event.occurredAt || new Date().toISOString(),
+        eventType: event.eventType,
+        stage: event.stage || 'import',
+        message: event.message || event.eventType,
+        payload: {
+          ...event.payload,
+          importSourceFile: sourceFile || null
+        }
+      });
+
+      if (recordResult.duplicated) {
+        duplicateCount += 1;
+        items.push({
+          eventId: event.eventId,
+          duplicated: true,
+          projected: false
+        });
+        continue;
+      }
+
+      importedCount += 1;
+      const projected = await this.projectImportedEvent({
+        runId,
+        attemptId: event.attemptId || attemptId || null,
+        event
+      });
+
+      if (projected) {
+        projectedCount += 1;
+      }
+
+      items.push({
+        eventId: event.eventId,
+        duplicated: false,
+        projected
+      });
+    }
+
+    return {
+      ok: true,
+      sourceFile: sourceFile || null,
+      importedCount,
+      projectedCount,
+      duplicateCount,
+      items
+    };
   }
 
   async upsertCandidate({
@@ -143,7 +205,7 @@ class AgentService {
           last_outbound_at,
           workflow_metadata
         )
-        values ($1, $2, $3, $4, case when $3 = 'greeted' then $5 else null end, $6)
+        values ($1, $2, $3, $4, case when $3 = 'greeted' then $5::timestamptz else null end, $6)
         on conflict (job_id, person_id) do update
         set lifecycle_status = case
               when job_candidates.lifecycle_status in ('resume_received', 'resume_downloaded') then job_candidates.lifecycle_status
@@ -151,7 +213,7 @@ class AgentService {
             end,
             source_run_id = coalesce(job_candidates.source_run_id, excluded.source_run_id),
             last_outbound_at = case
-              when excluded.lifecycle_status = 'greeted' then coalesce(job_candidates.last_outbound_at, $5)
+              when excluded.lifecycle_status = 'greeted' then coalesce(job_candidates.last_outbound_at, $5::timestamptz)
               else job_candidates.last_outbound_at
             end,
             workflow_metadata = excluded.workflow_metadata,
@@ -592,6 +654,118 @@ class AgentService {
     };
   }
 
+  async projectImportedEvent({ runId, attemptId, event }) {
+    if (isCandidateImportEvent(event)) {
+      const jobKey = getImportedField(event, 'jobKey');
+      const bossEncryptGeekId = getImportedField(event, 'bossEncryptGeekId');
+      if (!jobKey || !bossEncryptGeekId) {
+        return false;
+      }
+
+      await this.upsertCandidate({
+        runId,
+        attemptId,
+        eventId: event.eventId,
+        sequence: event.sequence || null,
+        occurredAt: event.occurredAt,
+        jobKey,
+        bossEncryptGeekId,
+        name: getImportedField(event, 'name'),
+        city: getImportedField(event, 'city'),
+        education: getImportedField(event, 'education'),
+        experience: getImportedField(event, 'experience'),
+        school: getImportedField(event, 'school'),
+        status: resolveImportedCandidateStatus(event),
+        metadata: collectImportedCandidateMetadata(event)
+      });
+
+      if (isGreetImportEvent(event)) {
+        await this.recordAction({
+          runId,
+          attemptId,
+          eventId: event.eventId,
+          sequence: event.sequence || null,
+          occurredAt: event.occurredAt,
+          actionType: 'greet_sent',
+          dedupeKey: getImportedField(event, 'dedupeKey') || `greet:${jobKey}:${bossEncryptGeekId}`,
+          bossEncryptGeekId,
+          payload: event.payload || {}
+        });
+      }
+
+      return true;
+    }
+
+    if (isMessageImportEvent(event)) {
+      const bossEncryptGeekId = getImportedField(event, 'bossEncryptGeekId');
+      const bossMessageId = getImportedField(event, 'bossMessageId');
+      if (!bossEncryptGeekId || !bossMessageId) {
+        return false;
+      }
+
+      await this.recordMessage({
+        runId,
+        attemptId,
+        eventId: event.eventId,
+        sequence: event.sequence || null,
+        occurredAt: event.occurredAt,
+        bossEncryptGeekId,
+        bossMessageId,
+        direction: getImportedField(event, 'direction') || 'inbound',
+        messageType: getImportedField(event, 'messageType') || 'text',
+        contentText: getImportedField(event, 'contentText') || null,
+        rawPayload: event.payload || {}
+      });
+      return true;
+    }
+
+    if (isResumeRequestImportEvent(event)) {
+      const bossEncryptGeekId = getImportedField(event, 'bossEncryptGeekId');
+      if (!bossEncryptGeekId) {
+        return false;
+      }
+
+      await this.recordAction({
+        runId,
+        attemptId,
+        eventId: event.eventId,
+        sequence: event.sequence || null,
+        occurredAt: event.occurredAt,
+        actionType: 'resume_request_sent',
+        dedupeKey: getImportedField(event, 'dedupeKey') || `resume-request:${runId}:${bossEncryptGeekId}`,
+        bossEncryptGeekId,
+        payload: event.payload || {}
+      });
+      return true;
+    }
+
+    if (isAttachmentImportEvent(event)) {
+      const bossEncryptGeekId = getImportedField(event, 'bossEncryptGeekId');
+      if (!bossEncryptGeekId) {
+        return false;
+      }
+
+      await this.recordAttachment({
+        runId,
+        attemptId,
+        eventId: event.eventId,
+        sequence: event.sequence || null,
+        occurredAt: event.occurredAt,
+        bossEncryptGeekId,
+        bossAttachmentId: getImportedField(event, 'bossAttachmentId') || null,
+        fileName: getImportedField(event, 'fileName') || null,
+        mimeType: getImportedField(event, 'mimeType') || null,
+        fileSize: getImportedField(event, 'fileSize') || null,
+        sha256: getImportedField(event, 'sha256') || null,
+        storedPath: getImportedField(event, 'storedPath') || null,
+        status: resolveImportedAttachmentStatus(event)
+      });
+      return true;
+    }
+
+    return false;
+  }
+
   async findLatestCandidateByGeekId(bossEncryptGeekId) {
     const result = await this.pool.query(
       `
@@ -676,8 +850,12 @@ class AgentService {
       throw new Error('nanobot_runner_not_configured');
     }
 
-    const modeFlag = mode === 'followup' ? '--followup' : '--source';
-    const message = `/boss-sourcing --job "${jobKey}" ${modeFlag}`;
+    const message = mode === 'followup'
+      ? `/boss-sourcing --job "${jobKey}" --followup --run-id "${runId}"`
+      : [
+        `/boss-sourcing --job "${jobKey}" --source --run-id "${runId}"`,
+        '执行寻源打招呼时：先读取职位详情并建立岗位画像，再逐个进入候选人详情页做匹配评估。禁止仅凭推荐列表卡片直接打招呼，优先联系高匹配候选人。'
+      ].join('\n');
     return this.#runNanobotWithStreaming({ runId, message });
   }
 
@@ -748,6 +926,120 @@ function normalizeCandidateStatus(status) {
   }
 
   return 'discovered';
+}
+
+function normalizeImportedEvent(rawEvent, { attemptId, sourceFile }) {
+  const event = rawEvent && typeof rawEvent === 'object' ? rawEvent : {};
+  const payload = event.payload && typeof event.payload === 'object' ? event.payload : {};
+  const eventId = String(event.eventId || '').trim();
+  const eventType = String(event.eventType || '').trim();
+
+  if (!eventId) {
+    throw new Error('import_event_id_missing');
+  }
+
+  if (!eventType) {
+    throw new Error('import_event_type_missing');
+  }
+
+  return {
+    ...event,
+    attemptId: event.attemptId || attemptId || null,
+    payload: payload,
+    sourceFile: sourceFile || null,
+    eventId,
+    eventType
+  };
+}
+
+function getImportedField(event, key) {
+  if (event[key] !== undefined) {
+    return event[key];
+  }
+
+  if (event.payload && event.payload[key] !== undefined) {
+    return event.payload[key];
+  }
+
+  return null;
+}
+
+function collectImportedCandidateMetadata(event) {
+  const metadata = {
+    ...(event.payload?.metadata && typeof event.payload.metadata === 'object' ? event.payload.metadata : {}),
+    ...(event.metadata && typeof event.metadata === 'object' ? event.metadata : {})
+  };
+
+  for (const key of [
+    'expectId',
+    'lid',
+    'securityId',
+    'isFriend',
+    'position',
+    'expectedSalary',
+    'matchTier',
+    'matchReasons',
+    'redFlags',
+    'resumeHighlights',
+    'recentCompanies',
+    'jobStability'
+  ]) {
+    const value = getImportedField(event, key);
+    if (value !== null && value !== undefined) {
+      metadata[key] = value;
+    }
+  }
+
+  return metadata;
+}
+
+function isCandidateImportEvent(event) {
+  return [
+    'candidate_observed',
+    'candidate_scored',
+    'candidate_matched',
+    'candidate_filtered_out',
+    'candidate_greeted',
+    'greet_sent'
+  ].includes(event.eventType);
+}
+
+function isGreetImportEvent(event) {
+  return event.eventType === 'greet_sent' || event.eventType === 'candidate_greeted';
+}
+
+function isMessageImportEvent(event) {
+  return event.eventType === 'message_recorded' || Boolean(getImportedField(event, 'bossMessageId'));
+}
+
+function isResumeRequestImportEvent(event) {
+  return event.eventType === 'resume_request_sent';
+}
+
+function isAttachmentImportEvent(event) {
+  return [
+    'attachment_recorded',
+    'resume_received',
+    'resume_downloaded'
+  ].includes(event.eventType) || Boolean(getImportedField(event, 'bossAttachmentId')) || Boolean(getImportedField(event, 'storedPath'));
+}
+
+function resolveImportedCandidateStatus(event) {
+  const explicitStatus = getImportedField(event, 'status') || getImportedField(event, 'candidateStatus');
+  if (explicitStatus) {
+    return explicitStatus;
+  }
+
+  return isGreetImportEvent(event) ? 'greeted' : 'discovered';
+}
+
+function resolveImportedAttachmentStatus(event) {
+  const explicitStatus = getImportedField(event, 'status');
+  if (explicitStatus) {
+    return explicitStatus;
+  }
+
+  return event.eventType === 'resume_downloaded' ? 'downloaded' : 'discovered';
 }
 
 module.exports = {

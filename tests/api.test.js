@@ -781,6 +781,103 @@ test('POST /api/agent/runs/:runId/candidates upserts candidate through agent API
   assert.equal(capturedPayload.status, 'greeted');
 });
 
+test('POST /api/agent/runs/:runId/import-events imports event batch through agent API', async () => {
+  let capturedPayload = null;
+
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: { async listSchedules() { return []; }, async upsertSchedule() { return {}; } },
+      agent: {
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return { allowed: true }; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; },
+        async createRun() { return { id: 1 }; },
+        async recordRunEvent() { return { ok: true }; },
+        async importRunEvents(payload) {
+          capturedPayload = payload;
+          return { ok: true, importedCount: 2, projectedCount: 1, duplicateCount: 0 };
+        }
+      }
+    },
+    config: { agentToken: 'search-boss-local-agent' }
+  });
+
+  const response = await request(app)
+    .post('/api/agent/runs/38/import-events?token=search-boss-local-agent')
+    .send({
+      attemptId: 'attempt-2',
+      sourceFile: 'runs/2026-03-25/source/38/events.jsonl',
+      events: [
+        {
+          eventId: 'candidate-observed:38:geek-1',
+          eventType: 'candidate_observed',
+          sequence: 10,
+          occurredAt: '2026-03-25T07:05:00.000Z'
+        },
+        {
+          eventId: 'greet:38:geek-1',
+          eventType: 'greet_sent',
+          sequence: 11,
+          occurredAt: '2026-03-25T07:06:00.000Z'
+        }
+      ]
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.importedCount, 2);
+  assert.equal(capturedPayload.runId, '38');
+  assert.equal(capturedPayload.sourceFile, 'runs/2026-03-25/source/38/events.jsonl');
+  assert.equal(capturedPayload.events.length, 2);
+});
+
+test('POST /api/agent/runs/:runId/import-events accepts raw event arrays', async () => {
+  let capturedPayload = null;
+
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: { async listSchedules() { return []; }, async upsertSchedule() { return {}; } },
+      agent: {
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return { allowed: true }; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; },
+        async createRun() { return { id: 1 }; },
+        async recordRunEvent() { return { ok: true }; },
+        async importRunEvents(payload) {
+          capturedPayload = payload;
+          return { ok: true, importedCount: 1, projectedCount: 1, duplicateCount: 0 };
+        }
+      }
+    },
+    config: { agentToken: 'search-boss-local-agent' }
+  });
+
+  const response = await request(app)
+    .post('/api/agent/runs/41/import-events?token=search-boss-local-agent')
+    .send([
+      {
+        eventId: 'greet:41:geek-1',
+        eventType: 'greet_sent',
+        sequence: 9,
+        occurredAt: '2026-03-25T08:44:00.000Z'
+      }
+    ]);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.importedCount, 1);
+  assert.equal(capturedPayload.runId, '41');
+  assert.equal(Array.isArray(capturedPayload.events), true);
+  assert.equal(capturedPayload.events.length, 1);
+  assert.equal(capturedPayload.events[0].eventId, 'greet:41:geek-1');
+});
+
 test('POST /api/agent/runs/:runId/complete marks run completed', async () => {
   const app = createApp({
     services: {
@@ -1415,4 +1512,247 @@ test('AgentService runNanobotForSchedule records stream events from nanobot outp
     .map((event) => event.message);
 
   assert.deepEqual(streamedMessages, ['Starting followup', 'Minor warning']);
+});
+
+test('AgentService runNanobotForSchedule sends source workflow guardrails in message', async () => {
+  const { AgentService } = require('../src/services/agent-service');
+  let capturedMessage = null;
+
+  const agentService = new AgentService({
+    pool: {
+      async query() {
+        throw new Error('recordRunEvent should not be called without runId');
+      }
+    },
+    nanobotRunner: {
+      async run({ message }) {
+        capturedMessage = message;
+        return { ok: true, stdout: 'done' };
+      }
+    }
+  });
+
+  await agentService.runNanobotForSchedule({
+    runId: 88,
+    jobKey: '健康顾问_B0047007',
+    mode: 'source'
+  });
+
+  assert.equal(
+    capturedMessage,
+    [
+      '/boss-sourcing --job "健康顾问_B0047007" --source --run-id "88"',
+      '执行寻源打招呼时：先读取职位详情并建立岗位画像，再逐个进入候选人详情页做匹配评估。禁止仅凭推荐列表卡片直接打招呼，优先联系高匹配候选人。'
+    ].join('\n')
+  );
+});
+
+test('AgentService runNanobotForSchedule includes run id for followup mode', async () => {
+  const { AgentService } = require('../src/services/agent-service');
+  let capturedMessage = null;
+
+  const agentService = new AgentService({
+    pool: {
+      async query() {
+        throw new Error('recordRunEvent should not be called without runId');
+      }
+    },
+    nanobotRunner: {
+      async run({ message }) {
+        capturedMessage = message;
+        return { ok: true, stdout: 'done' };
+      }
+    }
+  });
+
+  await agentService.runNanobotForSchedule({
+    runId: 91,
+    jobKey: '健康顾问_B0047007',
+    mode: 'followup'
+  });
+
+  assert.equal(
+    capturedMessage,
+    '/boss-sourcing --job "健康顾问_B0047007" --followup --run-id "91"'
+  );
+});
+
+test('AgentService upsertCandidate records candidate_upserted event after database write', async () => {
+  const queryCalls = [];
+  const { AgentService } = require('../src/services/agent-service');
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql, params = []) {
+        queryCalls.push({ sql, params });
+
+        if (sql.includes('insert into people')) {
+          return { rows: [{ id: 12 }], rowCount: 1 };
+        }
+
+        if (sql.includes('select id') && sql.includes('from jobs')) {
+          return { rows: [{ id: 8 }], rowCount: 1 };
+        }
+
+        if (sql.includes('insert into job_candidates')) {
+          return { rows: [{ id: 55 }], rowCount: 1 };
+        }
+
+        if (sql.includes('insert into sourcing_run_events')) {
+          return { rows: [], rowCount: 1 };
+        }
+
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    }
+  });
+
+  const result = await agentService.upsertCandidate({
+    runId: 38,
+    eventId: 'candidate-upsert:38:面点师傅_B0038011:geek-1',
+    occurredAt: '2026-03-25T07:06:00.000Z',
+    jobKey: '面点师傅_B0038011',
+    bossEncryptGeekId: 'geek-1',
+    name: '谢东林',
+    city: '重庆',
+    education: '大专',
+    experience: '5-10年',
+    school: '重庆工商大学',
+    status: 'greeted',
+    metadata: { matchTier: 'A' }
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.personId, 12);
+  assert.equal(result.candidateId, 55);
+  assert.ok(
+    queryCalls.some(({ sql, params }) =>
+      sql.includes('insert into sourcing_run_events') &&
+      params[0] === 38 &&
+      params[5] === 'candidate_upserted'
+    )
+  );
+  const candidateUpsertSql = queryCalls.find(({ sql }) => sql.includes('insert into job_candidates'))?.sql || '';
+  assert.match(candidateUpsertSql, /\$5::timestamptz/);
+});
+
+test('AgentService importRunEvents records raw events and projects non-duplicate items', async () => {
+  const { AgentService } = require('../src/services/agent-service');
+  const agentService = new AgentService({ pool: { async query() { throw new Error('unexpected db query'); } } });
+
+  const recordedEvents = [];
+  const candidateCalls = [];
+  const actionCalls = [];
+  const messageCalls = [];
+  const attachmentCalls = [];
+
+  agentService.recordRunEvent = async (payload) => {
+    recordedEvents.push(payload);
+    return { ok: true, duplicated: payload.eventId === 'duplicate:event' };
+  };
+  agentService.upsertCandidate = async (payload) => {
+    candidateCalls.push(payload);
+    return { ok: true, candidateId: 101, personId: 202 };
+  };
+  agentService.recordAction = async (payload) => {
+    actionCalls.push(payload);
+    return { ok: true, actionId: 1, duplicated: false };
+  };
+  agentService.recordMessage = async (payload) => {
+    messageCalls.push(payload);
+    return { ok: true, messageId: 3, duplicated: false };
+  };
+  agentService.recordAttachment = async (payload) => {
+    attachmentCalls.push(payload);
+    return { ok: true, attachmentId: 5, alreadyProcessed: false };
+  };
+
+  const result = await agentService.importRunEvents({
+    runId: 38,
+    attemptId: 'attempt-2',
+    sourceFile: 'runs/2026-03-25/source/38/events.jsonl',
+    events: [
+      {
+        eventId: 'candidate-observed:38:geek-1',
+        eventType: 'candidate_observed',
+        sequence: 10,
+        occurredAt: '2026-03-25T07:05:00.000Z',
+        jobKey: '面点师傅_B0038011',
+        bossEncryptGeekId: 'geek-1',
+        name: '谢东林',
+        city: '重庆',
+        education: '大专',
+        experience: '5-10年',
+        school: '重庆工商大学'
+      },
+      {
+        eventId: 'greet:38:geek-1',
+        eventType: 'greet_sent',
+        sequence: 11,
+        occurredAt: '2026-03-25T07:06:00.000Z',
+        payload: {
+          jobKey: '面点师傅_B0038011',
+          bossEncryptGeekId: 'geek-1',
+          name: '谢东林',
+          city: '重庆',
+          education: '大专',
+          experience: '5-10年',
+          school: '重庆工商大学',
+          matchTier: 'A'
+        }
+      },
+      {
+        eventId: 'message:38:m1',
+        eventType: 'message_recorded',
+        sequence: 12,
+        occurredAt: '2026-03-25T07:07:00.000Z',
+        payload: {
+          bossEncryptGeekId: 'geek-1',
+          bossMessageId: 'm1',
+          direction: 'inbound',
+          messageType: 'text',
+          contentText: '我对岗位感兴趣'
+        }
+      },
+      {
+        eventId: 'attachment:38:a1',
+        eventType: 'resume_downloaded',
+        sequence: 13,
+        occurredAt: '2026-03-25T07:08:00.000Z',
+        payload: {
+          bossEncryptGeekId: 'geek-1',
+          bossAttachmentId: 'a1',
+          fileName: 'resume.pdf',
+          storedPath: 'resumes/面点师傅_B0038011/谢东林_geek-1.pdf'
+        }
+      },
+      {
+        eventId: 'duplicate:event',
+        eventType: 'candidate_observed',
+        sequence: 14,
+        occurredAt: '2026-03-25T07:09:00.000Z',
+        payload: {
+          jobKey: '面点师傅_B0038011',
+          bossEncryptGeekId: 'geek-2'
+        }
+      }
+    ]
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.importedCount, 4);
+  assert.equal(result.projectedCount, 4);
+  assert.equal(result.duplicateCount, 1);
+  assert.equal(recordedEvents.length, 5);
+  assert.equal(recordedEvents[0].payload.importSourceFile, 'runs/2026-03-25/source/38/events.jsonl');
+  assert.equal(candidateCalls.length, 2);
+  assert.equal(candidateCalls[0].status, 'discovered');
+  assert.equal(candidateCalls[1].status, 'greeted');
+  assert.equal(actionCalls.length, 1);
+  assert.equal(actionCalls[0].actionType, 'greet_sent');
+  assert.equal(actionCalls[0].dedupeKey, 'greet:面点师傅_B0038011:geek-1');
+  assert.equal(messageCalls.length, 1);
+  assert.equal(messageCalls[0].bossMessageId, 'm1');
+  assert.equal(attachmentCalls.length, 1);
+  assert.equal(attachmentCalls[0].status, 'downloaded');
 });

@@ -234,6 +234,27 @@ function createApp({ services = {}, config = {} } = {}) {
     }
   });
 
+  app.post('/api/agent/runs/:runId/import-events', async (req, res, next) => {
+    try {
+      if (req.query.token !== config.agentToken) {
+        res.status(401).json({ error: 'unauthorized' });
+        return;
+      }
+
+      const importPayload = Array.isArray(req.body)
+        ? { events: req.body }
+        : req.body;
+
+      const result = await services.agent.importRunEvents({
+        runId: req.params.runId,
+        ...importPayload
+      });
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post('/api/agent/runs/:runId/complete', async (req, res, next) => {
     try {
       if (req.query.token !== config.agentToken) {
