@@ -573,7 +573,7 @@ class AgentService {
 
     const message = [
       `/boss-sourcing --sync --run-id "${runId}"`,
-      '只执行岗位同步：采集职位列表并调用 /api/agent/jobs/batch 回写本地后台。禁止进入推荐牛人、打招呼、聊天跟进、下载简历。'
+      '只执行岗位同步：采集职位列表和职位详情，并调用 /api/agent/jobs/batch 回写本地后台。禁止进入推荐牛人、打招呼、聊天跟进、下载简历。'
     ].join('\n');
     let sequence = 1000;
     const emitStreamEvent = async (line, stream) => {

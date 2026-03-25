@@ -27,6 +27,36 @@ class JobService {
     return result.rows;
   }
 
+  async getJobDetail(jobKey) {
+    const result = await this.pool.query(
+      `
+        select
+          j.id,
+          j.job_key,
+          j.boss_encrypt_job_id,
+          j.job_name,
+          j.city,
+          j.salary,
+          j.status,
+          j.jd_text,
+          j.sync_metadata,
+          j.last_synced_at,
+          count(jc.id)::int as candidate_count,
+          count(*) filter (where jc.lifecycle_status = 'greeted')::int as greeted_count,
+          count(*) filter (where jc.lifecycle_status in ('responded', 'resume_requested', 'resume_received', 'resume_downloaded'))::int as responded_count,
+          count(*) filter (where jc.resume_state = 'downloaded')::int as resume_downloaded_count
+        from jobs j
+        left join job_candidates jc on jc.job_id = j.id
+        where j.job_key = $1
+        group by j.id
+        limit 1
+      `,
+      [jobKey]
+    );
+
+    return result.rows[0] || null;
+  }
+
   async upsertJobsBatch({ runId, eventId, sequence, occurredAt, jobs = [] }) {
     const syncedAt = occurredAt || new Date().toISOString();
 
@@ -41,10 +71,11 @@ class JobService {
             salary,
             status,
             source,
+            jd_text,
             sync_metadata,
             last_synced_at
           )
-          values ($1, $2, $3, $4, $5, $6, 'boss', coalesce($7, '{}'::jsonb), $8)
+          values ($1, $2, $3, $4, $5, $6, 'boss', $7, coalesce($8, '{}'::jsonb), $9)
           on conflict (job_key) do update
           set boss_encrypt_job_id = excluded.boss_encrypt_job_id,
               job_name = excluded.job_name,
@@ -52,6 +83,7 @@ class JobService {
               salary = excluded.salary,
               status = excluded.status,
               source = excluded.source,
+              jd_text = excluded.jd_text,
               sync_metadata = excluded.sync_metadata,
               last_synced_at = excluded.last_synced_at,
               updated_at = now()
@@ -64,6 +96,7 @@ class JobService {
           job.city || null,
           job.salary || null,
           job.status || 'open',
+          job.jdText || job.jd_text || null,
           job.metadata || {},
           syncedAt
         ]

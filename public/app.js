@@ -17,6 +17,13 @@ const state = {
     pollTimer: null,
     lastEventId: 0,
     taskType: 'sync_jobs'
+  },
+  jobDetailModal: {
+    open: false,
+    jobKey: '',
+    loading: false,
+    error: '',
+    item: null
   }
 };
 
@@ -102,6 +109,47 @@ async function loadData() {
   state.summary = summary;
   state.jobs = jobs.items;
   state.candidates = candidates.items;
+  render();
+}
+
+async function openJobDetailModal(jobKey) {
+  state.jobDetailModal = {
+    open: true,
+    jobKey,
+    loading: true,
+    error: '',
+    item: null
+  };
+  render();
+
+  try {
+    const result = await fetchJson(`/api/jobs/${encodeURIComponent(jobKey)}`);
+    if (state.jobDetailModal.jobKey !== jobKey) {
+      return;
+    }
+
+    state.jobDetailModal.loading = false;
+    state.jobDetailModal.item = result.item;
+    render();
+  } catch (error) {
+    if (state.jobDetailModal.jobKey !== jobKey) {
+      return;
+    }
+
+    state.jobDetailModal.loading = false;
+    state.jobDetailModal.error = error.message;
+    render();
+  }
+}
+
+function closeJobDetailModal() {
+  state.jobDetailModal = {
+    open: false,
+    jobKey: '',
+    loading: false,
+    error: '',
+    item: null
+  };
   render();
 }
 
@@ -484,6 +532,7 @@ function renderJobs() {
       </table>
     </section>
     ${renderSyncModal()}
+    ${renderJobDetailModal()}
   `;
 }
 
@@ -503,6 +552,13 @@ function renderJobActions(job) {
 
   return `
     <div class="table-actions">
+      <button
+        class="button-secondary button-compact"
+        onclick='openJobDetailModal(${JSON.stringify(job.job_key)})'
+        title="查看职位详情"
+      >
+        查看详情
+      </button>
       ${renderTaskTriggerButton(job.job_key, 'source', {
         enabled: actionEnabled,
         hint: actionEnabled
@@ -701,6 +757,124 @@ function metricCard(label, value, footnote) {
       <div class="metric-footnote">${footnote || ''}</div>
     </article>
   `;
+}
+
+function renderJobDetailModal() {
+  if (!state.jobDetailModal.open) {
+    return '';
+  }
+
+  const item = state.jobDetailModal.item;
+  const metadataEntries = item ? getJobMetadataEntries(item.sync_metadata) : [];
+
+  return `
+    <div class="modal-backdrop" onclick="closeJobDetailModal()">
+      <section class="sync-modal job-detail-modal" onclick="event.stopPropagation()">
+        <div class="card-header">
+          <div>
+            <p class="eyebrow">职位详情</p>
+            <h3 class="card-title">${escapeHtml(item?.job_name || state.jobDetailModal.jobKey)}</h3>
+            <p class="card-subtitle">${item ? `${escapeHtml(item.job_key)} · ${escapeHtml(formatJobStatus(item.status))}` : '正在加载职位详情'}</p>
+          </div>
+          <button class="button-secondary" onclick="closeJobDetailModal()">关闭</button>
+        </div>
+        ${state.jobDetailModal.loading ? '<div class="empty-state">正在加载职位详情...</div>' : ''}
+        ${state.jobDetailModal.error ? `<div class="inline-status inline-status-error">${state.jobDetailModal.error}</div>` : ''}
+        ${item ? `
+          <div class="job-detail-grid">
+            <div class="status-box">
+              <span class="muted">职位编号</span>
+              <strong>${escapeHtml(item.job_key)}</strong>
+            </div>
+            <div class="status-box">
+              <span class="muted">BOSS 职位 ID</span>
+              <strong>${escapeHtml(item.boss_encrypt_job_id || '-')}</strong>
+            </div>
+            <div class="status-box">
+              <span class="muted">城市</span>
+              <strong>${escapeHtml(item.city || '-')}</strong>
+            </div>
+            <div class="status-box">
+              <span class="muted">薪资</span>
+              <strong>${escapeHtml(item.salary || '-')}</strong>
+            </div>
+            <div class="status-box">
+              <span class="muted">候选人总数</span>
+              <strong>${item.candidate_count ?? 0}</strong>
+            </div>
+            <div class="status-box">
+              <span class="muted">最后同步时间</span>
+              <strong>${formatDateTime(item.last_synced_at)}</strong>
+            </div>
+          </div>
+          <div class="job-detail-sections">
+            <section class="job-detail-section">
+              <div class="card-header">
+                <div>
+                  <p class="eyebrow">职位描述</p>
+                  <h4 class="card-title job-detail-section-title">JD / 职位说明</h4>
+                </div>
+              </div>
+              <div class="job-detail-jd">${escapeHtml(item.jd_text || '当前尚未同步职位描述。')}</div>
+            </section>
+            <section class="job-detail-section">
+              <div class="card-header">
+                <div>
+                  <p class="eyebrow">同步字段</p>
+                  <h4 class="card-title job-detail-section-title">BOSS 页面已保存信息</h4>
+                </div>
+              </div>
+              ${metadataEntries.length ? `
+                <div class="job-meta-grid">
+                  ${metadataEntries.map((entry) => `
+                    <div class="job-meta-item">
+                      <span class="muted">${entry.label}</span>
+                      <strong>${escapeHtml(entry.value)}</strong>
+                    </div>
+                  `).join('')}
+                </div>
+              ` : '<div class="empty-state">当前没有额外的职位详情字段。</div>'}
+            </section>
+          </div>
+        ` : ''}
+      </section>
+    </div>
+  `;
+}
+
+function getJobMetadataEntries(metadata = {}) {
+  return Object.entries(metadata || {})
+    .filter(([, value]) => value !== null && value !== undefined && value !== '')
+    .map(([key, value]) => ({
+      label: formatMetadataLabel(key),
+      value: typeof value === 'string' ? value : JSON.stringify(value)
+    }));
+}
+
+function formatMetadataLabel(key) {
+  const labels = {
+    bossBrandName: '招聘主体',
+    brandName: '招聘主体',
+    experienceRequirement: '经验要求',
+    degreeRequirement: '学历要求',
+    recruiterName: '招聘方',
+    bossJobType: '职位类型',
+    bossDepartment: '所属部门',
+    address: '工作地点',
+    keywords: '关键词',
+    welfareTags: '福利标签'
+  };
+
+  return labels[key] || key;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 function renderSyncModal() {

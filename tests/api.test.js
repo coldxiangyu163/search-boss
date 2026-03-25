@@ -60,6 +60,79 @@ test('GET /api/jobs returns job list payload', async () => {
   assert.equal(response.body.items[0].job_key, '健康顾问_B0047007');
 });
 
+test('GET /api/jobs/:jobKey returns job detail payload', async () => {
+  const app = createApp({
+    services: {
+      dashboard: {
+        async getSummary() {
+          return { kpis: {}, queues: {}, health: {} };
+        }
+      },
+      jobs: {
+        async listJobs() {
+          return [];
+        },
+        async getJobDetail(jobKey) {
+          return {
+            job_key: jobKey,
+            job_name: '健康顾问（B0047007）',
+            city: '重庆',
+            salary: '5-6K',
+            status: 'open',
+            jd_text: '负责客户跟进和健康产品咨询',
+            sync_metadata: {
+              bossBrandName: '百融云创',
+              experienceRequirement: '经验不限'
+            }
+          };
+        }
+      },
+      candidates: {
+        async listCandidates() {
+          return [];
+        }
+      }
+    }
+  });
+
+  const response = await request(app).get('/api/jobs/%E5%81%A5%E5%BA%B7%E9%A1%BE%E9%97%AE_B0047007');
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.item.job_key, '健康顾问_B0047007');
+  assert.equal(response.body.item.jd_text, '负责客户跟进和健康产品咨询');
+  assert.equal(response.body.item.sync_metadata.bossBrandName, '百融云创');
+});
+
+test('GET /api/jobs/:jobKey returns 404 when job detail is missing', async () => {
+  const app = createApp({
+    services: {
+      dashboard: {
+        async getSummary() {
+          return { kpis: {}, queues: {}, health: {} };
+        }
+      },
+      jobs: {
+        async listJobs() {
+          return [];
+        },
+        async getJobDetail() {
+          return null;
+        }
+      },
+      candidates: {
+        async listCandidates() {
+          return [];
+        }
+      }
+    }
+  });
+
+  const response = await request(app).get('/api/jobs/%E4%B8%8D%E5%AD%98%E5%9C%A8');
+
+  assert.equal(response.status, 404);
+  assert.equal(response.body.error, 'job_not_found');
+});
+
 test('POST /api/jobs/sync triggers job sync run payload', async () => {
   let syncPayload = null;
 
@@ -673,7 +746,7 @@ test('JobService triggerSync creates sync run and calls nanobot', async () => {
   assert.equal(nanobotCalls.length, 1);
   assert.equal(
     nanobotCalls[0].message,
-    '/boss-sourcing --sync --run-id "33"\n只执行岗位同步：采集职位列表并调用 /api/agent/jobs/batch 回写本地后台。禁止进入推荐牛人、打招呼、聊天跟进、下载简历。'
+    '/boss-sourcing --sync --run-id "33"\n只执行岗位同步：采集职位列表和职位详情，并调用 /api/agent/jobs/batch 回写本地后台。禁止进入推荐牛人、打招呼、聊天跟进、下载简历。'
   );
 });
 
@@ -708,7 +781,12 @@ test('JobService upsertJobsBatch writes agent synced jobs into jobs table and re
         jobName: '健康顾问（B0047007）',
         salary: '5-6K',
         city: '重庆',
-        status: 'open'
+        status: 'open',
+        jdText: '负责客户跟进和健康产品咨询',
+        metadata: {
+          bossBrandName: '百融云创',
+          experienceRequirement: '经验不限'
+        }
       },
       {
         jobKey: '销售顾问_B0099001',
@@ -725,17 +803,60 @@ test('JobService upsertJobsBatch writes agent synced jobs into jobs table and re
   assert.equal(result.syncedCount, 2);
   assert.equal(queryCalls.length, 2);
   assert.match(queryCalls[0].sql, /insert into jobs/i);
-  assert.deepEqual(queryCalls[0].params.slice(0, 6), [
+  assert.deepEqual(queryCalls[0].params.slice(0, 7), [
     '健康顾问_B0047007',
     'enc-1',
     '健康顾问（B0047007）',
     '重庆',
     '5-6K',
-    'open'
+    'open',
+    '负责客户跟进和健康产品咨询'
   ]);
+  assert.deepEqual(queryCalls[0].params[7], {
+    bossBrandName: '百融云创',
+    experienceRequirement: '经验不限'
+  });
   assert.equal(recordedEvents.length, 1);
   assert.equal(recordedEvents[0].runId, 33);
   assert.equal(recordedEvents[0].eventType, 'jobs_batch_synced');
+});
+
+test('JobService getJobDetail returns detail row for one job', async () => {
+  const queryCalls = [];
+  const pool = {
+    async query(sql, params = []) {
+      queryCalls.push({ sql, params });
+      return {
+        rows: [
+          {
+            id: 1,
+            job_key: '健康顾问_B0047007',
+            job_name: '健康顾问（B0047007）',
+            city: '重庆',
+            salary: '5-6K',
+            status: 'open',
+            jd_text: '负责客户跟进和健康产品咨询',
+            sync_metadata: { bossBrandName: '百融云创' },
+            last_synced_at: '2026-03-25T12:00:00.000Z',
+            candidate_count: 4,
+            greeted_count: 2,
+            responded_count: 1,
+            resume_downloaded_count: 1
+          }
+        ]
+      };
+    }
+  };
+
+  const { JobService } = require('../src/services/job-service');
+  const service = new JobService({ pool, agentService: null });
+
+  const item = await service.getJobDetail('健康顾问_B0047007');
+
+  assert.equal(item.job_key, '健康顾问_B0047007');
+  assert.equal(item.jd_text, '负责客户跟进和健康产品咨询');
+  assert.equal(item.sync_metadata.bossBrandName, '百融云创');
+  assert.equal(queryCalls[0].params[0], '健康顾问_B0047007');
 });
 
 test('JobService triggerSync returns immediately and completes run asynchronously', async () => {

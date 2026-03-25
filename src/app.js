@@ -28,6 +28,23 @@ function createApp({ services = {}, config = {} } = {}) {
     }
   });
 
+  app.get('/api/jobs/:jobKey', async (req, res, next) => {
+    try {
+      const item = await services.jobs.getJobDetail(req.params.jobKey);
+      if (!item) {
+        res.status(404).json({
+          error: 'job_not_found',
+          message: '未找到对应职位。'
+        });
+        return;
+      }
+
+      res.json({ item });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post('/api/jobs/sync', async (_req, res, next) => {
     try {
       const result = await services.jobs.triggerSync();

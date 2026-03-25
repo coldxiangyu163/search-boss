@@ -484,6 +484,66 @@ tbody tr:hover {
   box-shadow: 0 30px 80px rgba(15, 23, 42, 0.24);
 }
 
+.job-detail-modal {
+  width: min(980px, 100%);
+}
+
+.job-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.job-detail-sections {
+  display: grid;
+  gap: 18px;
+  margin-top: 20px;
+}
+
+.job-detail-section {
+  border: 1px solid var(--line-soft);
+  border-radius: 18px;
+  padding: 18px;
+  background: var(--panel-soft);
+}
+
+.job-detail-section-title {
+  font-size: 18px;
+}
+
+.job-detail-jd {
+  margin-top: 14px;
+  padding: 16px 18px;
+  border-radius: 14px;
+  border: 1px solid var(--line-soft);
+  background: #fff;
+  white-space: pre-wrap;
+  line-height: 1.8;
+}
+
+.job-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.job-meta-item {
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid var(--line-soft);
+}
+
+.job-meta-item strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--heading);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
 .sync-summary-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -590,6 +650,8 @@ tbody tr:hover {
   }
 
   .sync-summary-grid,
+  .job-detail-grid,
+  .job-meta-grid,
   .sync-log-item {
     grid-template-columns: 1fr;
   }
