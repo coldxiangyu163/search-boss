@@ -3,6 +3,22 @@ const state = {
   summary: null,
   jobs: [],
   candidates: [],
+  candidateQuery: {
+    jobKey: '',
+    status: '',
+    resumeState: '',
+    keyword: '',
+    page: 1,
+    pageSize: 20
+  },
+  candidatePagination: {
+    page: 1,
+    pageSize: 20,
+    total: 0,
+    totalPages: 0
+  },
+  candidateListLoading: false,
+  candidateListError: '',
   schedules: [],
   syncStatus: '',
   triggeringTaskKey: '',
@@ -24,6 +40,13 @@ const state = {
     loading: false,
     error: '',
     item: null
+  },
+  candidateDetailDrawer: {
+    open: false,
+    candidateId: null,
+    loading: false,
+    error: '',
+    item: null
   }
 };
 
@@ -32,6 +55,16 @@ const {
   getJobStatusBadgeClass,
   isJobActionEnabled
 } = window.JobUiHelpers;
+
+const {
+  formatLifecycleStatus,
+  formatResumeState,
+  formatGuardStatus,
+  getLifecycleBadgeClass,
+  getResumeBadgeClass,
+  getGuardBadgeClass,
+  buildCandidateTimeline
+} = window.CandidateUiHelpers;
 
 const {
   captureSyncLogScrollSnapshot,
@@ -103,18 +136,71 @@ function bindEvents() {
 }
 
 async function loadData() {
+  state.candidateListLoading = true;
+  state.candidateListError = '';
+  render();
+
   const [schedules, summary, jobs, candidates] = await Promise.all([
     fetchJson('/api/schedules'),
     fetchJson('/api/dashboard/summary'),
     fetchJson('/api/jobs'),
-    fetchJson('/api/candidates')
+    fetchCandidates()
   ]);
 
   state.schedules = schedules.items;
   state.summary = summary;
   state.jobs = jobs.items;
   state.candidates = candidates.items;
+  state.candidatePagination = candidates.pagination || {
+    page: state.candidateQuery.page,
+    pageSize: state.candidateQuery.pageSize,
+    total: candidates.items.length,
+    totalPages: candidates.items.length ? 1 : 0
+  };
+  state.candidateListLoading = false;
   render();
+}
+
+async function fetchCandidates() {
+  const searchParams = new URLSearchParams();
+  const entries = {
+    jobKey: state.candidateQuery.jobKey,
+    status: state.candidateQuery.status,
+    resumeState: state.candidateQuery.resumeState,
+    keyword: state.candidateQuery.keyword.trim(),
+    page: String(state.candidateQuery.page),
+    pageSize: String(state.candidateQuery.pageSize)
+  };
+
+  for (const [key, value] of Object.entries(entries)) {
+    if (value) {
+      searchParams.set(key, value);
+    }
+  }
+
+  return fetchJson(`/api/candidates?${searchParams.toString()}`);
+}
+
+async function loadCandidates() {
+  state.candidateListLoading = true;
+  state.candidateListError = '';
+  render();
+
+  try {
+    const result = await fetchCandidates();
+    state.candidates = result.items || [];
+    state.candidatePagination = result.pagination || {
+      page: state.candidateQuery.page,
+      pageSize: state.candidateQuery.pageSize,
+      total: state.candidates.length,
+      totalPages: state.candidates.length ? 1 : 0
+    };
+  } catch (error) {
+    state.candidateListError = error.message;
+  } finally {
+    state.candidateListLoading = false;
+    render();
+  }
 }
 
 async function openJobDetailModal(jobKey) {
@@ -635,43 +721,514 @@ function renderTaskTriggerButton(jobKey, taskType, { enabled = true, compact = f
 }
 
 function renderCandidates() {
+  const page = state.candidatePagination.page || state.candidateQuery.page;
+  const totalPages = state.candidatePagination.totalPages || 0;
+
   return `
     <section class="table-card">
       <div class="card-header">
         <div>
           <p class="eyebrow">候选人管理</p>
           <h3 class="card-title">候选人工作台</h3>
-          <p class="card-subtitle">查看候选人所处阶段、简历状态与最近互动记录。</p>
+          <p class="card-subtitle">支持按岗位和流程状态筛选，保留当前列表上下文查看详情。</p>
         </div>
-        <span class="badge">共 ${state.candidates.length} 人</span>
+        <div class="jobs-header-actions">
+          <span class="badge">共 ${state.candidatePagination.total} 人</span>
+          <span class="status-chip">第 ${page} / ${Math.max(totalPages, 1)} 页</span>
+        </div>
       </div>
+      <div class="candidate-filter-bar">
+        <div class="candidate-filter-grid">
+          <label class="form-field">
+            <span class="form-label">岗位</span>
+            <select onchange="updateCandidateFilter('jobKey', this.value)">
+              <option value="">全部岗位</option>
+              ${state.jobs.map((job) => `
+                <option value="${escapeHtml(job.job_key)}" ${state.candidateQuery.jobKey === job.job_key ? 'selected' : ''}>
+                  ${escapeHtml(job.job_name)}
+                </option>
+              `).join('')}
+            </select>
+          </label>
+          <label class="form-field">
+            <span class="form-label">流程阶段</span>
+            <select onchange="updateCandidateFilter('status', this.value)">
+              ${renderCandidateSelectOptions(getLifecycleOptions(), state.candidateQuery.status)}
+            </select>
+          </label>
+          <label class="form-field">
+            <span class="form-label">简历状态</span>
+            <select onchange="updateCandidateFilter('resumeState', this.value)">
+              ${renderCandidateSelectOptions(getResumeStateOptions(), state.candidateQuery.resumeState)}
+            </select>
+          </label>
+          <label class="form-field">
+            <span class="form-label">关键词</span>
+            <input
+              type="text"
+              placeholder="姓名 / Geek ID / 岗位"
+              value="${escapeHtml(state.candidateQuery.keyword)}"
+              oninput="updateCandidateFilter('keyword', this.value)"
+              onkeydown="handleCandidateKeywordKeydown(event)"
+            />
+          </label>
+        </div>
+        <div class="candidate-filter-actions">
+          <button class="button-secondary" onclick="applyCandidateFilters()">查询</button>
+          <button class="button-secondary button-muted" onclick="resetCandidateFilters()">重置</button>
+        </div>
+      </div>
+      ${state.candidateListError ? `<div class="inline-status inline-status-error">${escapeHtml(state.candidateListError)}</div>` : ''}
+      ${renderCandidateListSummary()}
+      ${state.candidateListLoading ? '<div class="empty-state">正在加载候选人列表...</div>' : renderCandidateTable()}
+      ${renderCandidatePagination()}
+    </section>
+    ${renderCandidateDetailDrawer()}
+  `;
+}
+
+function renderCandidateSelectOptions(options, currentValue) {
+  return options.map((option) => `
+    <option value="${escapeHtml(option.value)}" ${currentValue === option.value ? 'selected' : ''}>
+      ${escapeHtml(option.label)}
+    </option>
+  `).join('');
+}
+
+function getLifecycleOptions() {
+  return [
+    { value: '', label: '全部阶段' },
+    { value: 'discovered', label: formatLifecycleStatus('discovered') },
+    { value: 'greeted', label: formatLifecycleStatus('greeted') },
+    { value: 'responded', label: formatLifecycleStatus('responded') },
+    { value: 'resume_requested', label: formatLifecycleStatus('resume_requested') },
+    { value: 'resume_received', label: formatLifecycleStatus('resume_received') },
+    { value: 'resume_downloaded', label: formatLifecycleStatus('resume_downloaded') }
+  ];
+}
+
+function getResumeStateOptions() {
+  return [
+    { value: '', label: '全部简历状态' },
+    { value: 'not_requested', label: formatResumeState('not_requested') },
+    { value: 'requested', label: formatResumeState('requested') },
+    { value: 'received', label: formatResumeState('received') },
+    { value: 'downloaded', label: formatResumeState('downloaded') }
+  ];
+}
+
+function updateCandidateFilter(field, value) {
+  state.candidateQuery[field] = value;
+}
+
+function handleCandidateKeywordKeydown(event) {
+  if (event.key === 'Enter') {
+    applyCandidateFilters();
+  }
+}
+
+function applyCandidateFilters() {
+  state.candidateQuery.page = 1;
+  loadCandidates();
+}
+
+function resetCandidateFilters() {
+  state.candidateQuery = {
+    ...state.candidateQuery,
+    jobKey: '',
+    status: '',
+    resumeState: '',
+    keyword: '',
+    page: 1
+  };
+  loadCandidates();
+}
+
+function goToCandidatePage(page) {
+  const totalPages = state.candidatePagination.totalPages || 1;
+  const nextPage = Math.min(Math.max(page, 1), totalPages);
+  if (nextPage === state.candidateQuery.page) {
+    return;
+  }
+
+  state.candidateQuery.page = nextPage;
+  loadCandidates();
+}
+
+function changeCandidatePageSize(pageSize) {
+  const nextPageSize = Number(pageSize) || 20;
+  if (nextPageSize === state.candidateQuery.pageSize) {
+    return;
+  }
+
+  state.candidateQuery.pageSize = nextPageSize;
+  state.candidateQuery.page = 1;
+  loadCandidates();
+}
+
+function renderCandidateListSummary() {
+  const { jobKey, status, resumeState, keyword } = state.candidateQuery;
+  const activeFilters = [];
+
+  if (jobKey) {
+    const job = state.jobs.find((item) => item.job_key === jobKey);
+    activeFilters.push(job?.job_name || jobKey);
+  }
+
+  if (status) {
+    activeFilters.push(formatLifecycleStatus(status));
+  }
+
+  if (resumeState) {
+    activeFilters.push(formatResumeState(resumeState));
+  }
+
+  if (keyword.trim()) {
+    activeFilters.push(`关键词: ${keyword.trim()}`);
+  }
+
+  return `
+    <div class="candidate-summary-row">
+      <div class="muted">
+        当前显示 ${state.candidates.length} / ${state.candidatePagination.total} 位候选人
+      </div>
+      <div class="candidate-chip-row">
+        ${(activeFilters.length ? activeFilters : ['全部候选人']).map((label) => `
+          <span class="badge badge-neutral">${escapeHtml(label)}</span>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderCandidateTable() {
+  if (!state.candidates.length) {
+    return '<div class="empty-state">当前筛选条件下没有候选人，建议切换岗位或放宽筛选条件。</div>';
+  }
+
+  return `
+    <div class="table-scroll">
       <table>
         <thead>
           <tr>
-            <th>姓名</th>
-            <th>职位</th>
-            <th>阶段</th>
+            <th>候选人</th>
+            <th>当前岗位</th>
+            <th>流程阶段</th>
             <th>简历状态</th>
+            <th>最近互动</th>
             <th>索简历次数</th>
-            <th>最近入站</th>
-            <th>简历路径</th>
+            <th>风险标记</th>
+            <th>操作</th>
           </tr>
         </thead>
         <tbody>
           ${state.candidates.map((candidate) => `
-            <tr>
-              <td>${candidate.name}<div class="muted">${candidate.boss_encrypt_geek_id}</div></td>
-              <td>${candidate.job_name}</td>
-              <td>${candidate.lifecycle_status}</td>
-              <td>${candidate.resume_state}</td>
-              <td>${candidate.resume_request_count}</td>
-              <td>${candidate.last_inbound_at || '-'}</td>
-              <td>${candidate.resume_path || '-'}</td>
+            <tr class="table-row-action" onclick='openCandidateDetailDrawer(${JSON.stringify(candidate.id)})'>
+              <td>
+                ${escapeHtml(candidate.name || '-')}
+                <div class="muted">${escapeHtml(candidate.boss_encrypt_geek_id || '-')}</div>
+              </td>
+              <td>${escapeHtml(candidate.job_name || '-')}</td>
+              <td>
+                <span class="${getLifecycleBadgeClass(candidate.lifecycle_status)}">
+                  ${escapeHtml(formatLifecycleStatus(candidate.lifecycle_status))}
+                </span>
+              </td>
+              <td>
+                <span class="${getResumeBadgeClass(candidate.resume_state)}">
+                  ${escapeHtml(formatResumeState(candidate.resume_state))}
+                </span>
+              </td>
+              <td>${formatDateTime(candidate.last_activity_at || candidate.last_inbound_at || candidate.last_outbound_at)}</td>
+              <td>${candidate.resume_request_count ?? 0}</td>
+              <td>
+                <span class="${getGuardBadgeClass(candidate.guard_status)}">
+                  ${escapeHtml(formatGuardStatus(candidate.guard_status))}
+                </span>
+              </td>
+              <td>
+                <button
+                  class="button-secondary button-compact"
+                  onclick='event.stopPropagation(); openCandidateDetailDrawer(${JSON.stringify(candidate.id)})'
+                >
+                  查看详情
+                </button>
+              </td>
             </tr>
           `).join('')}
         </tbody>
       </table>
-    </section>
+    </div>
+  `;
+}
+
+function renderCandidatePagination() {
+  const { page, pageSize, total, totalPages } = state.candidatePagination;
+  const safeTotalPages = Math.max(totalPages, 1);
+  const pageNumbers = [];
+  const start = Math.max(1, page - 2);
+  const end = Math.min(safeTotalPages, page + 2);
+
+  for (let current = start; current <= end; current += 1) {
+    pageNumbers.push(current);
+  }
+
+  return `
+    <div class="candidate-pagination">
+      <div class="muted">共 ${total} 条记录，每页展示</div>
+      <select class="pagination-select" onchange="changeCandidatePageSize(this.value)">
+        ${[20, 50, 100].map((size) => `
+          <option value="${size}" ${pageSize === size ? 'selected' : ''}>${size}</option>
+        `).join('')}
+      </select>
+      <div class="candidate-page-actions">
+        <button class="button-secondary button-compact" onclick="goToCandidatePage(${page - 1})" ${page <= 1 ? 'disabled' : ''}>
+          上一页
+        </button>
+        ${pageNumbers.map((pageNumber) => `
+          <button
+            class="button-secondary button-compact ${pageNumber === page ? 'is-current-page' : ''}"
+            onclick="goToCandidatePage(${pageNumber})"
+          >
+            ${pageNumber}
+          </button>
+        `).join('')}
+        <button class="button-secondary button-compact" onclick="goToCandidatePage(${page + 1})" ${page >= safeTotalPages ? 'disabled' : ''}>
+          下一页
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+async function openCandidateDetailDrawer(candidateId) {
+  state.candidateDetailDrawer = {
+    open: true,
+    candidateId,
+    loading: true,
+    error: '',
+    item: null
+  };
+  render();
+
+  try {
+    const result = await fetchJson(`/api/candidates/${encodeURIComponent(candidateId)}`);
+    if (state.candidateDetailDrawer.candidateId !== candidateId) {
+      return;
+    }
+
+    state.candidateDetailDrawer.loading = false;
+    state.candidateDetailDrawer.item = result.item;
+    render();
+  } catch (error) {
+    if (state.candidateDetailDrawer.candidateId !== candidateId) {
+      return;
+    }
+
+    state.candidateDetailDrawer.loading = false;
+    state.candidateDetailDrawer.error = error.message;
+    render();
+  }
+}
+
+function closeCandidateDetailDrawer() {
+  state.candidateDetailDrawer = {
+    open: false,
+    candidateId: null,
+    loading: false,
+    error: '',
+    item: null
+  };
+  render();
+}
+
+function renderCandidateDetailDrawer() {
+  if (!state.candidateDetailDrawer.open) {
+    return '';
+  }
+
+  const item = state.candidateDetailDrawer.item;
+  const timeline = item ? buildCandidateTimeline(item) : [];
+
+  return `
+    <div class="drawer-backdrop" onclick="closeCandidateDetailDrawer()">
+      <aside class="candidate-drawer" onclick="event.stopPropagation()">
+        <div class="card-header">
+          <div>
+            <p class="eyebrow">候选人详情</p>
+            <h3 class="card-title">${escapeHtml(item?.name || '候选人')}</h3>
+            <p class="card-subtitle">
+              ${item ? `${escapeHtml(item.job_name || '-')} · ${escapeHtml(item.boss_encrypt_geek_id || '-')}` : '正在加载候选人详情'}
+            </p>
+          </div>
+          <button class="button-secondary" onclick="closeCandidateDetailDrawer()">关闭</button>
+        </div>
+        ${state.candidateDetailDrawer.loading ? '<div class="empty-state">正在加载候选人详情...</div>' : ''}
+        ${state.candidateDetailDrawer.error ? `<div class="inline-status inline-status-error">${escapeHtml(state.candidateDetailDrawer.error)}</div>` : ''}
+        ${item ? `
+          <div class="candidate-detail-sections">
+            <section class="candidate-detail-section">
+              <div class="candidate-detail-grid">
+                <div class="status-box">
+                  <span class="muted">流程阶段</span>
+                  <strong>${escapeHtml(formatLifecycleStatus(item.lifecycle_status))}</strong>
+                </div>
+                <div class="status-box">
+                  <span class="muted">简历状态</span>
+                  <strong>${escapeHtml(formatResumeState(item.resume_state))}</strong>
+                </div>
+                <div class="status-box">
+                  <span class="muted">跟进状态</span>
+                  <strong>${escapeHtml(formatGuardStatus(item.guard_status))}</strong>
+                </div>
+                <div class="status-box">
+                  <span class="muted">索简历次数</span>
+                  <strong>${item.resume_request_count ?? 0}</strong>
+                </div>
+                <div class="status-box">
+                  <span class="muted">最近索简历时间</span>
+                  <strong>${formatDateTime(item.last_resume_requested_at)}</strong>
+                </div>
+                <div class="status-box">
+                  <span class="muted">候选人最近回复</span>
+                  <strong>${formatDateTime(item.last_inbound_at)}</strong>
+                </div>
+              </div>
+            </section>
+            <section class="candidate-detail-section">
+              <div class="card-header">
+                <div>
+                  <p class="eyebrow">基础信息</p>
+                  <h4 class="card-title job-detail-section-title">候选人画像</h4>
+                </div>
+              </div>
+              <div class="candidate-facts-grid">
+                ${renderCandidateFact('城市', item.city)}
+                ${renderCandidateFact('学历', item.education)}
+                ${renderCandidateFact('经验', item.experience)}
+                ${renderCandidateFact('学校', item.school)}
+                ${renderCandidateFact('简历路径', item.resume_path)}
+                ${renderCandidateFact('备注', item.notes)}
+              </div>
+            </section>
+            <section class="candidate-detail-section">
+              <div class="card-header">
+                <div>
+                  <p class="eyebrow">跟进建议</p>
+                  <h4 class="card-title job-detail-section-title">下一步动作</h4>
+                </div>
+              </div>
+              <div class="candidate-followup-box">
+                <div class="status-box">
+                  <span class="muted">是否允许继续触达</span>
+                  <strong>${item.followupDecision?.allowed ? '允许' : '暂不允许'}</strong>
+                </div>
+                <div class="status-box">
+                  <span class="muted">原因</span>
+                  <strong>${escapeHtml(item.followupDecision?.reason || '未提供')}</strong>
+                </div>
+                <div class="status-box">
+                  <span class="muted">建议动作</span>
+                  <strong>${escapeHtml(item.followupDecision?.recommendedAction || 'manual_review')}</strong>
+                </div>
+                <div class="status-box">
+                  <span class="muted">剩余冷却</span>
+                  <strong>${item.followupDecision?.cooldownRemainingMinutes ?? 0} 分钟</strong>
+                </div>
+              </div>
+            </section>
+            <section class="candidate-detail-section">
+              <div class="card-header">
+                <div>
+                  <p class="eyebrow">互动时间线</p>
+                  <h4 class="card-title job-detail-section-title">最近动态</h4>
+                </div>
+              </div>
+              ${timeline.length ? `
+                <div class="candidate-timeline">
+                  ${timeline.map((event) => `
+                    <div class="candidate-timeline-item">
+                      <div class="candidate-timeline-dot"></div>
+                      <div>
+                        <div class="list-title">${escapeHtml(event.title)}</div>
+                        <div class="list-desc">${escapeHtml(event.description || '系统已记录该事件。')}</div>
+                      </div>
+                      <div class="muted">${formatDateTime(event.occurredAt)}</div>
+                    </div>
+                  `).join('')}
+                </div>
+              ` : '<div class="empty-state">当前没有可展示的互动记录。</div>'}
+            </section>
+            <section class="candidate-detail-section">
+              <div class="card-header">
+                <div>
+                  <p class="eyebrow">附件与关联岗位</p>
+                  <h4 class="card-title job-detail-section-title">简历与历史轨迹</h4>
+                </div>
+              </div>
+              <div class="candidate-detail-stack">
+                ${renderAttachmentList(item.attachments)}
+                ${renderRelatedJobs(item.relatedJobs)}
+              </div>
+            </section>
+          </div>
+        ` : ''}
+      </aside>
+    </div>
+  `;
+}
+
+function renderCandidateFact(label, value) {
+  return `
+    <div class="job-meta-item">
+      <span class="muted">${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value || '-')}</strong>
+    </div>
+  `;
+}
+
+function renderAttachmentList(attachments = []) {
+  if (!attachments.length) {
+    return '<div class="empty-state">尚未收到或下载简历附件。</div>';
+  }
+
+  return `
+    <div class="candidate-sublist">
+      ${attachments.map((attachment) => `
+        <div class="list-item">
+          <div>
+            <p class="list-title">${escapeHtml(attachment.file_name || '未命名附件')}</p>
+            <p class="list-desc">${escapeHtml(attachment.stored_path || '尚未落盘')} · ${escapeHtml(formatResumeState(attachment.status === 'downloaded' ? 'downloaded' : 'received'))}</p>
+          </div>
+          <span class="badge ${attachment.status === 'downloaded' ? 'badge-success' : 'badge-warning'}">
+            ${escapeHtml(attachment.status || '-')}
+          </span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderRelatedJobs(relatedJobs = []) {
+  if (!relatedJobs.length) {
+    return '<div class="empty-state">当前未发现该候选人的跨岗位记录。</div>';
+  }
+
+  return `
+    <div class="candidate-sublist">
+      ${relatedJobs.map((job) => `
+        <div class="list-item">
+          <div>
+            <p class="list-title">${escapeHtml(job.job_name || job.job_key)}</p>
+            <p class="list-desc">${escapeHtml(job.job_key || '-')}</p>
+          </div>
+          <div class="candidate-related-badges">
+            <span class="${getLifecycleBadgeClass(job.lifecycle_status)}">${escapeHtml(formatLifecycleStatus(job.lifecycle_status))}</span>
+            <span class="${getResumeBadgeClass(job.resume_state)}">${escapeHtml(formatResumeState(job.resume_state))}</span>
+          </div>
+        </div>
+      `).join('')}
+    </div>
   `;
 }
 

@@ -194,6 +194,12 @@ button {
   transform: none;
 }
 
+.button-muted {
+  color: var(--muted) !important;
+  border-color: var(--line) !important;
+  box-shadow: none !important;
+}
+
 .jobs-header-actions {
   display: flex;
   align-items: center;
@@ -234,6 +240,24 @@ button {
 .content {
   display: grid;
   gap: 20px;
+}
+
+select,
+input {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+}
+
+select:focus,
+input:focus {
+  outline: 2px solid rgba(31, 94, 255, 0.12);
+  border-color: rgba(31, 94, 255, 0.35);
 }
 
 .card-grid {
@@ -325,6 +349,10 @@ th {
 
 tbody tr:hover {
   background: #f8fbff;
+}
+
+.table-row-action {
+  cursor: pointer;
 }
 
 .split {
@@ -461,6 +489,166 @@ tbody tr:hover {
   margin-top: 8px;
   color: var(--heading);
   font-size: 16px;
+}
+
+.candidate-filter-bar {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 20px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid var(--line-soft);
+  background: var(--panel-soft);
+}
+
+.candidate-filter-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.form-field {
+  display: grid;
+  gap: 8px;
+}
+
+.form-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.candidate-filter-actions {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+}
+
+.candidate-summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin: 18px 0 14px;
+}
+
+.candidate-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.candidate-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.pagination-select {
+  width: 88px;
+}
+
+.candidate-page-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.is-current-page {
+  background: linear-gradient(135deg, #1f5eff, #3e78ff) !important;
+  color: #fff !important;
+  border-color: transparent !important;
+}
+
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.28);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 24;
+}
+
+.candidate-drawer {
+  width: min(760px, 100%);
+  height: 100vh;
+  overflow: auto;
+  background: var(--panel);
+  padding: 24px;
+  box-shadow: -18px 0 48px rgba(15, 23, 42, 0.16);
+}
+
+.candidate-detail-sections {
+  display: grid;
+  gap: 18px;
+  margin-top: 20px;
+}
+
+.candidate-detail-section {
+  border: 1px solid var(--line-soft);
+  border-radius: 18px;
+  padding: 18px;
+  background: #fbfcff;
+}
+
+.candidate-detail-grid,
+.candidate-followup-box {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.candidate-facts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.candidate-timeline {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.candidate-timeline-item {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  gap: 14px;
+  align-items: start;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--line-soft);
+  background: #fff;
+}
+
+.candidate-timeline-dot {
+  width: 12px;
+  height: 12px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.candidate-detail-stack,
+.candidate-sublist {
+  display: grid;
+  gap: 12px;
+}
+
+.candidate-related-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .modal-backdrop {
@@ -652,11 +840,37 @@ tbody tr:hover {
   .sync-summary-grid,
   .job-detail-grid,
   .job-meta-grid,
-  .sync-log-item {
+  .sync-log-item,
+  .candidate-detail-grid,
+  .candidate-followup-box,
+  .candidate-facts-grid,
+  .candidate-timeline-item {
     grid-template-columns: 1fr;
   }
 
   .table-actions {
     min-width: 180px;
+  }
+
+  .candidate-filter-bar,
+  .candidate-summary-row,
+  .candidate-pagination,
+  .candidate-filter-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .candidate-filter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .candidate-chip-row,
+  .candidate-page-actions,
+  .candidate-related-badges {
+    justify-content: flex-start;
+  }
+
+  .candidate-drawer {
+    width: 100%;
   }
 }

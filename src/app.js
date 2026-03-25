@@ -81,11 +81,50 @@ function createApp({ services = {}, config = {} } = {}) {
 
   app.get('/api/candidates', async (req, res, next) => {
     try {
-      const items = await services.candidates.listCandidates({
+      const result = await services.candidates.listCandidates({
         jobKey: req.query.jobKey,
-        status: req.query.status
+        status: req.query.status,
+        resumeState: req.query.resumeState,
+        keyword: req.query.keyword,
+        page: req.query.page ? Number(req.query.page) : undefined,
+        pageSize: req.query.pageSize ? Number(req.query.pageSize) : undefined
       });
-      res.json({ items });
+
+      if (Array.isArray(result)) {
+        res.json({
+          items: result,
+          pagination: {
+            page: 1,
+            pageSize: result.length,
+            total: result.length,
+            totalPages: result.length ? 1 : 0
+          }
+        });
+        return;
+      }
+
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/api/candidates/:candidateId', async (req, res, next) => {
+    try {
+      const item = await services.candidates.getCandidateDetail(req.params.candidateId);
+      if (!item) {
+        res.status(404).json({
+          error: 'candidate_not_found',
+          message: '未找到对应候选人。'
+        });
+        return;
+      }
+
+      if (services.agent?.getFollowupDecision) {
+        item.followupDecision = await services.agent.getFollowupDecision(req.params.candidateId);
+      }
+
+      res.json({ item });
     } catch (error) {
       next(error);
     }
@@ -169,6 +208,23 @@ function createApp({ services = {}, config = {} } = {}) {
         return;
       }
       const result = await services.agent.recordRunEvent({
+        runId: req.params.runId,
+        ...req.body
+      });
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/agent/runs/:runId/candidates', async (req, res, next) => {
+    try {
+      if (req.query.token !== config.agentToken) {
+        res.status(401).json({ error: 'unauthorized' });
+        return;
+      }
+
+      const result = await services.agent.upsertCandidate({
         runId: req.params.runId,
         ...req.body
       });

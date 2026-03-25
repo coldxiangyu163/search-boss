@@ -67,6 +67,121 @@ class AgentService {
     return { ok: true };
   }
 
+  async upsertCandidate({
+    runId,
+    attemptId,
+    eventId,
+    sequence,
+    occurredAt,
+    jobKey,
+    bossEncryptGeekId,
+    name,
+    city,
+    education,
+    experience,
+    school,
+    status,
+    metadata = {}
+  }) {
+    if (!bossEncryptGeekId) {
+      throw new Error('boss_encrypt_geek_id_missing');
+    }
+
+    const personResult = await this.pool.query(
+      `
+        insert into people (
+          boss_encrypt_geek_id,
+          name,
+          city,
+          education,
+          experience,
+          school,
+          profile_metadata
+        )
+        values ($1, $2, $3, $4, $5, $6, $7)
+        on conflict (boss_encrypt_geek_id) do update
+        set name = excluded.name,
+            city = excluded.city,
+            education = excluded.education,
+            experience = excluded.experience,
+            school = excluded.school,
+            profile_metadata = excluded.profile_metadata,
+            updated_at = now()
+        returning id
+      `,
+      [bossEncryptGeekId, name || null, city || null, education || null, experience || null, school || null, metadata]
+    );
+
+    const personId = personResult.rows[0]?.id;
+    if (!personId) {
+      throw new Error('person_upsert_failed');
+    }
+
+    const jobResult = await this.pool.query(
+      `
+        select id
+        from jobs
+        where job_key = $1
+        limit 1
+      `,
+      [jobKey]
+    );
+
+    const jobId = jobResult.rows[0]?.id;
+    if (!jobId) {
+      throw new Error('job_not_found');
+    }
+
+    const lifecycleStatus = normalizeCandidateStatus(status);
+    const candidateResult = await this.pool.query(
+      `
+        insert into job_candidates (
+          job_id,
+          person_id,
+          lifecycle_status,
+          source_run_id,
+          last_outbound_at,
+          workflow_metadata
+        )
+        values ($1, $2, $3, $4, case when $3 = 'greeted' then $5 else null end, $6)
+        on conflict (job_id, person_id) do update
+        set lifecycle_status = case
+              when job_candidates.lifecycle_status in ('resume_received', 'resume_downloaded') then job_candidates.lifecycle_status
+              else excluded.lifecycle_status
+            end,
+            source_run_id = coalesce(job_candidates.source_run_id, excluded.source_run_id),
+            last_outbound_at = case
+              when excluded.lifecycle_status = 'greeted' then coalesce(job_candidates.last_outbound_at, $5)
+              else job_candidates.last_outbound_at
+            end,
+            workflow_metadata = excluded.workflow_metadata,
+            updated_at = now()
+        returning id
+      `,
+      [jobId, personId, lifecycleStatus, runId || null, occurredAt || new Date().toISOString(), metadata]
+    );
+
+    await this.insertRunEvent({
+      runId,
+      attemptId,
+      eventId,
+      sequence,
+      eventType: 'candidate_upserted',
+      payload: {
+        jobKey,
+        bossEncryptGeekId,
+        status: lifecycleStatus
+      },
+      occurredAt
+    });
+
+    return {
+      ok: true,
+      personId,
+      candidateId: candidateResult.rows[0]?.id || null
+    };
+  }
+
   async completeRun({ runId, eventId, attemptId, sequence, occurredAt, payload = {} }) {
     await this.pool.query(
       `
@@ -625,6 +740,14 @@ function sanitizeNanobotLog(line) {
     .replace(/\/Users\/[^\s"]+/g, '[path]')
     .replace(/sk-[A-Za-z0-9_-]+/g, '[redacted]')
     .replace(/xox[baprs]-[A-Za-z0-9-]+/g, '[redacted]');
+}
+
+function normalizeCandidateStatus(status) {
+  if (status === 'greeted') {
+    return 'greeted';
+  }
+
+  return 'discovered';
 }
 
 module.exports = {

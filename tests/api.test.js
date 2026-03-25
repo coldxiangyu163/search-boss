@@ -60,6 +60,152 @@ test('GET /api/jobs returns job list payload', async () => {
   assert.equal(response.body.items[0].job_key, '健康顾问_B0047007');
 });
 
+test('GET /api/candidates returns paginated candidate payload with filters', async () => {
+  let capturedFilters = null;
+
+  const app = createApp({
+    services: {
+      dashboard: {
+        async getSummary() {
+          return { kpis: {}, queues: {}, health: {} };
+        }
+      },
+      jobs: {
+        async listJobs() {
+          return [];
+        }
+      },
+      candidates: {
+        async listCandidates(filters) {
+          capturedFilters = filters;
+          return {
+            items: [
+              {
+                id: 101,
+                name: '张三',
+                job_name: 'Java后端工程师',
+                lifecycle_status: 'responded'
+              }
+            ],
+            pagination: {
+              page: 2,
+              pageSize: 20,
+              total: 41,
+              totalPages: 3
+            }
+          };
+        }
+      }
+    }
+  });
+
+  const response = await request(app)
+    .get('/api/candidates?page=2&pageSize=20&jobKey=java_backend&status=responded&resumeState=received&keyword=%E5%BC%A0');
+
+  assert.equal(response.status, 200);
+  assert.equal(capturedFilters.page, 2);
+  assert.equal(capturedFilters.pageSize, 20);
+  assert.equal(capturedFilters.jobKey, 'java_backend');
+  assert.equal(capturedFilters.status, 'responded');
+  assert.equal(capturedFilters.resumeState, 'received');
+  assert.equal(capturedFilters.keyword, '张');
+  assert.equal(response.body.items[0].id, 101);
+  assert.equal(response.body.pagination.totalPages, 3);
+});
+
+test('GET /api/candidates/:candidateId returns candidate detail payload', async () => {
+  const app = createApp({
+    services: {
+      dashboard: {
+        async getSummary() {
+          return { kpis: {}, queues: {}, health: {} };
+        }
+      },
+      jobs: {
+        async listJobs() {
+          return [];
+        }
+      },
+      candidates: {
+        async listCandidates() {
+          return { items: [], pagination: { page: 1, pageSize: 20, total: 0, totalPages: 0 } };
+        },
+        async getCandidateDetail(candidateId) {
+          return {
+            id: Number(candidateId),
+            name: '李四',
+            job_name: '测试工程师',
+            notes: '已约电话沟通',
+            messages: [
+              {
+                id: 1,
+                direction: 'inbound',
+                content_text: '方便的话发我 JD 看看',
+                sent_at: '2026-03-25T10:00:00.000Z'
+              }
+            ],
+            attachments: [
+              {
+                id: 9,
+                file_name: 'resume.pdf',
+                status: 'downloaded'
+              }
+            ]
+          };
+        }
+      },
+      agent: {
+        async getFollowupDecision() {
+          return {
+            allowed: false,
+            reason: 'cooldown_active',
+            cooldownRemainingMinutes: 18,
+            recommendedAction: 'wait'
+          };
+        }
+      }
+    }
+  });
+
+  const response = await request(app).get('/api/candidates/55');
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.item.id, 55);
+  assert.equal(response.body.item.messages[0].direction, 'inbound');
+  assert.equal(response.body.item.attachments[0].status, 'downloaded');
+  assert.equal(response.body.item.followupDecision.reason, 'cooldown_active');
+});
+
+test('GET /api/candidates/:candidateId returns 404 when candidate detail is missing', async () => {
+  const app = createApp({
+    services: {
+      dashboard: {
+        async getSummary() {
+          return { kpis: {}, queues: {}, health: {} };
+        }
+      },
+      jobs: {
+        async listJobs() {
+          return [];
+        }
+      },
+      candidates: {
+        async listCandidates() {
+          return { items: [], pagination: { page: 1, pageSize: 20, total: 0, totalPages: 0 } };
+        },
+        async getCandidateDetail() {
+          return null;
+        }
+      }
+    }
+  });
+
+  const response = await request(app).get('/api/candidates/404');
+
+  assert.equal(response.status, 404);
+  assert.equal(response.body.error, 'candidate_not_found');
+});
+
 test('GET /api/jobs/:jobKey returns job detail payload', async () => {
   const app = createApp({
     services: {
@@ -581,6 +727,58 @@ test('POST /api/agent/runs/:runId/events records run event', async () => {
   assert.equal(response.status, 200);
   assert.equal(capturedPayload.runId, '1');
   assert.equal(capturedPayload.eventType, 'agent_bootstrap');
+});
+
+test('POST /api/agent/runs/:runId/candidates upserts candidate through agent API', async () => {
+  let capturedPayload = null;
+
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: { async listSchedules() { return []; }, async upsertSchedule() { return {}; } },
+      agent: {
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return { allowed: true }; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; },
+        async createRun() { return { id: 1 }; },
+        async recordRunEvent() { return { ok: true }; },
+        async upsertCandidate(payload) {
+          capturedPayload = payload;
+          return { ok: true, candidateId: 99, personId: 41 };
+        }
+      }
+    },
+    config: { agentToken: 'search-boss-local-agent' }
+  });
+
+  const response = await request(app)
+    .post('/api/agent/runs/1/candidates?token=search-boss-local-agent')
+    .send({
+      eventId: 'candidate-observed:1:geek-1',
+      sequence: 3,
+      occurredAt: '2026-03-25T12:00:00.000Z',
+      jobKey: '健康顾问_B0047007',
+      bossEncryptGeekId: 'geek-1',
+      name: '张三',
+      city: '重庆',
+      education: '本科',
+      experience: '3-5年',
+      school: '重庆大学',
+      status: 'greeted',
+      metadata: {
+        expectId: 'exp-1'
+      }
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.candidateId, 99);
+  assert.equal(capturedPayload.runId, '1');
+  assert.equal(capturedPayload.jobKey, '健康顾问_B0047007');
+  assert.equal(capturedPayload.bossEncryptGeekId, 'geek-1');
+  assert.equal(capturedPayload.status, 'greeted');
 });
 
 test('POST /api/agent/runs/:runId/complete marks run completed', async () => {
