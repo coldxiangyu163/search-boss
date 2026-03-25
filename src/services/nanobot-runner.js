@@ -8,7 +8,7 @@ class NanobotRunner {
   buildCommand({ message }) {
     return {
       command: 'uv',
-      args: ['run', 'nanobot', 'agent', '--config', this.configPath, '-m', message]
+      args: ['run', 'nanobot', 'agent', '--config', this.configPath, '--logs', '-m', message]
     };
   }
 
