@@ -821,6 +821,71 @@ test('JobService upsertJobsBatch writes agent synced jobs into jobs table and re
   assert.equal(recordedEvents[0].eventType, 'jobs_batch_synced');
 });
 
+test('JobService upsertJobsBatch uses boss encrypt job id uniqueness when jobKey is missing', async () => {
+  const queryCalls = [];
+  const pool = {
+    async query(sql, params = []) {
+      queryCalls.push({ sql, params });
+      return { rows: [{ id: 13 }], rowCount: 1 };
+    }
+  };
+
+  const { JobService } = require('../src/services/job-service');
+  const service = new JobService({ pool });
+
+  await service.upsertJobsBatch({
+    occurredAt: '2026-03-25T05:02:00.000Z',
+    jobs: [
+      {
+        encryptJobId: '0207b7bb2f6d36180nVy39-9F1FV',
+        jobName: '销售专员',
+        city: '重庆',
+        metadata: {
+          bossBrandName: '北京好还科技有限公司',
+          address: '重庆两江新区渝兴广场 B1 栋 19 楼 3 号房'
+        }
+      }
+    ]
+  });
+
+  assert.equal(queryCalls.length, 1);
+  assert.match(queryCalls[0].sql, /boss_encrypt_job_id/i);
+  assert.deepEqual(queryCalls[0].params.slice(0, 4), [
+    '销售专员_0207b7bb',
+    '0207b7bb2f6d36180nVy39-9F1FV',
+    '销售专员',
+    '重庆'
+  ]);
+  assert.equal(queryCalls[0].params[7].bossBrandName, '北京好还科技有限公司');
+});
+
+test('JobService upsertJobsBatch rejects write when boss encrypt job id is missing', async () => {
+  const pool = {
+    async query() {
+      throw new Error('should_not_write');
+    }
+  };
+
+  const { JobService } = require('../src/services/job-service');
+  const service = new JobService({ pool });
+
+  await assert.rejects(
+    () =>
+      service.upsertJobsBatch({
+        jobs: [
+          {
+            jobName: '销售专员',
+            city: '重庆',
+            metadata: {
+              bossBrandName: '北京好还科技有限公司'
+            }
+          }
+        ]
+      }),
+    /boss_encrypt_job_id_missing/
+  );
+});
+
 test('JobService getJobDetail returns detail row for one job', async () => {
   const queryCalls = [];
   const pool = {

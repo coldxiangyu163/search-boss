@@ -1,7 +1,7 @@
 create table if not exists jobs (
   id bigserial primary key,
   job_key text not null unique,
-  boss_encrypt_job_id text,
+  boss_encrypt_job_id text not null,
   job_name text not null,
   city text,
   salary text,
@@ -13,6 +13,9 @@ create table if not exists jobs (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+create unique index if not exists jobs_boss_encrypt_job_id_key
+on jobs (boss_encrypt_job_id);
 
 create table if not exists people (
   id bigserial primary key,

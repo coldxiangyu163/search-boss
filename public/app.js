@@ -33,6 +33,11 @@ const {
   isJobActionEnabled
 } = window.JobUiHelpers;
 
+const {
+  captureSyncLogScrollSnapshot,
+  resolveSyncLogScrollTop
+} = window.SyncLogScroll;
+
 const titles = {
   command: ['运营总览', '今日招聘运营看板', '聚焦核心招聘指标、待办事项与系统运行情况。'],
   jobs: ['职位管理', '职位招聘执行情况', '统一查看职位需求、城市分布与当前转化效率。'],
@@ -248,6 +253,7 @@ async function fetchJson(url, options) {
 }
 
 function render() {
+  const syncLogScrollSnapshot = getSyncLogScrollSnapshot();
   const [eyebrow, title, description] = titles[state.view];
   document.getElementById('page-eyebrow').textContent = eyebrow;
   document.getElementById('page-title').textContent = title;
@@ -262,25 +268,30 @@ function render() {
 
   if (state.view === 'command') {
     app.innerHTML = renderCommandCenter();
+    restoreSyncLogScroll(syncLogScrollSnapshot);
     return;
   }
 
   if (state.view === 'jobs') {
     app.innerHTML = renderJobs();
+    restoreSyncLogScroll(syncLogScrollSnapshot);
     return;
   }
 
   if (state.view === 'candidates') {
     app.innerHTML = renderCandidates();
+    restoreSyncLogScroll(syncLogScrollSnapshot);
     return;
   }
 
   if (state.view === 'automation') {
     app.innerHTML = renderAutomation();
+    restoreSyncLogScroll(syncLogScrollSnapshot);
     return;
   }
 
   app.innerHTML = renderHealth();
+  restoreSyncLogScroll(syncLogScrollSnapshot);
 }
 
 function openSyncModal(taskType = 'sync_jobs') {
@@ -312,6 +323,32 @@ function toggleSyncLogPanel() {
 
 function appendSyncEvent(event) {
   state.syncModal.events = [...state.syncModal.events, event].slice(-100);
+}
+
+function getSyncLogScrollSnapshot() {
+  const logList = document.querySelector('.sync-log-list');
+  if (!logList) {
+    return null;
+  }
+
+  return captureSyncLogScrollSnapshot({
+    scrollTop: logList.scrollTop,
+    clientHeight: logList.clientHeight,
+    scrollHeight: logList.scrollHeight
+  });
+}
+
+function restoreSyncLogScroll(previousSnapshot) {
+  const logList = document.querySelector('.sync-log-list');
+  if (!logList) {
+    return;
+  }
+
+  logList.scrollTop = resolveSyncLogScrollTop({
+    previousSnapshot,
+    nextClientHeight: logList.clientHeight,
+    nextScrollHeight: logList.scrollHeight
+  });
 }
 
 function startSyncPolling() {

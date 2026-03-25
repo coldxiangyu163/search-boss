@@ -61,6 +61,8 @@ class JobService {
     const syncedAt = occurredAt || new Date().toISOString();
 
     for (const job of jobs) {
+      const metadata = job.metadata || {};
+      const resolvedJobKey = resolveJobKey(job);
       await this.pool.query(
         `
           insert into jobs (
@@ -76,8 +78,9 @@ class JobService {
             last_synced_at
           )
           values ($1, $2, $3, $4, $5, $6, 'boss', $7, coalesce($8, '{}'::jsonb), $9)
-          on conflict (job_key) do update
+          on conflict (boss_encrypt_job_id) do update
           set boss_encrypt_job_id = excluded.boss_encrypt_job_id,
+              job_key = excluded.job_key,
               job_name = excluded.job_name,
               city = excluded.city,
               salary = excluded.salary,
@@ -90,14 +93,14 @@ class JobService {
           returning id
         `,
         [
-          job.jobKey,
+          resolvedJobKey,
           job.encryptJobId || job.bossEncryptJobId || null,
           job.jobName,
           job.city || null,
           job.salary || null,
           job.status || 'open',
           job.jdText || job.jd_text || null,
-          job.metadata || {},
+          metadata,
           syncedAt
         ]
       );
@@ -235,6 +238,26 @@ class JobService {
 
     return result.rows[0].job_key;
   }
+}
+
+function resolveJobKey(job) {
+  const jobName = String(job.jobName || '').trim();
+  const rawJobKey = String(job.jobKey || '').trim();
+  const encryptJobId = String(job.encryptJobId || job.bossEncryptJobId || '').trim();
+
+  if (!encryptJobId) {
+    throw new Error('boss_encrypt_job_id_missing');
+  }
+
+  if (rawJobKey) {
+    return rawJobKey;
+  }
+
+  if (!jobName) {
+    throw new Error('job_identity_incomplete');
+  }
+
+  return `${jobName}_${encryptJobId.slice(0, 8)}`;
 }
 
 module.exports = {
