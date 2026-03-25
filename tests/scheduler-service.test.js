@@ -3,11 +3,16 @@ const assert = require('node:assert/strict');
 
 const { SchedulerService } = require('../src/services/scheduler-service');
 
-test('SchedulerService triggerJobTask runs manual task without schedule config', async () => {
+test('SchedulerService triggerJobTask returns immediately and completes manual task asynchronously', async () => {
   const queryCalls = [];
   const nanobotCalls = [];
   const recordedEvents = [];
   const completedRuns = [];
+  let releaseNanobot = null;
+  let completeRunResolve = null;
+  const completeRunDone = new Promise((resolve) => {
+    completeRunResolve = resolve;
+  });
   let runSequence = 40;
 
   const pool = {
@@ -45,10 +50,14 @@ test('SchedulerService triggerJobTask runs manual task without schedule config',
     },
     async runNanobotForSchedule(payload) {
       nanobotCalls.push(payload);
+      await new Promise((resolve) => {
+        releaseNanobot = resolve;
+      });
       return { ok: true };
     },
     async completeRun(payload) {
       completedRuns.push(payload);
+      completeRunResolve();
       return { ok: true, status: 'completed' };
     },
     async failRun() {
@@ -62,6 +71,7 @@ test('SchedulerService triggerJobTask runs manual task without schedule config',
   assert.equal(result.ok, true);
   assert.equal(result.runId, 41);
   assert.equal(result.scheduledRunId, null);
+  assert.equal(result.status, 'running');
   assert.equal(result.taskType, 'followup');
   assert.equal(result.jobKey, '健康顾问_B0047007');
   assert.equal(nanobotCalls.length, 1);
@@ -71,5 +81,10 @@ test('SchedulerService triggerJobTask runs manual task without schedule config',
   });
   assert.equal(recordedEvents[0].eventType, 'schedule_triggered');
   assert.equal(recordedEvents[0].payload.scheduledJobId, null);
+  assert.equal(completedRuns.length, 0);
+
+  releaseNanobot();
+  await completeRunDone;
+
   assert.equal(completedRuns[0].payload.scheduledJobId, null);
 });

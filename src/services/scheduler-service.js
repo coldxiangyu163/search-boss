@@ -48,25 +48,29 @@ class SchedulerService {
 
   async triggerSchedule(id) {
     const schedule = await this.#findScheduleById(id);
-    return this.#executeSchedule(schedule);
+    return this.#startJobTask({
+      jobKey: schedule.job_key,
+      taskType: schedule.task_type,
+      schedule
+    });
   }
 
   async triggerScheduleByJobTask(jobKey, taskType) {
     const schedule = await this.#findScheduleByJobTask(jobKey, taskType);
-    return this.#executeSchedule(schedule);
+    return this.#startJobTask({
+      jobKey: schedule.job_key,
+      taskType: schedule.task_type,
+      schedule
+    });
   }
 
   async triggerJobTask(jobKey, taskType) {
     const schedule = await this.#findScheduleByJobTask(jobKey, taskType, { required: false });
 
-    if (schedule) {
-      return this.#executeSchedule(schedule);
-    }
-
-    return this.#executeJobTask({
+    return this.#startJobTask({
       jobKey,
       taskType,
-      scheduledJobId: null
+      schedule
     });
   }
 
@@ -109,16 +113,8 @@ class SchedulerService {
     return schedule;
   }
 
-  async #executeSchedule(schedule) {
-    return this.#executeJobTask({
-      jobKey: schedule.job_key,
-      taskType: schedule.task_type,
-      scheduledJobId: schedule.id,
-      schedule
-    });
-  }
-
-  async #executeJobTask({ jobKey, taskType, scheduledJobId = null, schedule = null }) {
+  async #startJobTask({ jobKey, taskType, schedule = null }) {
+    const scheduledJobId = schedule?.id || null;
     const startedAt = new Date().toISOString();
     const run = await this.agentService.createRun({
       runKey: `${taskType}:${jobKey}:${Date.now()}`,
@@ -167,6 +163,27 @@ class SchedulerService {
       )).rows[0].id
       : null;
 
+    void this.#executeJobTask({
+      runId: run.id,
+      jobKey,
+      taskType,
+      scheduledJobId,
+      scheduledRunId,
+      schedule
+    });
+
+    return {
+      ok: true,
+      scheduledRunId,
+      runId: run.id,
+      status: 'running',
+      taskType,
+      jobKey,
+      message: `${jobKey} 的 ${taskType} 任务已触发`
+    };
+  }
+
+  async #executeJobTask({ runId, jobKey, taskType, scheduledJobId = null, scheduledRunId = null, schedule = null }) {
     try {
       await this.agentService.runNanobotForSchedule({
         jobKey,
@@ -196,8 +213,8 @@ class SchedulerService {
       }
 
       await this.agentService.completeRun({
-        runId: run.id,
-        eventId: `schedule-complete:${scheduledRunId || `manual:${run.id}`}`,
+        runId,
+        eventId: `schedule-complete:${scheduledRunId || `manual:${runId}`}`,
         occurredAt: new Date().toISOString(),
         payload: {
           scheduledJobId,
@@ -219,8 +236,8 @@ class SchedulerService {
       }
 
       await this.agentService.failRun({
-        runId: run.id,
-        eventId: `schedule-failed:${scheduledRunId || `manual:${run.id}`}`,
+        runId,
+        eventId: `schedule-failed:${scheduledRunId || `manual:${runId}`}`,
         occurredAt: new Date().toISOString(),
         message: error.message,
         payload: {
@@ -229,19 +246,7 @@ class SchedulerService {
           jobKey
         }
       });
-
-      throw error;
     }
-
-    return {
-      ok: true,
-      scheduledRunId,
-      runId: run.id,
-      status: 'completed',
-      taskType,
-      jobKey,
-      message: `${jobKey} 的 ${taskType} 任务已执行完成`
-    };
   }
 }
 

@@ -164,28 +164,16 @@ async function triggerJobTask(jobKey, taskType) {
 
     state.syncStatus = result.message || `${taskMeta.inlineSuccess}，职位 ${jobKey}`;
     state.syncModal.runId = result.runId;
-    state.syncModal.status = result.status || 'completed';
+    state.syncModal.status = result.status || 'running';
+    state.syncModal.startedAt = new Date().toISOString();
     appendSyncEvent({
       eventType: 'schedule_triggered',
       stage: 'bootstrap',
       message: `${taskMeta.buttonLabel}已触发：${jobKey}`,
       occurredAt: state.syncModal.startedAt
     });
-
-    await pollSyncEvents();
-
-    if (!state.syncModal.events.some((event) => event.eventType === 'run_completed')) {
-      appendSyncEvent({
-        eventType: 'run_completed',
-        stage: 'complete',
-        message: result.message || `${taskMeta.buttonLabel}执行完成`,
-        occurredAt: new Date().toISOString()
-      });
-      state.syncModal.status = 'completed';
-    }
-
+    startSyncPolling();
     await loadData();
-    render();
   } catch (error) {
     state.syncStatus = `${taskMeta.buttonLabel}失败：${error.message}`;
     state.syncModal.status = 'failed';
