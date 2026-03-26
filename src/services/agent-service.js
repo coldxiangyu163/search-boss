@@ -69,6 +69,7 @@ class AgentService {
 
   async importRunEvents({ runId, attemptId, sourceFile, events = [] }) {
     const importEvents = Array.isArray(events) ? events : [];
+    const receivedCount = importEvents.length;
     let importedCount = 0;
     let projectedCount = 0;
     let duplicateCount = 0;
@@ -119,12 +120,17 @@ class AgentService {
       });
     }
 
+    const acknowledgedCount = importedCount + duplicateCount;
+
     return {
       ok: true,
       sourceFile: sourceFile || null,
+      receivedCount,
       importedCount,
       projectedCount,
       duplicateCount,
+      acknowledgedCount,
+      allEventsAccountedFor: acknowledgedCount === receivedCount,
       items
     };
   }
@@ -655,7 +661,7 @@ class AgentService {
   }
 
   async projectImportedEvent({ runId, attemptId, event }) {
-    if (isCandidateImportEvent(event)) {
+    if (isProjectedCandidateImportEvent(event)) {
       const jobKey = getImportedField(event, 'jobKey');
       const bossEncryptGeekId = getImportedField(event, 'bossEncryptGeekId');
       if (!jobKey || !bossEncryptGeekId) {
@@ -854,7 +860,7 @@ class AgentService {
       ? `/boss-sourcing --job "${jobKey}" --followup --run-id "${runId}"`
       : [
         `/boss-sourcing --job "${jobKey}" --source --run-id "${runId}"`,
-        '执行寻源打招呼时：先读取职位详情并建立岗位画像，再逐个进入候选人详情页做匹配评估。禁止仅凭推荐列表卡片直接打招呼，优先联系高匹配候选人。'
+        '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
       ].join('\n');
     return this.#runNanobotWithStreaming({ runId, message });
   }
@@ -1002,6 +1008,10 @@ function isCandidateImportEvent(event) {
     'candidate_greeted',
     'greet_sent'
   ].includes(event.eventType);
+}
+
+function isProjectedCandidateImportEvent(event) {
+  return isGreetImportEvent(event);
 }
 
 function isGreetImportEvent(event) {

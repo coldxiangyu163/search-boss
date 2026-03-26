@@ -799,7 +799,15 @@ test('POST /api/agent/runs/:runId/import-events imports event batch through agen
         async recordRunEvent() { return { ok: true }; },
         async importRunEvents(payload) {
           capturedPayload = payload;
-          return { ok: true, importedCount: 2, projectedCount: 1, duplicateCount: 0 };
+          return {
+            ok: true,
+            receivedCount: 2,
+            importedCount: 2,
+            projectedCount: 1,
+            duplicateCount: 0,
+            acknowledgedCount: 2,
+            allEventsAccountedFor: true
+          };
         }
       }
     },
@@ -829,6 +837,8 @@ test('POST /api/agent/runs/:runId/import-events imports event batch through agen
 
   assert.equal(response.status, 200);
   assert.equal(response.body.importedCount, 2);
+  assert.equal(response.body.receivedCount, 2);
+  assert.equal(response.body.allEventsAccountedFor, true);
   assert.equal(capturedPayload.runId, '38');
   assert.equal(capturedPayload.sourceFile, 'runs/2026-03-25/source/38/events.jsonl');
   assert.equal(capturedPayload.events.length, 2);
@@ -852,7 +862,15 @@ test('POST /api/agent/runs/:runId/import-events accepts raw event arrays', async
         async recordRunEvent() { return { ok: true }; },
         async importRunEvents(payload) {
           capturedPayload = payload;
-          return { ok: true, importedCount: 1, projectedCount: 1, duplicateCount: 0 };
+          return {
+            ok: true,
+            receivedCount: 1,
+            importedCount: 1,
+            projectedCount: 1,
+            duplicateCount: 0,
+            acknowledgedCount: 1,
+            allEventsAccountedFor: true
+          };
         }
       }
     },
@@ -872,6 +890,8 @@ test('POST /api/agent/runs/:runId/import-events accepts raw event arrays', async
 
   assert.equal(response.status, 200);
   assert.equal(response.body.importedCount, 1);
+  assert.equal(response.body.receivedCount, 1);
+  assert.equal(response.body.allEventsAccountedFor, true);
   assert.equal(capturedPayload.runId, '41');
   assert.equal(Array.isArray(capturedPayload.events), true);
   assert.equal(capturedPayload.events.length, 1);
@@ -1542,7 +1562,7 @@ test('AgentService runNanobotForSchedule sends source workflow guardrails in mes
     capturedMessage,
     [
       '/boss-sourcing --job "健康顾问_B0047007" --source --run-id "88"',
-      '执行寻源打招呼时：先读取职位详情并建立岗位画像，再逐个进入候选人详情页做匹配评估。禁止仅凭推荐列表卡片直接打招呼，优先联系高匹配候选人。'
+      '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
     ].join('\n')
   );
 });
@@ -1740,14 +1760,16 @@ test('AgentService importRunEvents records raw events and projects non-duplicate
   });
 
   assert.equal(result.ok, true);
+  assert.equal(result.receivedCount, 5);
   assert.equal(result.importedCount, 4);
-  assert.equal(result.projectedCount, 4);
+  assert.equal(result.projectedCount, 3);
   assert.equal(result.duplicateCount, 1);
+  assert.equal(result.acknowledgedCount, 5);
+  assert.equal(result.allEventsAccountedFor, true);
   assert.equal(recordedEvents.length, 5);
   assert.equal(recordedEvents[0].payload.importSourceFile, 'runs/2026-03-25/source/38/events.jsonl');
-  assert.equal(candidateCalls.length, 2);
-  assert.equal(candidateCalls[0].status, 'discovered');
-  assert.equal(candidateCalls[1].status, 'greeted');
+  assert.equal(candidateCalls.length, 1);
+  assert.equal(candidateCalls[0].status, 'greeted');
   assert.equal(actionCalls.length, 1);
   assert.equal(actionCalls[0].actionType, 'greet_sent');
   assert.equal(actionCalls[0].dedupeKey, 'greet:面点师傅_B0038011:geek-1');
