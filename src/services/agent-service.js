@@ -856,10 +856,12 @@ class AgentService {
       throw new Error('nanobot_runner_not_configured');
     }
 
+    const jobContext = await this.#getJobNanobotContext(jobKey);
     const message = mode === 'followup'
       ? `/boss-sourcing --job "${jobKey}" --followup --run-id "${runId}"`
       : [
         `/boss-sourcing --job "${jobKey}" --source --run-id "${runId}"`,
+        buildCustomRequirementPrompt(jobContext.customRequirement),
         '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
       ].join('\n');
     return this.#runNanobotWithStreaming({ runId, message });
@@ -908,6 +910,28 @@ class AgentService {
       onStderrLine: (line) => emitStreamEvent(line, 'stderr')
     });
   }
+
+  async #getJobNanobotContext(jobKey) {
+    const result = await this.pool.query(
+      `
+        select
+          job_name,
+          custom_requirement
+        from jobs
+        where job_key = $1
+        limit 1
+      `,
+      [jobKey]
+    );
+
+    if (!result.rows[0]) {
+      throw new Error('job_not_found');
+    }
+
+    return {
+      customRequirement: normalizeJobRequirement(result.rows[0].custom_requirement)
+    };
+  }
 }
 
 function sanitizeNanobotLog(line) {
@@ -924,6 +948,25 @@ function sanitizeNanobotLog(line) {
     .replace(/\/Users\/[^\s"]+/g, '[path]')
     .replace(/sk-[A-Za-z0-9_-]+/g, '[redacted]')
     .replace(/xox[baprs]-[A-Za-z0-9-]+/g, '[redacted]');
+}
+
+function buildCustomRequirementPrompt(customRequirement) {
+  if (!customRequirement) {
+    return '如数据库中没有额外岗位定制要求，仅按 BOSS 职位信息正常执行寻源。';
+  }
+
+  return [
+    '执行寻源匹配时，除 BOSS 职位信息外，还必须叠加本地数据库维护的岗位定制要求；该要求不会同步回 BOSS，但会影响候选人筛选与判断。',
+    `岗位定制要求：${customRequirement}`
+  ].join('\n');
+}
+
+function normalizeJobRequirement(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  return String(value).trim();
 }
 
 function normalizeCandidateStatus(status) {

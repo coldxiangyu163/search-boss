@@ -25,3 +25,16 @@ test('job UI helpers disable actions for non-recruiting jobs', () => {
   assert.equal(isJobActionEnabled('paused'), false);
   assert.equal(isJobActionEnabled('offline'), false);
 });
+
+test('job UI helpers enable actions for additional recruiting aliases', () => {
+  assert.equal(formatJobStatus('recruiting'), '招聘中');
+  assert.equal(formatJobStatus('publishing'), '招聘中');
+  assert.equal(formatJobStatus('online'), '招聘中');
+  assert.equal(formatJobStatus('开放中'), '招聘中');
+  assert.equal(getJobStatusBadgeClass('recruiting'), 'badge badge-success');
+  assert.equal(getJobStatusBadgeClass('开放中'), 'badge badge-success');
+  assert.equal(isJobActionEnabled('recruiting'), true);
+  assert.equal(isJobActionEnabled('publishing'), true);
+  assert.equal(isJobActionEnabled('online'), true);
+  assert.equal(isJobActionEnabled('开放中'), true);
+});

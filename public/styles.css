@@ -700,6 +700,24 @@ tbody tr:hover {
   font-size: 18px;
 }
 
+.job-detail-tip {
+  margin-top: 8px;
+}
+
+.job-detail-textarea {
+  width: 100%;
+  min-height: 132px;
+  margin-top: 14px;
+  padding: 16px 18px;
+  border-radius: 14px;
+  border: 1px solid var(--line-soft);
+  background: #fff;
+  color: var(--heading);
+  line-height: 1.7;
+  resize: vertical;
+  font: inherit;
+}
+
 .job-detail-jd {
   margin-top: 14px;
   padding: 16px 18px;

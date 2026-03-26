@@ -226,6 +226,7 @@ test('GET /api/jobs/:jobKey returns job detail payload', async () => {
             salary: '5-6K',
             status: 'open',
             jd_text: '负责客户跟进和健康产品咨询',
+            custom_requirement: '优先有电销经验',
             sync_metadata: {
               bossBrandName: '百融云创',
               experienceRequirement: '经验不限'
@@ -246,7 +247,82 @@ test('GET /api/jobs/:jobKey returns job detail payload', async () => {
   assert.equal(response.status, 200);
   assert.equal(response.body.item.job_key, '健康顾问_B0047007');
   assert.equal(response.body.item.jd_text, '负责客户跟进和健康产品咨询');
+  assert.equal(response.body.item.custom_requirement, '优先有电销经验');
   assert.equal(response.body.item.sync_metadata.bossBrandName, '百融云创');
+});
+
+test('PATCH /api/jobs/:jobKey/custom-requirement updates custom requirement payload', async () => {
+  let capturedPayload = null;
+
+  const app = createApp({
+    services: {
+      dashboard: {
+        async getSummary() {
+          return { kpis: {}, queues: {}, health: {} };
+        }
+      },
+      jobs: {
+        async listJobs() {
+          return [];
+        },
+        async updateJobCustomRequirement(jobKey, customRequirement) {
+          capturedPayload = { jobKey, customRequirement };
+          return {
+            job_key: jobKey,
+            custom_requirement: customRequirement
+          };
+        }
+      },
+      candidates: {
+        async listCandidates() {
+          return [];
+        }
+      }
+    }
+  });
+
+  const response = await request(app)
+    .patch('/api/jobs/%E5%81%A5%E5%BA%B7%E9%A1%BE%E9%97%AE_B0047007/custom-requirement')
+    .send({ customRequirement: '必须有电话销售经验' });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(capturedPayload, {
+    jobKey: '健康顾问_B0047007',
+    customRequirement: '必须有电话销售经验'
+  });
+  assert.equal(response.body.item.custom_requirement, '必须有电话销售经验');
+});
+
+test('PATCH /api/jobs/:jobKey/custom-requirement returns 404 when job is missing', async () => {
+  const app = createApp({
+    services: {
+      dashboard: {
+        async getSummary() {
+          return { kpis: {}, queues: {}, health: {} };
+        }
+      },
+      jobs: {
+        async listJobs() {
+          return [];
+        },
+        async updateJobCustomRequirement() {
+          return null;
+        }
+      },
+      candidates: {
+        async listCandidates() {
+          return [];
+        }
+      }
+    }
+  });
+
+  const response = await request(app)
+    .patch('/api/jobs/%E4%B8%8D%E5%AD%98%E5%9C%A8/custom-requirement')
+    .send({ customRequirement: 'test' });
+
+  assert.equal(response.status, 404);
+  assert.equal(response.body.error, 'job_not_found');
 });
 
 test('GET /api/jobs/:jobKey returns 404 when job detail is missing', async () => {
@@ -1376,6 +1452,67 @@ test('JobService triggerSync marks run failed when nanobot exits without jobs ba
   assert.equal(events.some((event) => event.message === 'job_sync_not_persisted'), true);
 });
 
+test('JobService triggerSync treats nanobot stdout jobs_batch_synced marker as persisted sync', async () => {
+  const events = [];
+  const pool = {
+    async query(sql, params = []) {
+      if (sql.includes('select job_key') && sql.includes('limit 1')) {
+        return { rows: [{ job_key: '健康顾问_B0047007' }] };
+      }
+
+      if (sql.includes('from jobs') && sql.includes('job_key = $1')) {
+        return { rows: [{ id: 8 }] };
+      }
+
+      if (sql.includes('insert into sourcing_runs')) {
+        return { rows: [{ id: 33, runKey: params[0], status: 'pending' }] };
+      }
+
+      if (sql.includes('update sourcing_runs')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes('insert into sourcing_run_events')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes("from sourcing_run_events") && sql.includes("event_type = 'jobs_batch_synced'")) {
+        return { rows: [] };
+      }
+
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+
+  const { AgentService } = require('../src/services/agent-service');
+  const { JobService } = require('../src/services/job-service');
+
+  const agentService = new AgentService({
+    pool,
+    nanobotRunner: {
+      async run({ onStdoutLine }) {
+        onStdoutLine?.('{"eventType":"jobs_batch_synced","syncedCount":4}');
+        return { ok: true, stdout: '{"eventType":"jobs_batch_synced","syncedCount":4}' };
+      }
+    }
+  });
+
+  const originalRecordRunEvent = agentService.recordRunEvent.bind(agentService);
+  agentService.recordRunEvent = async (payload) => {
+    events.push(payload);
+    return originalRecordRunEvent(payload);
+  };
+
+  const service = new JobService({ pool, agentService });
+
+  const result = await service.triggerSync();
+
+  assert.equal(result.status, 'running');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(events.some((event) => event.eventType === 'run_completed'), true);
+  assert.equal(events.some((event) => event.message === 'job_sync_not_persisted'), false);
+});
+
 test('JobService triggerSync marks run failed when nanobot fails asynchronously', async () => {
   const events = [];
   const pool = {
@@ -1493,7 +1630,11 @@ test('JobService triggerSync records stream events from nanobot output', async (
 test('AgentService runNanobotForSchedule records stream events from nanobot output', async () => {
   const events = [];
   const pool = {
-    async query(sql) {
+    async query(sql, params = []) {
+      if (sql.includes('from jobs') && sql.includes('custom_requirement')) {
+        return { rows: [{ custom_requirement: '优先有电销经验' }], rowCount: 1 };
+      }
+
       if (sql.includes('insert into sourcing_run_events')) {
         return { rows: [], rowCount: 1 };
       }
@@ -1540,7 +1681,11 @@ test('AgentService runNanobotForSchedule sends source workflow guardrails in mes
 
   const agentService = new AgentService({
     pool: {
-      async query() {
+      async query(sql) {
+        if (sql.includes('from jobs') && sql.includes('custom_requirement')) {
+          return { rows: [{ custom_requirement: null }], rowCount: 1 };
+        }
+
         throw new Error('recordRunEvent should not be called without runId');
       }
     },
@@ -1562,6 +1707,7 @@ test('AgentService runNanobotForSchedule sends source workflow guardrails in mes
     capturedMessage,
     [
       '/boss-sourcing --job "健康顾问_B0047007" --source --run-id "88"',
+      '如数据库中没有额外岗位定制要求，仅按 BOSS 职位信息正常执行寻源。',
       '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
     ].join('\n')
   );
@@ -1573,7 +1719,11 @@ test('AgentService runNanobotForSchedule includes run id for followup mode', asy
 
   const agentService = new AgentService({
     pool: {
-      async query() {
+      async query(sql) {
+        if (sql.includes('from jobs') && sql.includes('custom_requirement')) {
+          return { rows: [{ custom_requirement: '必须有电话销售经验' }], rowCount: 1 };
+        }
+
         throw new Error('recordRunEvent should not be called without runId');
       }
     },
@@ -1594,6 +1744,45 @@ test('AgentService runNanobotForSchedule includes run id for followup mode', asy
   assert.equal(
     capturedMessage,
     '/boss-sourcing --job "健康顾问_B0047007" --followup --run-id "91"'
+  );
+});
+
+test('AgentService runNanobotForSchedule includes custom requirement in source mode message', async () => {
+  const { AgentService } = require('../src/services/agent-service');
+  let capturedMessage = null;
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql) {
+        if (sql.includes('from jobs') && sql.includes('custom_requirement')) {
+          return { rows: [{ custom_requirement: '必须有电话销售经验' }], rowCount: 1 };
+        }
+
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    },
+    nanobotRunner: {
+      async run({ message }) {
+        capturedMessage = message;
+        return { ok: true, stdout: 'done' };
+      }
+    }
+  });
+
+  await agentService.runNanobotForSchedule({
+    runId: 99,
+    jobKey: '健康顾问_B0047007',
+    mode: 'source'
+  });
+
+  assert.equal(
+    capturedMessage,
+    [
+      '/boss-sourcing --job "健康顾问_B0047007" --source --run-id "99"',
+      '执行寻源匹配时，除 BOSS 职位信息外，还必须叠加本地数据库维护的岗位定制要求；该要求不会同步回 BOSS，但会影响候选人筛选与判断。',
+      '岗位定制要求：必须有电话销售经验',
+      '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
+    ].join('\n')
   );
 });
 

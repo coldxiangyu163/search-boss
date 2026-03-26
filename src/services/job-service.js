@@ -13,6 +13,7 @@ class JobService {
         j.city,
         j.salary,
         j.status,
+          coalesce(j.custom_requirement, null) as custom_requirement,
         j.last_synced_at,
         count(jc.id)::int as candidate_count,
         count(*) filter (where jc.lifecycle_status = 'greeted')::int as greeted_count,
@@ -39,6 +40,7 @@ class JobService {
           j.salary,
           j.status,
           j.jd_text,
+          coalesce(j.custom_requirement, null) as custom_requirement,
           j.sync_metadata,
           j.last_synced_at,
           count(jc.id)::int as candidate_count,
@@ -126,6 +128,33 @@ class JobService {
     };
   }
 
+  async updateJobCustomRequirement(jobKey, customRequirement) {
+    const normalizedRequirement = normalizeCustomRequirement(customRequirement);
+    const result = await this.pool.query(
+      `
+        update jobs
+        set custom_requirement = $2,
+            updated_at = now()
+        where job_key = $1
+        returning
+          id,
+          job_key,
+          boss_encrypt_job_id,
+          job_name,
+          city,
+          salary,
+          status,
+          jd_text,
+          custom_requirement,
+          sync_metadata,
+          last_synced_at
+      `,
+      [jobKey, normalizedRequirement]
+    );
+
+    return result.rows[0] || null;
+  }
+
   async triggerSync() {
     if (!this.agentService) {
       throw new Error('agent_service_not_configured');
@@ -180,8 +209,9 @@ class JobService {
 
   async #executeSyncRun({ runId }) {
     try {
-      await this.agentService.runNanobotForJobSync({ runId });
-      const hasPersistedJobs = await this.#hasJobsBatchSynced(runId);
+      const syncResult = await this.agentService.runNanobotForJobSync({ runId });
+      const hasPersistedJobs = await this.#hasJobsBatchSynced(runId)
+        || detectJobsBatchSyncedFromOutput(syncResult);
       if (!hasPersistedJobs) {
         throw new Error('job_sync_not_persisted');
       }
@@ -240,6 +270,18 @@ class JobService {
   }
 }
 
+function detectJobsBatchSyncedFromOutput(syncResult) {
+  const combinedOutput = [syncResult?.stdout, syncResult?.stderr]
+    .filter(Boolean)
+    .join('\n');
+
+  if (!combinedOutput) {
+    return false;
+  }
+
+  return /jobs_batch_synced/.test(combinedOutput);
+}
+
 function resolveJobKey(job) {
   const jobName = String(job.jobName || '').trim();
   const rawJobKey = String(job.jobKey || '').trim();
@@ -263,3 +305,12 @@ function resolveJobKey(job) {
 module.exports = {
   JobService
 };
+
+function normalizeCustomRequirement(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const normalized = String(value).trim();
+  return normalized || null;
+}

@@ -39,7 +39,9 @@ const state = {
     jobKey: '',
     loading: false,
     error: '',
-    item: null
+    item: null,
+    saving: false,
+    savingError: ''
   },
   candidateDetailDrawer: {
     open: false,
@@ -209,7 +211,9 @@ async function openJobDetailModal(jobKey) {
     jobKey,
     loading: true,
     error: '',
-    item: null
+    item: null,
+    saving: false,
+    savingError: ''
   };
   render();
 
@@ -239,9 +243,53 @@ function closeJobDetailModal() {
     jobKey: '',
     loading: false,
     error: '',
-    item: null
+    item: null,
+    saving: false,
+    savingError: ''
   };
   render();
+}
+
+async function saveJobCustomRequirement() {
+  if (!state.jobDetailModal.item || state.jobDetailModal.saving) {
+    return;
+  }
+
+  const textarea = document.getElementById('job-custom-requirement-input');
+  if (!textarea) {
+    return;
+  }
+
+  state.jobDetailModal.saving = true;
+  state.jobDetailModal.savingError = '';
+  render();
+
+  try {
+    const result = await fetchJson(
+      `/api/jobs/${encodeURIComponent(state.jobDetailModal.jobKey)}/custom-requirement`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          customRequirement: textarea.value
+        })
+      }
+    );
+
+    state.jobDetailModal.item = result.item;
+    state.jobs = state.jobs.map((job) => (
+      job.job_key === result.item.job_key
+        ? { ...job, custom_requirement: result.item.custom_requirement }
+        : job
+    ));
+  } catch (error) {
+    state.jobDetailModal.savingError = error.message;
+  } finally {
+    state.jobDetailModal.saving = false;
+    render();
+  }
 }
 
 async function syncJobs() {
@@ -1402,6 +1450,28 @@ function renderJobDetailModal() {
             </div>
           </div>
           <div class="job-detail-sections">
+            <section class="job-detail-section">
+              <div class="card-header">
+                <div>
+                  <p class="eyebrow">岗位定制要求</p>
+                  <h4 class="card-title job-detail-section-title">本地寻源附加条件</h4>
+                </div>
+                <button
+                  class="button-secondary"
+                  onclick="saveJobCustomRequirement()"
+                  ${state.jobDetailModal.saving ? 'disabled' : ''}
+                >
+                  ${state.jobDetailModal.saving ? '保存中...' : '保存要求'}
+                </button>
+              </div>
+              <p class="card-subtitle job-detail-tip">该内容仅保存在本地，不会被 BOSS 职位同步覆盖，寻源调用 nanobot 时会一并带上。</p>
+              ${state.jobDetailModal.savingError ? `<div class="inline-status inline-status-error">${escapeHtml(state.jobDetailModal.savingError)}</div>` : ''}
+              <textarea
+                id="job-custom-requirement-input"
+                class="job-detail-textarea"
+                placeholder="例如：必须有电销经验；近两年有保险/健康行业背景；优先重庆本地可立即到岗。"
+              >${escapeHtml(item.custom_requirement || '')}</textarea>
+            </section>
             <section class="job-detail-section">
               <div class="card-header">
                 <div>

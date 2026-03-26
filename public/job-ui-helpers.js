@@ -8,9 +8,19 @@
     const statusMap = {
       open: '招聘中',
       active: '招聘中',
+      recruiting: '招聘中',
+      publishing: '招聘中',
+      online: '招聘中',
+      '开放中': '招聘中',
+      '招聘中': '招聘中',
       closed: '已关闭',
       offline: '已下线',
-      paused: '已暂停'
+      paused: '已暂停',
+      inactive: '已暂停',
+      '待开放': '已暂停',
+      '已关闭': '已关闭',
+      '已下线': '已下线',
+      '已暂停': '已暂停'
     };
 
     return statusMap[normalized] || status || '-';
@@ -19,11 +29,11 @@
   function getJobStatusBadgeClass(status) {
     const normalized = normalizeJobStatus(status);
 
-    if (normalized === 'open' || normalized === 'active') {
+    if (['open', 'active', 'recruiting', 'publishing', 'online', '开放中', '招聘中'].includes(normalized)) {
       return 'badge badge-success';
     }
 
-    if (normalized === 'paused') {
+    if (['paused', 'inactive', '待开放', '已暂停'].includes(normalized)) {
       return 'badge badge-warning';
     }
 
@@ -32,7 +42,7 @@
 
   function isJobActionEnabled(status) {
     const normalized = normalizeJobStatus(status);
-    return normalized === 'open' || normalized === 'active';
+    return ['open', 'active', 'recruiting', 'publishing', 'online', '开放中', '招聘中'].includes(normalized);
   }
 
   const api = {

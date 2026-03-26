@@ -1,10 +1,21 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { Client } = require('pg');
 
 const { ensureDatabaseSchema } = require('../src/db/init');
 
 const targetDatabase = process.env.DATABASE_URL || 'postgresql://coldxiangyu:coldxiangyu@127.0.0.1:5432/search_boss_ops_20260324';
+
+test('database schema includes job custom requirement column', async () => {
+  const schema = fs.readFileSync(
+    path.join(__dirname, '../src/db/schema.sql'),
+    'utf8'
+  );
+
+  assert.match(schema, /custom_requirement text/);
+});
 
 test('database bootstrap creates required tables', async () => {
   const client = new Client({ connectionString: targetDatabase });

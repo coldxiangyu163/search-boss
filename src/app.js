@@ -54,6 +54,27 @@ function createApp({ services = {}, config = {} } = {}) {
     }
   });
 
+  app.patch('/api/jobs/:jobKey/custom-requirement', async (req, res, next) => {
+    try {
+      const item = await services.jobs.updateJobCustomRequirement(
+        req.params.jobKey,
+        req.body?.customRequirement
+      );
+
+      if (!item) {
+        res.status(404).json({
+          error: 'job_not_found',
+          message: '未找到对应职位。'
+        });
+        return;
+      }
+
+      res.json({ item });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post('/api/agent/jobs/batch', async (req, res, next) => {
     try {
       if (req.query.token !== config.agentToken) {
