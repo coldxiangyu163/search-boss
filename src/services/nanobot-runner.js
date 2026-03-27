@@ -6,9 +6,10 @@ class NanobotRunner {
   }
 
   buildCommand({ message }) {
+    const sessionName = `cli:fresh-${Date.now()}`;
     return {
       command: 'uv',
-      args: ['run', 'nanobot', 'agent', '--config', this.configPath, '--logs', '-m', message]
+      args: ['run', 'nanobot', 'agent', '--config', this.configPath, '--logs', '--session', sessionName, '-m', message]
     };
   }
 
