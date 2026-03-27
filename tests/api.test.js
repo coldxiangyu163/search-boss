@@ -2612,3 +2612,90 @@ test('AgentService importRunEvents records raw events and projects non-duplicate
   assert.equal(attachmentCalls.length, 1);
   assert.equal(attachmentCalls[0].status, 'downloaded');
 });
+
+test('JobService triggerSync creates sync run when local jobs table is empty after migration', async () => {
+  const nanobotCalls = [];
+  const queryCalls = [];
+  const pool = {
+    async query(sql, params = []) {
+      queryCalls.push({ sql, params });
+
+      if (sql.includes('select job_key') && sql.includes('limit 1')) {
+        return { rows: [] };
+      }
+
+      if (sql.includes('insert into sourcing_runs')) {
+        return { rows: [{ id: 41, runKey: params[0], status: 'pending' }] };
+      }
+
+      if (sql.includes('update sourcing_runs')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes('select status') && sql.includes('from sourcing_runs')) {
+        return { rows: [{ status: 'running' }] };
+      }
+
+      if (sql.includes('insert into sourcing_run_events')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes("from sourcing_run_events") && sql.includes("event_type = 'jobs_batch_synced'")) {
+        return { rows: [] };
+      }
+
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+
+  const { AgentService } = require('../src/services/agent-service');
+  const { JobService } = require('../src/services/job-service');
+
+  const agentService = new AgentService({
+    pool,
+    nanobotRunner: {
+      async run(payload) {
+        nanobotCalls.push(payload);
+        return { ok: true, stdout: '{"eventType":"jobs_batch_synced","syncedCount":2}' };
+      }
+    }
+  });
+
+  const service = new JobService({ pool, agentService });
+  const result = await service.triggerSync();
+
+  assert.equal(result.ok, true);
+  assert.equal(result.runId, 41);
+  assert.equal(result.status, 'running');
+  assert.equal(nanobotCalls.length, 1);
+  const insertRunCall = queryCalls.find(({ sql }) => sql.includes('insert into sourcing_runs'));
+  assert.equal(insertRunCall.params[1], null);
+});
+
+test('AgentService createRun allows sync_jobs mode without a job key', async () => {
+  const queryCalls = [];
+  const pool = {
+    async query(sql, params = []) {
+      queryCalls.push({ sql, params });
+
+      if (sql.includes('insert into sourcing_runs')) {
+        return { rows: [{ id: 77, runKey: params[0], status: 'pending' }] };
+      }
+
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+
+  const { AgentService } = require('../src/services/agent-service');
+  const service = new AgentService({ pool });
+
+  const result = await service.createRun({
+    runKey: 'sync_jobs:__all__:2026-03-27T13:00:00.000Z',
+    jobKey: null,
+    mode: 'sync_jobs'
+  });
+
+  assert.equal(result.id, 77);
+  assert.equal(queryCalls.length, 1);
+  assert.equal(queryCalls[0].params[1], null);
+});

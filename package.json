@@ -6,7 +6,8 @@
     "start": "node src/server.js",
     "test": "node --test",
     "db:setup": "node scripts/setup-db.js",
-    "db:bootstrap-real": "node scripts/bootstrap-real-data.js"
+    "db:bootstrap-real": "node scripts/bootstrap-real-data.js",
+    "db:export-job-execution": "node scripts/export-job-execution-data.js"
   },
   "keywords": [],
   "author": "",

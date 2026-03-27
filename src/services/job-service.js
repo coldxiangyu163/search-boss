@@ -270,11 +270,7 @@ class JobService {
       `
     );
 
-    if (!result.rows[0]) {
-      throw new Error('job_not_found');
-    }
-
-    return result.rows[0].job_key;
+    return result.rows[0]?.job_key || null;
   }
 }
 

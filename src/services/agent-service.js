@@ -7,17 +7,23 @@ class AgentService {
   }
 
   async createRun({ runKey, jobKey, mode }) {
-    const jobResult = await this.pool.query(
-      `
-        select id
-        from jobs
-        where job_key = $1
-        limit 1
-      `,
-      [jobKey]
-    );
+    let jobId = null;
 
-    if (!jobResult.rows[0]) {
+    if (jobKey) {
+      const jobResult = await this.pool.query(
+        `
+          select id
+          from jobs
+          where job_key = $1
+          limit 1
+        `,
+        [jobKey]
+      );
+
+      jobId = jobResult.rows[0]?.id || null;
+    }
+
+    if (!jobId && mode !== 'sync_jobs') {
       throw new Error('job_not_found');
     }
 
@@ -30,7 +36,7 @@ class AgentService {
             updated_at = now()
         returning id, run_key as "runKey", status
       `,
-      [runKey, jobResult.rows[0].id, mode]
+      [runKey, jobId, mode]
     );
 
     return runResult.rows[0];
