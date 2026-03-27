@@ -20,6 +20,10 @@
 - `search-boss` 项目代码
 - skill 仓库
 
+如果目标环境是 Windows，请优先阅读 Windows 专用版：
+
+- [nanobot-windows-deployment.md](/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/docs/nanobot-windows-deployment.md)
+
 ## 2. 当前架构结论
 
 基于当前代码和本机配置，系统实际由这几部分组成：
