@@ -92,6 +92,7 @@ test('SchedulerService triggerJobTask fails manual task when nanobot exits witho
   const queryCalls = [];
   const recordedEvents = [];
   const failedRuns = [];
+  const replacementRunFailures = [];
   let releaseNanobot = null;
   let failRunResolve = null;
   const failRunDone = new Promise((resolve) => {
@@ -133,6 +134,10 @@ test('SchedulerService triggerJobTask fails manual task when nanobot exits witho
     async getRunStatus() {
       return 'running';
     },
+    async failReplacementRunsForRunId(payload) {
+      replacementRunFailures.push(payload);
+      return { ok: true, failedRunIds: [52] };
+    },
     async completeRun() {
       throw new Error('completeRun should not be called without explicit terminal run state');
     },
@@ -154,6 +159,8 @@ test('SchedulerService triggerJobTask fails manual task when nanobot exits witho
   await failRunDone;
 
   assert.equal(failedRuns.length, 1);
+  assert.equal(replacementRunFailures.length, 1);
+  assert.equal(replacementRunFailures[0].runId, 51);
   assert.equal(failedRuns[0].runId, 51);
   assert.equal(failedRuns[0].message, 'run_not_terminal_after_nanobot_exit');
 });

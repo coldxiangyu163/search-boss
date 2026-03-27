@@ -861,6 +861,48 @@ class AgentService {
     return result.rows[0]?.status || null;
   }
 
+  async failReplacementRunsForRunId({ runId, occurredAt, message = 'replacement_run_created' }) {
+    const result = await this.pool.query(
+      `
+        with origin as (
+          select job_id, mode
+          from sourcing_runs
+          where id = $1
+          limit 1
+        )
+        select sr.id
+        from sourcing_runs sr
+        join origin o
+          on sr.job_id is not distinct from o.job_id
+         and sr.mode = o.mode
+        where sr.run_key = $2
+          and sr.id <> $1
+          and sr.status not in ('completed', 'failed')
+        order by sr.id asc
+      `,
+      [runId, String(runId)]
+    );
+
+    const failedRunIds = [];
+    for (const row of result.rows) {
+      await this.failRun({
+        runId: row.id,
+        eventId: `replacement-run-failed:${runId}:${row.id}`,
+        occurredAt,
+        message,
+        payload: {
+          replacementForRunId: runId
+        }
+      });
+      failedRunIds.push(row.id);
+    }
+
+    return {
+      ok: true,
+      failedRunIds
+    };
+  }
+
   async insertRunEvent({ runId, attemptId, eventId, sequence, eventType, payload, occurredAt }) {
     if (!runId || !eventId) {
       return;
@@ -932,18 +974,31 @@ class AgentService {
     let message = null;
 
     if (mode === 'followup') {
-      message = `/boss-sourcing --job "${jobKey}" --followup --run-id "${runId}"`;
+      message = [
+        `/boss-sourcing --job "${jobKey}" --followup --run-id "${runId}"`,
+        buildRunContractPrompt(runId)
+      ].join('\n');
     } else if (mode === 'chat') {
-      message = `/boss-sourcing --job "${jobKey}" --chat --run-id "${runId}"`;
+      message = [
+        `/boss-sourcing --job "${jobKey}" --chat --run-id "${runId}"`,
+        buildRunContractPrompt(runId)
+      ].join('\n');
     } else if (mode === 'download') {
-      message = `/boss-sourcing --job "${jobKey}" --download --run-id "${runId}"`;
+      message = [
+        `/boss-sourcing --job "${jobKey}" --download --run-id "${runId}"`,
+        buildRunContractPrompt(runId)
+      ].join('\n');
     } else if (mode === 'status') {
-      message = `/boss-sourcing --status --job "${jobKey}" --run-id "${runId}"`;
+      message = [
+        `/boss-sourcing --status --job "${jobKey}" --run-id "${runId}"`,
+        buildRunContractPrompt(runId)
+      ].join('\n');
     } else {
       const jobContext = await this.#getJobNanobotContext(jobKey);
       message = [
         `/boss-sourcing --job "${jobKey}" --source --run-id "${runId}"`,
         buildCustomRequirementPrompt(jobContext.customRequirement),
+        buildRunContractPrompt(runId),
         '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
       ].join('\n');
     }
@@ -958,7 +1013,8 @@ class AgentService {
 
     const message = [
       `/boss-sourcing --sync --run-id "${runId}"`,
-      '只执行岗位同步：采集职位列表和职位详情，并调用 /api/agent/jobs/batch 回写本地后台。禁止进入推荐牛人、打招呼、聊天跟进、下载简历。'
+      '只执行岗位同步：采集职位列表和职位详情，并调用 /api/agent/jobs/batch 回写本地后台。禁止进入推荐牛人、打招呼、聊天跟进、下载简历。',
+      buildRunContractPrompt(runId)
     ].join('\n');
     return this.#runNanobotWithStreaming({ runId, message });
   }
@@ -1043,6 +1099,14 @@ function buildCustomRequirementPrompt(customRequirement) {
     '执行寻源匹配时，除 BOSS 职位信息外，还必须叠加本地数据库维护的岗位定制要求；该要求不会同步回 BOSS，但会影响候选人筛选与判断。',
     `岗位定制要求：${customRequirement}`
   ].join('\n');
+}
+
+function buildRunContractPrompt(runId) {
+  return [
+    `运行契约：必须复用调用方提供的 RUN_ID=${runId}；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。`,
+    `所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "${runId}"。`,
+    '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
+  ].join('');
 }
 
 function normalizeJobRequirement(value) {

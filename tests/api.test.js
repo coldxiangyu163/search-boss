@@ -1237,7 +1237,11 @@ test('JobService triggerSync creates sync run and calls nanobot', async () => {
   assert.equal(nanobotCalls.length, 1);
   assert.equal(
     nanobotCalls[0].message,
-    '/boss-sourcing --sync --run-id "33"\n只执行岗位同步：采集职位列表和职位详情，并调用 /api/agent/jobs/batch 回写本地后台。禁止进入推荐牛人、打招呼、聊天跟进、下载简历。'
+    [
+      '/boss-sourcing --sync --run-id "33"',
+      '只执行岗位同步：采集职位列表和职位详情，并调用 /api/agent/jobs/batch 回写本地后台。禁止进入推荐牛人、打招呼、聊天跟进、下载简历。',
+      '运行契约：必须复用调用方提供的 RUN_ID=33；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "33"。结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
+    ].join('\n')
   );
 });
 
@@ -1808,6 +1812,7 @@ test('AgentService runNanobotForSchedule sends source workflow guardrails in mes
     [
       '/boss-sourcing --job "健康顾问_B0047007" --source --run-id "88"',
       '如数据库中没有额外岗位定制要求，仅按 BOSS 职位信息正常执行寻源。',
+      '运行契约：必须复用调用方提供的 RUN_ID=88；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "88"。结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。',
       '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
     ].join('\n')
   );
@@ -1843,7 +1848,10 @@ test('AgentService runNanobotForSchedule includes run id for followup mode', asy
 
   assert.equal(
     capturedMessage,
-    '/boss-sourcing --job "健康顾问_B0047007" --followup --run-id "91"'
+    [
+      '/boss-sourcing --job "健康顾问_B0047007" --followup --run-id "91"',
+      '运行契约：必须复用调用方提供的 RUN_ID=91；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "91"。结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
+    ].join('\n')
   );
 });
 
@@ -1877,7 +1885,10 @@ test('AgentService runNanobotForSchedule maps chat mode to chat workflow message
 
   assert.equal(
     capturedMessage,
-    '/boss-sourcing --job "健康顾问_B0047007" --chat --run-id "92"'
+    [
+      '/boss-sourcing --job "健康顾问_B0047007" --chat --run-id "92"',
+      '运行契约：必须复用调用方提供的 RUN_ID=92；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "92"。结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
+    ].join('\n')
   );
 });
 
@@ -1911,7 +1922,10 @@ test('AgentService runNanobotForSchedule maps download mode to download workflow
 
   assert.equal(
     capturedMessage,
-    '/boss-sourcing --job "健康顾问_B0047007" --download --run-id "93"'
+    [
+      '/boss-sourcing --job "健康顾问_B0047007" --download --run-id "93"',
+      '运行契约：必须复用调用方提供的 RUN_ID=93；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "93"。结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
+    ].join('\n')
   );
 });
 
@@ -1945,7 +1959,10 @@ test('AgentService runNanobotForSchedule maps status mode to status workflow mes
 
   assert.equal(
     capturedMessage,
-    '/boss-sourcing --status --job "健康顾问_B0047007" --run-id "94"'
+    [
+      '/boss-sourcing --status --job "健康顾问_B0047007" --run-id "94"',
+      '运行契约：必须复用调用方提供的 RUN_ID=94；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "94"。结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
+    ].join('\n')
   );
 });
 
@@ -1983,6 +2000,7 @@ test('AgentService runNanobotForSchedule includes custom requirement in source m
       '/boss-sourcing --job "健康顾问_B0047007" --source --run-id "99"',
       '执行寻源匹配时，除 BOSS 职位信息外，还必须叠加本地数据库维护的岗位定制要求；该要求不会同步回 BOSS，但会影响候选人筛选与判断。',
       '岗位定制要求：必须有电话销售经验',
+      '运行契约：必须复用调用方提供的 RUN_ID=99；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "99"。结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。',
       '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
     ].join('\n')
   );

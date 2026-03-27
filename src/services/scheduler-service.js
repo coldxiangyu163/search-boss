@@ -235,6 +235,12 @@ class SchedulerService {
         );
       }
     } catch (error) {
+      await this.agentService.failReplacementRunsForRunId({
+        runId,
+        occurredAt: new Date().toISOString(),
+        message: error.message
+      });
+
       if (schedule) {
         await this.pool.query(
           `

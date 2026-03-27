@@ -29,6 +29,10 @@ const state = {
     startedAt: null,
     error: '',
     events: [],
+    progress: {
+      hasRequested: false,
+      hasNanobotOutput: false
+    },
     isExpanded: true,
     pollTimer: null,
     lastEventId: 0,
@@ -72,6 +76,12 @@ const {
   captureSyncLogScrollSnapshot,
   resolveSyncLogScrollTop
 } = window.SyncLogScroll;
+
+const {
+  createSyncModalProgress,
+  updateSyncModalProgress,
+  buildSyncStages: buildSyncTimelineStages
+} = window.SyncModalProgress;
 
 const titles = {
   command: ['运营总览', '今日招聘运营看板', '聚焦核心招聘指标、待办事项与系统运行情况。'],
@@ -437,6 +447,7 @@ function openSyncModal(taskType = 'sync_jobs') {
     startedAt: new Date().toISOString(),
     error: '',
     events: [],
+    progress: createSyncModalProgress(),
     isExpanded: true,
     pollTimer: null,
     lastEventId: 0,
@@ -457,6 +468,7 @@ function toggleSyncLogPanel() {
 
 function appendSyncEvent(event) {
   state.syncModal.events = [...state.syncModal.events, event].slice(-100);
+  state.syncModal.progress = updateSyncModalProgress(state.syncModal.progress, event);
 }
 
 function getSyncLogScrollSnapshot() {
@@ -1610,32 +1622,10 @@ function renderSyncModal() {
 }
 
 function buildSyncStages() {
-  const events = state.syncModal.events;
-  const hasRequested = events.some((event) => ['job_sync_requested', 'schedule_triggered'].includes(event.eventType));
-  const hasNanobot = events.some((event) => event.eventType === 'nanobot_stream');
-  const hasCompleted = state.syncModal.status === 'completed';
-  const hasFailed = state.syncModal.status === 'failed';
-
-  return [
-    {
-      label: '创建执行任务',
-      desc: hasRequested ? '已生成 run 并开始跟踪。' : '正在创建任务...',
-      active: !hasRequested,
-      done: hasRequested
-    },
-    {
-      label: '启动小聘AGENT',
-      desc: hasNanobot
-        ? '已接收到小聘AGENT实时输出。'
-        : (hasCompleted || hasFailed ? '任务已结束，本次未采集到实时流式日志。' : '等待小聘AGENT输出...'),
-      active: hasRequested && !hasNanobot && !hasCompleted && !hasFailed,
-      done: hasNanobot || hasCompleted || hasFailed
-    },
-    {
-      label: hasFailed ? '执行异常' : '完成执行',
-      desc: hasFailed ? (state.syncModal.error || '任务执行出现异常。') : (hasCompleted ? '任务已执行完成。' : '等待最终结果...'),
-      active: !hasCompleted && !hasFailed && hasNanobot,
-      done: hasCompleted || hasFailed
-    }
-  ];
+  return buildSyncTimelineStages({
+    runId: state.syncModal.runId,
+    status: state.syncModal.status,
+    error: state.syncModal.error,
+    progress: state.syncModal.progress
+  });
 }
