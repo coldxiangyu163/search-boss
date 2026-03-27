@@ -262,14 +262,9 @@ function createApp({ services = {}, config = {} } = {}) {
         return;
       }
 
-      const importPayload = Array.isArray(req.body)
-        ? { events: req.body }
-        : req.body;
+      const importPayload = normalizeImportEventsPayload(req.body, req.params.runId);
 
-      const result = await services.agent.importRunEvents({
-        runId: req.params.runId,
-        ...importPayload
-      });
+      const result = await services.agent.importRunEvents(importPayload);
       res.json(result);
     } catch (error) {
       next(error);
@@ -283,6 +278,22 @@ function createApp({ services = {}, config = {} } = {}) {
         return;
       }
       const result = await services.agent.completeRun({
+        runId: req.params.runId,
+        ...req.body
+      });
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/agent/runs/:runId/fail', async (req, res, next) => {
+    try {
+      if (req.query.token !== config.agentToken) {
+        res.status(401).json({ error: 'unauthorized' });
+        return;
+      }
+      const result = await services.agent.failRun({
         runId: req.params.runId,
         ...req.body
       });
@@ -343,6 +354,22 @@ function createApp({ services = {}, config = {} } = {}) {
   });
 
   app.use((error, _req, res, _next) => {
+    if (error.message === 'candidate_identifier_missing') {
+      res.status(400).json({
+        error: 'candidate_identifier_missing',
+        message: '候选人写入缺少 candidateId 或 bossEncryptGeekId。'
+      });
+      return;
+    }
+
+    if (error.message === 'job_key_required_for_geek_lookup') {
+      res.status(400).json({
+        error: 'job_key_required_for_geek_lookup',
+        message: '按 bossEncryptGeekId 写入消息、动作或附件时必须同时提供 jobKey。'
+      });
+      return;
+    }
+
     if (error.message === 'nanobot_daily_limit_reached') {
       res.status(503).json({
         error: 'nanobot_daily_limit_reached',
@@ -373,6 +400,48 @@ function createApp({ services = {}, config = {} } = {}) {
   });
 
   return app;
+}
+
+
+function normalizeImportEventsPayload(body, fallbackRunId) {
+  if (Array.isArray(body)) {
+    return {
+      runId: fallbackRunId,
+      events: body
+    };
+  }
+
+  const payload = body && typeof body === 'object' ? body : {};
+  if (Array.isArray(payload.events)) {
+    return {
+      runId: fallbackRunId,
+      ...payload,
+      events: payload.events
+    };
+  }
+
+  if (payload.eventId && Array.isArray(payload.jobs)) {
+    return {
+      runId: fallbackRunId,
+      attemptId: payload.attemptId,
+      sourceFile: payload.sourceFile,
+      events: [
+        {
+          eventId: payload.eventId,
+          eventType: payload.eventType || 'jobs_batch_synced',
+          sequence: payload.sequence,
+          occurredAt: payload.occurredAt,
+          payload
+        }
+      ]
+    };
+  }
+
+  return {
+    runId: fallbackRunId,
+    ...payload,
+    events: []
+  };
 }
 
 module.exports = {

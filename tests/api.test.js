@@ -920,6 +920,64 @@ test('POST /api/agent/runs/:runId/import-events imports event batch through agen
   assert.equal(capturedPayload.events.length, 2);
 });
 
+test('POST /api/agent/runs/:runId/import-events accepts job sync payload objects without wrapping events', async () => {
+  let capturedPayload = null;
+
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: { async listSchedules() { return []; }, async upsertSchedule() { return {}; } },
+      agent: {
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return { allowed: true }; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; },
+        async createRun() { return { id: 1 }; },
+        async recordRunEvent() { return { ok: true }; },
+        async importRunEvents(payload) {
+          capturedPayload = payload;
+          return {
+            ok: true,
+            receivedCount: 1,
+            importedCount: 1,
+            projectedCount: 0,
+            duplicateCount: 0,
+            acknowledgedCount: 1,
+            allEventsAccountedFor: true
+          };
+        }
+      }
+    },
+    config: { agentToken: 'search-boss-local-agent' }
+  });
+
+  const response = await request(app)
+    .post('/api/agent/runs/131/import-events?token=search-boss-local-agent')
+    .send({
+      runId: '131',
+      eventId: 'job-sync:131:1774568043895',
+      sequence: 1,
+      occurredAt: '2026-03-26T23:34:03.895Z',
+      jobs: [
+        {
+          jobKey: '面点师傅_B0038011',
+          encryptJobId: 'enc-1',
+          jobName: '面点师傅（B0038011）'
+        }
+      ]
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.importedCount, 1);
+  assert.equal(capturedPayload.runId, '131');
+  assert.equal(capturedPayload.events.length, 1);
+  assert.equal(capturedPayload.events[0].eventType, 'jobs_batch_synced');
+  assert.equal(capturedPayload.events[0].eventId, 'job-sync:131:1774568043895');
+  assert.equal(capturedPayload.events[0].payload.jobs[0].jobKey, '面点师傅_B0038011');
+});
+
 test('POST /api/agent/runs/:runId/import-events accepts raw event arrays', async () => {
   let capturedPayload = null;
 
@@ -1005,6 +1063,48 @@ test('POST /api/agent/runs/:runId/complete marks run completed', async () => {
 
   assert.equal(response.status, 200);
   assert.equal(response.body.status, 'completed');
+});
+
+test('POST /api/agent/runs/:runId/fail marks run failed', async () => {
+  let capturedPayload = null;
+
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: { async listSchedules() { return []; }, async upsertSchedule() { return {}; } },
+      agent: {
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return { allowed: true }; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; },
+        async createRun() { return { id: 1 }; },
+        async recordRunEvent() { return { ok: true }; },
+        async completeRun() { return { ok: true, status: 'completed' }; },
+        async failRun(payload) {
+          capturedPayload = payload;
+          return { ok: true, status: 'failed' };
+        }
+      }
+    },
+    config: { agentToken: 'search-boss-local-agent' }
+  });
+
+  const response = await request(app)
+    .post('/api/agent/runs/1/fail?token=search-boss-local-agent')
+    .send({
+      attemptId: 'attempt-1',
+      eventId: 'run-fail:1:attempt-1',
+      sequence: 9,
+      occurredAt: '2026-03-24T12:30:00.000Z',
+      message: 'resume callback not persisted'
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.status, 'failed');
+  assert.equal(capturedPayload.runId, '1');
+  assert.equal(capturedPayload.message, 'resume callback not persisted');
 });
 
 test('POST /api/schedules/:id/trigger executes schedule', async () => {
@@ -1747,6 +1847,108 @@ test('AgentService runNanobotForSchedule includes run id for followup mode', asy
   );
 });
 
+test('AgentService runNanobotForSchedule maps chat mode to chat workflow message', async () => {
+  const { AgentService } = require('../src/services/agent-service');
+  let capturedMessage = null;
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql) {
+        if (sql.includes('from jobs') && sql.includes('custom_requirement')) {
+          return { rows: [{ custom_requirement: '必须有电话销售经验' }], rowCount: 1 };
+        }
+
+        throw new Error('recordRunEvent should not be called without runId');
+      }
+    },
+    nanobotRunner: {
+      async run({ message }) {
+        capturedMessage = message;
+        return { ok: true, stdout: 'done' };
+      }
+    }
+  });
+
+  await agentService.runNanobotForSchedule({
+    runId: 92,
+    jobKey: '健康顾问_B0047007',
+    mode: 'chat'
+  });
+
+  assert.equal(
+    capturedMessage,
+    '/boss-sourcing --job "健康顾问_B0047007" --chat --run-id "92"'
+  );
+});
+
+test('AgentService runNanobotForSchedule maps download mode to download workflow message', async () => {
+  const { AgentService } = require('../src/services/agent-service');
+  let capturedMessage = null;
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql) {
+        if (sql.includes('from jobs') && sql.includes('custom_requirement')) {
+          return { rows: [{ custom_requirement: '必须有电话销售经验' }], rowCount: 1 };
+        }
+
+        throw new Error('recordRunEvent should not be called without runId');
+      }
+    },
+    nanobotRunner: {
+      async run({ message }) {
+        capturedMessage = message;
+        return { ok: true, stdout: 'done' };
+      }
+    }
+  });
+
+  await agentService.runNanobotForSchedule({
+    runId: 93,
+    jobKey: '健康顾问_B0047007',
+    mode: 'download'
+  });
+
+  assert.equal(
+    capturedMessage,
+    '/boss-sourcing --job "健康顾问_B0047007" --download --run-id "93"'
+  );
+});
+
+test('AgentService runNanobotForSchedule maps status mode to status workflow message', async () => {
+  const { AgentService } = require('../src/services/agent-service');
+  let capturedMessage = null;
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql) {
+        if (sql.includes('from jobs') && sql.includes('custom_requirement')) {
+          return { rows: [{ custom_requirement: '必须有电话销售经验' }], rowCount: 1 };
+        }
+
+        throw new Error('recordRunEvent should not be called without runId');
+      }
+    },
+    nanobotRunner: {
+      async run({ message }) {
+        capturedMessage = message;
+        return { ok: true, stdout: 'done' };
+      }
+    }
+  });
+
+  await agentService.runNanobotForSchedule({
+    runId: 94,
+    jobKey: '健康顾问_B0047007',
+    mode: 'status'
+  });
+
+  assert.equal(
+    capturedMessage,
+    '/boss-sourcing --status --job "健康顾问_B0047007" --run-id "94"'
+  );
+});
+
 test('AgentService runNanobotForSchedule includes custom requirement in source mode message', async () => {
   const { AgentService } = require('../src/services/agent-service');
   let capturedMessage = null;
@@ -1784,6 +1986,185 @@ test('AgentService runNanobotForSchedule includes custom requirement in source m
       '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
     ].join('\n')
   );
+});
+
+test('AgentService recordAction scopes candidate lookup by jobKey when candidateId is absent', async () => {
+  const queryCalls = [];
+  const { AgentService } = require('../src/services/agent-service');
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql, params = []) {
+        queryCalls.push({ sql, params });
+
+        if (sql.includes('join people p on p.id = jc.person_id') && sql.includes('join jobs j on j.id = jc.job_id')) {
+          return {
+            rows: [{
+              id: 66,
+              resume_state: 'not_requested',
+              last_resume_requested_at: null,
+              resume_request_count: 0
+            }],
+            rowCount: 1
+          };
+        }
+
+        if (sql.includes('insert into candidate_actions')) {
+          return { rows: [{ id: 91 }], rowCount: 1 };
+        }
+
+        if (sql.includes('update job_candidates')) {
+          return { rows: [], rowCount: 1 };
+        }
+
+        if (sql.includes('insert into sourcing_run_events')) {
+          return { rows: [], rowCount: 1 };
+        }
+
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    }
+  });
+
+  const result = await agentService.recordAction({
+    runId: 12,
+    eventId: 'resume-request:12:1',
+    occurredAt: '2026-03-25T08:00:00.000Z',
+    actionType: 'resume_request_sent',
+    dedupeKey: 'resume-request:12:1',
+    jobKey: '健康顾问_B0047007',
+    bossEncryptGeekId: 'geek-1',
+    payload: { templateType: 'resume_request' }
+  });
+
+  assert.equal(result.ok, true);
+  const lookupQuery = queryCalls.find(({ sql }) =>
+    sql.includes('join people p on p.id = jc.person_id') &&
+    sql.includes('join jobs j on j.id = jc.job_id')
+  );
+  assert.ok(lookupQuery);
+  assert.deepEqual(lookupQuery.params, ['geek-1', '健康顾问_B0047007']);
+});
+
+test('AgentService recordMessage uses explicit candidateId when provided', async () => {
+  const queryCalls = [];
+  const { AgentService } = require('../src/services/agent-service');
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql, params = []) {
+        queryCalls.push({ sql, params });
+
+        if (sql.includes('from job_candidates') && sql.includes('where id = $1')) {
+          return {
+            rows: [{
+              id: 88,
+              resume_state: 'not_requested',
+              last_resume_requested_at: null,
+              resume_request_count: 0
+            }],
+            rowCount: 1
+          };
+        }
+
+        if (sql.includes('select jc.id') && sql.includes('join people p on p.id = jc.person_id')) {
+          throw new Error('ambiguous geek lookup should not run when candidateId is provided');
+        }
+
+        if (sql.includes('insert into candidate_messages')) {
+          return { rows: [{ id: 5 }], rowCount: 1 };
+        }
+
+        if (sql.includes('update job_candidates')) {
+          return { rows: [], rowCount: 1 };
+        }
+
+        if (sql.includes('insert into sourcing_run_events')) {
+          return { rows: [], rowCount: 1 };
+        }
+
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    }
+  });
+
+  const result = await agentService.recordMessage({
+    runId: 12,
+    candidateId: 88,
+    eventId: 'message:m1',
+    occurredAt: '2026-03-25T08:05:00.000Z',
+    bossEncryptGeekId: 'geek-1',
+    bossMessageId: 'm1',
+    direction: 'inbound',
+    messageType: 'text',
+    contentText: '我对岗位感兴趣'
+  });
+
+  assert.equal(result.ok, true);
+  const insertQuery = queryCalls.find(({ sql }) => sql.includes('insert into candidate_messages'));
+  assert.equal(insertQuery.params[0], 88);
+});
+
+test('AgentService recordMessage requires jobKey when candidateId is absent', async () => {
+  const { AgentService } = require('../src/services/agent-service');
+
+  const agentService = new AgentService({
+    pool: {
+      async query() {
+        throw new Error('db query should not run for underspecified candidate write');
+      }
+    }
+  });
+
+  await assert.rejects(
+    () => agentService.recordMessage({
+      runId: 12,
+      eventId: 'message:m2',
+      occurredAt: '2026-03-25T08:06:00.000Z',
+      bossEncryptGeekId: 'geek-1',
+      bossMessageId: 'm2',
+      direction: 'inbound',
+      messageType: 'text',
+      contentText: '请问薪资多少'
+    }),
+    /job_key_required_for_geek_lookup/
+  );
+});
+
+test('POST /api/agent/runs/:runId/messages rejects geek-only writes without jobKey', async () => {
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: { async listSchedules() { return []; }, async upsertSchedule() { return {}; } },
+      agent: {
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return { allowed: true }; },
+        async recordMessage() { throw new Error('job_key_required_for_geek_lookup'); },
+        async recordAttachment() { return { ok: true }; },
+        async createRun() { return { id: 1 }; },
+        async recordRunEvent() { return { ok: true }; },
+        async completeRun() { return { ok: true, status: 'completed' }; },
+        async failRun() { return { ok: true, status: 'failed' }; }
+      }
+    },
+    config: { agentToken: 'search-boss-local-agent' }
+  });
+
+  const response = await request(app)
+    .post('/api/agent/runs/12/messages?token=search-boss-local-agent')
+    .send({
+      eventId: 'message:m2',
+      bossEncryptGeekId: 'geek-1',
+      bossMessageId: 'm2',
+      direction: 'inbound',
+      messageType: 'text',
+      contentText: '请问薪资多少'
+    });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'job_key_required_for_geek_lookup');
 });
 
 test('AgentService upsertCandidate records candidate_upserted event after database write', async () => {

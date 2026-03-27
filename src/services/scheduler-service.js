@@ -191,6 +191,28 @@ class SchedulerService {
         mode: taskType
       });
 
+      const runStatus = await this.agentService.getRunStatus(runId);
+
+      if (runStatus === 'failed') {
+        if (schedule) {
+          await this.pool.query(
+            `
+              update scheduled_job_runs
+              set status = 'failed',
+                  finished_at = now()
+              where id = $1
+            `,
+            [scheduledRunId]
+          );
+        }
+
+        return;
+      }
+
+      if (runStatus !== 'completed') {
+        throw new Error('run_not_terminal_after_nanobot_exit');
+      }
+
       if (schedule) {
         await this.pool.query(
           `
@@ -212,17 +234,6 @@ class SchedulerService {
           [schedule.id]
         );
       }
-
-      await this.agentService.completeRun({
-        runId,
-        eventId: `schedule-complete:${scheduledRunId || `manual:${runId}`}`,
-        occurredAt: new Date().toISOString(),
-        payload: {
-          scheduledJobId,
-          taskType,
-          jobKey
-        }
-      });
     } catch (error) {
       if (schedule) {
         await this.pool.query(

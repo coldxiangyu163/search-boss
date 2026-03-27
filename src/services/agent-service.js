@@ -316,36 +316,26 @@ class AgentService {
 
   async recordAction({
     runId,
+    candidateId,
     attemptId,
     eventId,
     sequence,
     occurredAt,
     actionType,
     dedupeKey,
+    jobKey,
     bossEncryptGeekId,
     payload = {}
   }) {
-    const candidateResult = await this.pool.query(
-      `
-        select
-          jc.id,
-          jc.resume_state,
-          jc.last_resume_requested_at,
-          jc.resume_request_count
-        from job_candidates jc
-        join people p on p.id = jc.person_id
-        where p.boss_encrypt_geek_id = $1
-        order by jc.updated_at desc
-        limit 1
-      `,
-      [bossEncryptGeekId]
-    );
+    const jobCandidate = await this.resolveJobCandidateForWrite({
+      candidateId,
+      bossEncryptGeekId,
+      jobKey
+    });
 
-    if (!candidateResult.rows[0]) {
+    if (!jobCandidate) {
       throw new Error('candidate_not_found');
     }
-
-    const jobCandidate = candidateResult.rows[0];
 
     const actionResult = await this.pool.query(
       `
@@ -479,10 +469,12 @@ class AgentService {
 
   async recordMessage({
     runId,
+    candidateId,
     attemptId,
     eventId,
     sequence,
     occurredAt,
+    jobKey,
     bossEncryptGeekId,
     bossMessageId,
     direction,
@@ -490,7 +482,11 @@ class AgentService {
     contentText,
     rawPayload = {}
   }) {
-    const candidate = await this.findLatestCandidateByGeekId(bossEncryptGeekId);
+    const candidate = await this.resolveJobCandidateForWrite({
+      candidateId,
+      bossEncryptGeekId,
+      jobKey
+    });
     if (!candidate) {
       throw new Error('candidate_not_found');
     }
@@ -559,10 +555,12 @@ class AgentService {
 
   async recordAttachment({
     runId,
+    candidateId,
     attemptId,
     eventId,
     sequence,
     occurredAt,
+    jobKey,
     bossEncryptGeekId,
     bossAttachmentId,
     fileName,
@@ -572,7 +570,11 @@ class AgentService {
     storedPath,
     status
   }) {
-    const candidate = await this.findLatestCandidateByGeekId(bossEncryptGeekId);
+    const candidate = await this.resolveJobCandidateForWrite({
+      candidateId,
+      bossEncryptGeekId,
+      jobKey
+    });
     if (!candidate) {
       throw new Error('candidate_not_found');
     }
@@ -694,6 +696,7 @@ class AgentService {
           occurredAt: event.occurredAt,
           actionType: 'greet_sent',
           dedupeKey: getImportedField(event, 'dedupeKey') || `greet:${jobKey}:${bossEncryptGeekId}`,
+          jobKey,
           bossEncryptGeekId,
           payload: event.payload || {}
         });
@@ -703,6 +706,7 @@ class AgentService {
     }
 
     if (isMessageImportEvent(event)) {
+      const jobKey = getImportedField(event, 'jobKey');
       const bossEncryptGeekId = getImportedField(event, 'bossEncryptGeekId');
       const bossMessageId = getImportedField(event, 'bossMessageId');
       if (!bossEncryptGeekId || !bossMessageId) {
@@ -715,6 +719,7 @@ class AgentService {
         eventId: event.eventId,
         sequence: event.sequence || null,
         occurredAt: event.occurredAt,
+        jobKey,
         bossEncryptGeekId,
         bossMessageId,
         direction: getImportedField(event, 'direction') || 'inbound',
@@ -726,6 +731,7 @@ class AgentService {
     }
 
     if (isResumeRequestImportEvent(event)) {
+      const jobKey = getImportedField(event, 'jobKey');
       const bossEncryptGeekId = getImportedField(event, 'bossEncryptGeekId');
       if (!bossEncryptGeekId) {
         return false;
@@ -739,6 +745,7 @@ class AgentService {
         occurredAt: event.occurredAt,
         actionType: 'resume_request_sent',
         dedupeKey: getImportedField(event, 'dedupeKey') || `resume-request:${runId}:${bossEncryptGeekId}`,
+        jobKey,
         bossEncryptGeekId,
         payload: event.payload || {}
       });
@@ -746,6 +753,7 @@ class AgentService {
     }
 
     if (isAttachmentImportEvent(event)) {
+      const jobKey = getImportedField(event, 'jobKey');
       const bossEncryptGeekId = getImportedField(event, 'bossEncryptGeekId');
       if (!bossEncryptGeekId) {
         return false;
@@ -757,6 +765,7 @@ class AgentService {
         eventId: event.eventId,
         sequence: event.sequence || null,
         occurredAt: event.occurredAt,
+        jobKey,
         bossEncryptGeekId,
         bossAttachmentId: getImportedField(event, 'bossAttachmentId') || null,
         fileName: getImportedField(event, 'fileName') || null,
@@ -786,6 +795,70 @@ class AgentService {
     );
 
     return result.rows[0] || null;
+  }
+
+  async resolveJobCandidateForWrite({ candidateId, bossEncryptGeekId, jobKey }) {
+    if (candidateId) {
+      const result = await this.pool.query(
+        `
+          select
+            id,
+            resume_state,
+            last_resume_requested_at,
+            resume_request_count
+          from job_candidates
+          where id = $1
+          limit 1
+        `,
+        [candidateId]
+      );
+
+      return result.rows[0] || null;
+    }
+
+    if (!bossEncryptGeekId) {
+      throw new Error('candidate_identifier_missing');
+    }
+
+    if (!jobKey) {
+      throw new Error('job_key_required_for_geek_lookup');
+    }
+
+    if (bossEncryptGeekId && jobKey) {
+      const result = await this.pool.query(
+        `
+          select
+            jc.id,
+            jc.resume_state,
+            jc.last_resume_requested_at,
+            jc.resume_request_count
+          from job_candidates jc
+          join people p on p.id = jc.person_id
+          join jobs j on j.id = jc.job_id
+          where p.boss_encrypt_geek_id = $1
+            and j.job_key = $2
+          order by jc.updated_at desc
+          limit 1
+        `,
+        [bossEncryptGeekId, jobKey]
+      );
+
+      return result.rows[0] || null;
+    }
+  }
+
+  async getRunStatus(runId) {
+    const result = await this.pool.query(
+      `
+        select status
+        from sourcing_runs
+        where id = $1
+        limit 1
+      `,
+      [runId]
+    );
+
+    return result.rows[0]?.status || null;
   }
 
   async insertRunEvent({ runId, attemptId, eventId, sequence, eventType, payload, occurredAt }) {
@@ -856,14 +929,25 @@ class AgentService {
       throw new Error('nanobot_runner_not_configured');
     }
 
-    const jobContext = await this.#getJobNanobotContext(jobKey);
-    const message = mode === 'followup'
-      ? `/boss-sourcing --job "${jobKey}" --followup --run-id "${runId}"`
-      : [
+    let message = null;
+
+    if (mode === 'followup') {
+      message = `/boss-sourcing --job "${jobKey}" --followup --run-id "${runId}"`;
+    } else if (mode === 'chat') {
+      message = `/boss-sourcing --job "${jobKey}" --chat --run-id "${runId}"`;
+    } else if (mode === 'download') {
+      message = `/boss-sourcing --job "${jobKey}" --download --run-id "${runId}"`;
+    } else if (mode === 'status') {
+      message = `/boss-sourcing --status --job "${jobKey}" --run-id "${runId}"`;
+    } else {
+      const jobContext = await this.#getJobNanobotContext(jobKey);
+      message = [
         `/boss-sourcing --job "${jobKey}" --source --run-id "${runId}"`,
         buildCustomRequirementPrompt(jobContext.customRequirement),
         '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
       ].join('\n');
+    }
+
     return this.#runNanobotWithStreaming({ runId, message });
   }
 
