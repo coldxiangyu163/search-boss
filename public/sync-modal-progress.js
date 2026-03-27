@@ -56,8 +56,10 @@ if (typeof window !== 'undefined') {
   };
 }
 
-module.exports = {
-  createSyncModalProgress,
-  updateSyncModalProgress,
-  buildSyncStages
-};
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    createSyncModalProgress,
+    updateSyncModalProgress,
+    buildSyncStages
+  };
+}

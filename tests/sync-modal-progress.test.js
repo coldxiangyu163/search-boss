@@ -1,5 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
 
 const {
   createSyncModalProgress,
@@ -29,4 +32,49 @@ test('buildSyncStages keeps request stage done after bootstrap event scrolls out
   assert.equal(stages[0].active, false);
   assert.equal(stages[0].desc, '已生成 run 并开始跟踪。');
   assert.equal(stages[1].done, true);
+});
+
+test('sync modal helper and app scripts can load together in a browser context', () => {
+  const helperScript = fs.readFileSync(
+    path.join(__dirname, '../public/sync-modal-progress.js'),
+    'utf8'
+  );
+  const appScript = fs.readFileSync(
+    path.join(__dirname, '../public/app.js'),
+    'utf8'
+  );
+
+  const noop = () => {};
+  const context = vm.createContext({
+    window: {
+      JobUiHelpers: {
+        formatJobStatus: noop,
+        getJobStatusBadgeClass: noop,
+        isJobActionEnabled: noop
+      },
+      CandidateUiHelpers: {
+        formatLifecycleStatus: noop,
+        formatResumeState: noop,
+        formatGuardStatus: noop,
+        getLifecycleBadgeClass: noop,
+        getResumeBadgeClass: noop,
+        getGuardBadgeClass: noop,
+        buildCandidateTimeline: noop
+      },
+      SyncLogScroll: {
+        captureSyncLogScrollSnapshot: noop,
+        resolveSyncLogScrollTop: noop
+      }
+    },
+    document: {
+      addEventListener: noop
+    },
+    module: undefined,
+    console
+  });
+
+  assert.doesNotThrow(() => {
+    vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+    vm.runInContext(appScript, context, { filename: 'app.js' });
+  });
 });

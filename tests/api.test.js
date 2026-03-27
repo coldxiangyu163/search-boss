@@ -805,6 +805,56 @@ test('POST /api/agent/runs/:runId/events records run event', async () => {
   assert.equal(capturedPayload.eventType, 'agent_bootstrap');
 });
 
+test('POST /api/agent/runs/:runId/events normalizes nanobot bootstrap shorthand payload', async () => {
+  let capturedPayload = null;
+
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: { async listSchedules() { return []; }, async upsertSchedule() { return {}; } },
+      agent: {
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return { allowed: true }; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; },
+        async createRun() { return { id: 1 }; },
+        async recordRunEvent(payload) {
+          capturedPayload = payload;
+          return { ok: true };
+        }
+      }
+    },
+    config: { agentToken: 'search-boss-local-agent' }
+  });
+
+  const response = await request(app)
+    .post('/api/agent/runs/145/events?token=search-boss-local-agent')
+    .send({
+      type: 'bootstrap',
+      stage: 'job_sync',
+      mode: 'sync',
+      runId: '145',
+      message: 'Starting sync-only job collection from BOSS job list/detail and callback via jobs-batch.',
+      timestamp: '2026-03-27T08:35:00.000Z'
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(capturedPayload.runId, '145');
+  assert.equal(capturedPayload.eventType, 'agent_bootstrap');
+  assert.equal(capturedPayload.stage, 'bootstrap');
+  assert.equal(capturedPayload.eventId, 'bootstrap:145:2026-03-27T08:35:00.000Z');
+  assert.equal(capturedPayload.occurredAt, '2026-03-27T08:35:00.000Z');
+  assert.equal(capturedPayload.message, 'Starting sync-only job collection from BOSS job list/detail and callback via jobs-batch.');
+  assert.deepEqual(capturedPayload.payload, {
+    type: 'bootstrap',
+    stage: 'job_sync',
+    mode: 'sync',
+    timestamp: '2026-03-27T08:35:00.000Z'
+  });
+});
+
 test('POST /api/agent/runs/:runId/candidates upserts candidate through agent API', async () => {
   let capturedPayload = null;
 
@@ -1205,6 +1255,10 @@ test('JobService triggerSync creates sync run and calls nanobot', async () => {
         return { rows: [], rowCount: 1 };
       }
 
+      if (sql.includes('select status') && sql.includes('from sourcing_runs')) {
+        return { rows: [{ status: 'running' }] };
+      }
+
       if (sql.includes('insert into sourcing_run_events')) {
         return { rows: [], rowCount: 1 };
       }
@@ -1239,7 +1293,9 @@ test('JobService triggerSync creates sync run and calls nanobot', async () => {
     nanobotCalls[0].message,
     [
       '/boss-sourcing --sync --run-id "33"',
+      '本次运行只使用当前项目目录：PROJECT_ROOT="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f"；回写 CLI="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/scripts/agent-callback-cli.js"。不要猜测或探测其它历史路径。',
       '只执行岗位同步：采集职位列表和职位详情，并调用 /api/agent/jobs/batch 回写本地后台。禁止进入推荐牛人、打招呼、聊天跟进、下载简历。',
+      '稳定性优先：以职位列表接口和当前页面可稳定读取的数据为准；如果详情接口中的 job 或 jdText 为空，允许保留空 jdText，并把原始详情放进 metadata/detailRaw，禁止为了补齐 JD 再打开编辑页、提取 HttpOnly cookie、写临时抓取脚本、复用浏览器 cookie 发起 Node 请求，或绕过 agent-callback-cli.js / 本地网络护栏。',
       '运行契约：必须复用调用方提供的 RUN_ID=33；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "33"。结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
     ].join('\n')
   );
@@ -1445,6 +1501,10 @@ test('JobService triggerSync returns immediately and completes run asynchronousl
         return { rows: [], rowCount: 1 };
       }
 
+      if (sql.includes('select status') && sql.includes('from sourcing_runs')) {
+        return { rows: [{ status: 'running' }] };
+      }
+
       if (sql.includes('insert into sourcing_run_events')) {
         return { rows: [], rowCount: 1 };
       }
@@ -1516,6 +1576,10 @@ test('JobService triggerSync marks run failed when nanobot exits without jobs ba
         return { rows: [], rowCount: 1 };
       }
 
+      if (sql.includes('select status') && sql.includes('from sourcing_runs')) {
+        return { rows: [{ status: 'running' }] };
+      }
+
       if (sql.includes('insert into sourcing_run_events')) {
         return { rows: [], rowCount: 1 };
       }
@@ -1576,6 +1640,10 @@ test('JobService triggerSync treats nanobot stdout jobs_batch_synced marker as p
         return { rows: [], rowCount: 1 };
       }
 
+      if (sql.includes('select status') && sql.includes('from sourcing_runs')) {
+        return { rows: [{ status: 'running' }] };
+      }
+
       if (sql.includes('insert into sourcing_run_events')) {
         return { rows: [], rowCount: 1 };
       }
@@ -1617,6 +1685,73 @@ test('JobService triggerSync treats nanobot stdout jobs_batch_synced marker as p
   assert.equal(events.some((event) => event.message === 'job_sync_not_persisted'), false);
 });
 
+test('JobService triggerSync does not emit duplicate completion when skill already marked run terminal', async () => {
+  let completeRunCalls = 0;
+  let failRunCalls = 0;
+  const pool = {
+    async query(sql, params = []) {
+      if (sql.includes('select job_key') && sql.includes('limit 1')) {
+        return { rows: [{ job_key: '健康顾问_B0047007' }] };
+      }
+
+      if (sql.includes('from jobs') && sql.includes('job_key = $1')) {
+        return { rows: [{ id: 8 }] };
+      }
+
+      if (sql.includes('insert into sourcing_runs')) {
+        return { rows: [{ id: 33, runKey: params[0], status: 'pending' }] };
+      }
+
+      if (sql.includes('update sourcing_runs')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes('select status') && sql.includes('from sourcing_runs')) {
+        return { rows: [{ status: 'completed' }] };
+      }
+
+      if (sql.includes('insert into sourcing_run_events')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes("from sourcing_run_events") && sql.includes("event_type = 'jobs_batch_synced'")) {
+        return { rows: [{ id: 1 }] };
+      }
+
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+
+  const { AgentService } = require('../src/services/agent-service');
+  const { JobService } = require('../src/services/job-service');
+
+  const agentService = new AgentService({
+    pool,
+    nanobotRunner: {
+      async run() {
+        return { ok: true, stdout: 'synced' };
+      }
+    }
+  });
+
+  agentService.completeRun = async () => {
+    completeRunCalls += 1;
+    throw new Error('completeRun should not be called when skill already marked run terminal');
+  };
+  agentService.failRun = async () => {
+    failRunCalls += 1;
+    throw new Error('failRun should not be called when skill already marked run terminal');
+  };
+
+  const service = new JobService({ pool, agentService });
+  const result = await service.triggerSync();
+
+  assert.equal(result.status, 'running');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(completeRunCalls, 0);
+  assert.equal(failRunCalls, 0);
+});
+
 test('JobService triggerSync marks run failed when nanobot fails asynchronously', async () => {
   const events = [];
   const pool = {
@@ -1635,6 +1770,10 @@ test('JobService triggerSync marks run failed when nanobot fails asynchronously'
 
       if (sql.includes('update sourcing_runs')) {
         return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes('select status') && sql.includes('from sourcing_runs')) {
+        return { rows: [{ status: 'running' }] };
       }
 
       if (sql.includes('insert into sourcing_run_events')) {
@@ -1690,6 +1829,10 @@ test('JobService triggerSync records stream events from nanobot output', async (
 
       if (sql.includes('update sourcing_runs')) {
         return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes('select status') && sql.includes('from sourcing_runs')) {
+        return { rows: [{ status: 'running' }] };
       }
 
       if (sql.includes('insert into sourcing_run_events')) {
@@ -1787,7 +1930,14 @@ test('AgentService runNanobotForSchedule sends source workflow guardrails in mes
     pool: {
       async query(sql) {
         if (sql.includes('from jobs') && sql.includes('custom_requirement')) {
-          return { rows: [{ custom_requirement: null }], rowCount: 1 };
+          return {
+            rows: [{
+              custom_requirement: null,
+              job_name: '健康顾问（B0047007）',
+              boss_encrypt_job_id: 'target-job-encrypt-id'
+            }],
+            rowCount: 1
+          };
         }
 
         throw new Error('recordRunEvent should not be called without runId');
@@ -1811,8 +1961,11 @@ test('AgentService runNanobotForSchedule sends source workflow guardrails in mes
     capturedMessage,
     [
       '/boss-sourcing --job "健康顾问_B0047007" --source --run-id "88"',
+      '本次运行只使用当前项目目录：PROJECT_ROOT="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f"；回写 CLI="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/scripts/agent-callback-cli.js"。不要猜测或探测其它历史路径。',
+      '本次任务的唯一后端岗位标识是 JOB_KEY="健康顾问_B0047007"。禁止根据 jobName、encryptJobId、页面标题或短 id 重新拼接、改写或替换 jobKey；如果页面恢复后落到其他岗位，必须先切回该 JOB_KEY 对应岗位再继续。',
       '如数据库中没有额外岗位定制要求，仅按 BOSS 职位信息正常执行寻源。',
       '运行契约：必须复用调用方提供的 RUN_ID=88；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "88"。结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。',
+      '岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，允许直接导航到目标推荐页 "https://www.zhipin.com/web/chat/recommend?jobid=target-job-encrypt-id" 并确认标题回到“健康顾问（B0047007）”。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。',
       '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
     ].join('\n')
   );
@@ -1826,7 +1979,14 @@ test('AgentService runNanobotForSchedule includes run id for followup mode', asy
     pool: {
       async query(sql) {
         if (sql.includes('from jobs') && sql.includes('custom_requirement')) {
-          return { rows: [{ custom_requirement: '必须有电话销售经验' }], rowCount: 1 };
+          return {
+            rows: [{
+              custom_requirement: '必须有电话销售经验',
+              job_name: '健康顾问（B0047007）',
+              boss_encrypt_job_id: 'target-job-encrypt-id'
+            }],
+            rowCount: 1
+          };
         }
 
         throw new Error('recordRunEvent should not be called without runId');
@@ -1850,6 +2010,8 @@ test('AgentService runNanobotForSchedule includes run id for followup mode', asy
     capturedMessage,
     [
       '/boss-sourcing --job "健康顾问_B0047007" --followup --run-id "91"',
+      '本次运行只使用当前项目目录：PROJECT_ROOT="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f"；回写 CLI="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/scripts/agent-callback-cli.js"。不要猜测或探测其它历史路径。',
+      '本次任务的唯一后端岗位标识是 JOB_KEY="健康顾问_B0047007"。禁止根据 jobName、encryptJobId、页面标题或短 id 重新拼接、改写或替换 jobKey；如果页面恢复后落到其他岗位，必须先切回该 JOB_KEY 对应岗位再继续。',
       '运行契约：必须复用调用方提供的 RUN_ID=91；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "91"。结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
     ].join('\n')
   );
@@ -1863,7 +2025,14 @@ test('AgentService runNanobotForSchedule maps chat mode to chat workflow message
     pool: {
       async query(sql) {
         if (sql.includes('from jobs') && sql.includes('custom_requirement')) {
-          return { rows: [{ custom_requirement: '必须有电话销售经验' }], rowCount: 1 };
+          return {
+            rows: [{
+              custom_requirement: '必须有电话销售经验',
+              job_name: '健康顾问（B0047007）',
+              boss_encrypt_job_id: 'target-job-encrypt-id'
+            }],
+            rowCount: 1
+          };
         }
 
         throw new Error('recordRunEvent should not be called without runId');
@@ -1887,6 +2056,8 @@ test('AgentService runNanobotForSchedule maps chat mode to chat workflow message
     capturedMessage,
     [
       '/boss-sourcing --job "健康顾问_B0047007" --chat --run-id "92"',
+      '本次运行只使用当前项目目录：PROJECT_ROOT="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f"；回写 CLI="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/scripts/agent-callback-cli.js"。不要猜测或探测其它历史路径。',
+      '本次任务的唯一后端岗位标识是 JOB_KEY="健康顾问_B0047007"。禁止根据 jobName、encryptJobId、页面标题或短 id 重新拼接、改写或替换 jobKey；如果页面恢复后落到其他岗位，必须先切回该 JOB_KEY 对应岗位再继续。',
       '运行契约：必须复用调用方提供的 RUN_ID=92；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "92"。结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
     ].join('\n')
   );
@@ -1924,6 +2095,8 @@ test('AgentService runNanobotForSchedule maps download mode to download workflow
     capturedMessage,
     [
       '/boss-sourcing --job "健康顾问_B0047007" --download --run-id "93"',
+      '本次运行只使用当前项目目录：PROJECT_ROOT="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f"；回写 CLI="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/scripts/agent-callback-cli.js"。不要猜测或探测其它历史路径。',
+      '本次任务的唯一后端岗位标识是 JOB_KEY="健康顾问_B0047007"。禁止根据 jobName、encryptJobId、页面标题或短 id 重新拼接、改写或替换 jobKey；如果页面恢复后落到其他岗位，必须先切回该 JOB_KEY 对应岗位再继续。',
       '运行契约：必须复用调用方提供的 RUN_ID=93；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "93"。结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
     ].join('\n')
   );
@@ -1961,6 +2134,8 @@ test('AgentService runNanobotForSchedule maps status mode to status workflow mes
     capturedMessage,
     [
       '/boss-sourcing --status --job "健康顾问_B0047007" --run-id "94"',
+      '本次运行只使用当前项目目录：PROJECT_ROOT="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f"；回写 CLI="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/scripts/agent-callback-cli.js"。不要猜测或探测其它历史路径。',
+      '本次任务的唯一后端岗位标识是 JOB_KEY="健康顾问_B0047007"。禁止根据 jobName、encryptJobId、页面标题或短 id 重新拼接、改写或替换 jobKey；如果页面恢复后落到其他岗位，必须先切回该 JOB_KEY 对应岗位再继续。',
       '运行契约：必须复用调用方提供的 RUN_ID=94；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "94"。结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
     ].join('\n')
   );
@@ -1974,7 +2149,14 @@ test('AgentService runNanobotForSchedule includes custom requirement in source m
     pool: {
       async query(sql) {
         if (sql.includes('from jobs') && sql.includes('custom_requirement')) {
-          return { rows: [{ custom_requirement: '必须有电话销售经验' }], rowCount: 1 };
+          return {
+            rows: [{
+              custom_requirement: '必须有电话销售经验',
+              job_name: '健康顾问（B0047007）',
+              boss_encrypt_job_id: 'target-job-encrypt-id'
+            }],
+            rowCount: 1
+          };
         }
 
         throw new Error(`Unexpected query: ${sql}`);
@@ -1998,9 +2180,12 @@ test('AgentService runNanobotForSchedule includes custom requirement in source m
     capturedMessage,
     [
       '/boss-sourcing --job "健康顾问_B0047007" --source --run-id "99"',
+      '本次运行只使用当前项目目录：PROJECT_ROOT="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f"；回写 CLI="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/scripts/agent-callback-cli.js"。不要猜测或探测其它历史路径。',
+      '本次任务的唯一后端岗位标识是 JOB_KEY="健康顾问_B0047007"。禁止根据 jobName、encryptJobId、页面标题或短 id 重新拼接、改写或替换 jobKey；如果页面恢复后落到其他岗位，必须先切回该 JOB_KEY 对应岗位再继续。',
       '执行寻源匹配时，除 BOSS 职位信息外，还必须叠加本地数据库维护的岗位定制要求；该要求不会同步回 BOSS，但会影响候选人筛选与判断。',
       '岗位定制要求：必须有电话销售经验',
       '运行契约：必须复用调用方提供的 RUN_ID=99；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "99"。结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。',
+      '岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，允许直接导航到目标推荐页 "https://www.zhipin.com/web/chat/recommend?jobid=target-job-encrypt-id" 并确认标题回到“健康顾问（B0047007）”。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。',
       '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
     ].join('\n')
   );
@@ -2242,6 +2427,67 @@ test('AgentService upsertCandidate records candidate_upserted event after databa
   );
   const candidateUpsertSql = queryCalls.find(({ sql }) => sql.includes('insert into job_candidates'))?.sql || '';
   assert.match(candidateUpsertSql, /\$5::timestamptz/);
+});
+
+test('AgentService upsertCandidate falls back to run-bound job when jobKey changed during run', async () => {
+  const queryCalls = [];
+  const { AgentService } = require('../src/services/agent-service');
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql, params = []) {
+        queryCalls.push({ sql, params });
+
+        if (sql.includes('insert into people')) {
+          return { rows: [{ id: 12 }], rowCount: 1 };
+        }
+
+        if (sql.includes('select id') && sql.includes('from jobs')) {
+          return { rows: [], rowCount: 0 };
+        }
+
+        if (sql.includes('select job_id') && sql.includes('from sourcing_runs')) {
+          return { rows: [{ job_id: 8 }], rowCount: 1 };
+        }
+
+        if (sql.includes('insert into job_candidates')) {
+          return { rows: [{ id: 55 }], rowCount: 1 };
+        }
+
+        if (sql.includes('insert into sourcing_run_events')) {
+          return { rows: [], rowCount: 1 };
+        }
+
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    }
+  });
+
+  const result = await agentService.upsertCandidate({
+    runId: 149,
+    eventId: 'candidate-upsert:149:stale-job-key:geek-1',
+    occurredAt: '2026-03-27T09:07:00.000Z',
+    jobKey: '面点师傅（B0038011）_8eca6cad',
+    bossEncryptGeekId: 'unknown-dingli-20260327',
+    name: '丁李',
+    city: '重庆',
+    education: '高中',
+    experience: '10年以上',
+    school: null,
+    status: 'discovered',
+    metadata: { matchTier: 'A' }
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.personId, 12);
+  assert.equal(result.candidateId, 55);
+  assert.ok(
+    queryCalls.some(({ sql, params }) =>
+      sql.includes('select job_id') &&
+      sql.includes('from sourcing_runs') &&
+      params[0] === 149
+    )
+  );
 });
 
 test('AgentService importRunEvents records raw events and projects non-duplicate items', async () => {

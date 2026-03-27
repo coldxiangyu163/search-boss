@@ -210,6 +210,10 @@ class JobService {
   async #executeSyncRun({ runId }) {
     try {
       const syncResult = await this.agentService.runNanobotForJobSync({ runId });
+      const runStatus = await this.agentService.getRunStatus?.(runId);
+      if (isTerminalRunStatus(runStatus)) {
+        return;
+      }
       const hasPersistedJobs = await this.#hasJobsBatchSynced(runId)
         || detectJobsBatchSyncedFromOutput(syncResult);
       if (!hasPersistedJobs) {
@@ -223,6 +227,10 @@ class JobService {
       });
     } catch (error) {
       try {
+        const runStatus = await this.agentService.getRunStatus?.(runId);
+        if (isTerminalRunStatus(runStatus)) {
+          return;
+        }
         await this.agentService.failRun({
           runId,
           eventId: `job-sync:failed:${runId}`,
@@ -280,6 +288,10 @@ function detectJobsBatchSyncedFromOutput(syncResult) {
   }
 
   return /jobs_batch_synced/.test(combinedOutput);
+}
+
+function isTerminalRunStatus(status) {
+  return status === 'completed' || status === 'failed';
 }
 
 function resolveJobKey(job) {

@@ -78,8 +78,8 @@ const {
 } = window.SyncLogScroll;
 
 const {
-  createSyncModalProgress,
-  updateSyncModalProgress,
+  createSyncModalProgress: createSyncModalProgressState,
+  updateSyncModalProgress: updateSyncModalProgressState,
   buildSyncStages: buildSyncTimelineStages
 } = window.SyncModalProgress;
 
@@ -447,7 +447,7 @@ function openSyncModal(taskType = 'sync_jobs') {
     startedAt: new Date().toISOString(),
     error: '',
     events: [],
-    progress: createSyncModalProgress(),
+    progress: createSyncModalProgressState(),
     isExpanded: true,
     pollTimer: null,
     lastEventId: 0,
@@ -468,7 +468,7 @@ function toggleSyncLogPanel() {
 
 function appendSyncEvent(event) {
   state.syncModal.events = [...state.syncModal.events, event].slice(-100);
-  state.syncModal.progress = updateSyncModalProgress(state.syncModal.progress, event);
+  state.syncModal.progress = updateSyncModalProgressState(state.syncModal.progress, event);
 }
 
 function getSyncLogScrollSnapshot() {

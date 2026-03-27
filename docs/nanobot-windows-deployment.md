@@ -677,7 +677,8 @@ Windows 上如果要定时跑 follow-up，需要你自己加：
 - 已创建 `search-boss` 项目目录
 - 已创建 Nanobot workspace 目录
 - 已复制 skills
-- 已替换 skill 里的旧绝对路径
+- 已准备项目根目录 `.env`
+- 已准备 `workspace/runtime.json`
 - 已设置 `AGENT_TOKEN`
 - 已设置 `DATABASE_URL`
 - 已设置 `NANOBOT_CONFIG_PATH`
@@ -705,17 +706,23 @@ Windows 上如果要定时跑 follow-up，需要你自己加：
 
 - Windows 原生
 
-但前提是你要继续做一轮配置改造，把这些地方改成真正跨平台：
+当前代码已经完成了第一轮配置改造：
 
 - `[src/config.js](/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/src/config.js)`
 - `[scripts/agent-callback-cli.js](/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/scripts/agent-callback-cli.js)`
 - `boss-sourcing/SKILL.md`
 - `boss-resume-ingest/SKILL.md`
+
+但 Windows 原生落地前，仍然建议继续验证：
+
+- `workspace/runtime.json` 的 Windows 路径写法
+- PowerShell / CMD 下 `uv run nanobot agent` 的命令行行为
+- Chrome DevTools MCP 在 Windows 原生的连通性
 - Nanobot `config.json`
 
 ---
 
 如果你下一步要继续，我建议直接做两件事：
 
-1. 把 skill 和配置里的硬编码路径改成“Windows/WSL2 可配置”。
+1. 把 `runtime.json`、`.env`、Nanobot `config.json` 收敛成一套可复制模板。
 2. 再补一个 `config.windows.example.json` 和 `deploy.windows.ps1`，让 Windows 部署真正可复制。

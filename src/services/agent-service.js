@@ -1,3 +1,5 @@
+const path = require('node:path');
+
 class AgentService {
   constructor({ pool, nanobotRunner = null }) {
     this.pool = pool;
@@ -195,7 +197,20 @@ class AgentService {
       [jobKey]
     );
 
-    const jobId = jobResult.rows[0]?.id;
+    let jobId = jobResult.rows[0]?.id;
+    if (!jobId && runId) {
+      const runJobResult = await this.pool.query(
+        `
+          select job_id
+          from sourcing_runs
+          where id = $1
+          limit 1
+        `,
+        [runId]
+      );
+      jobId = runJobResult.rows[0]?.job_id || null;
+    }
+
     if (!jobId) {
       throw new Error('job_not_found');
     }
@@ -976,29 +991,40 @@ class AgentService {
     if (mode === 'followup') {
       message = [
         `/boss-sourcing --job "${jobKey}" --followup --run-id "${runId}"`,
+        buildProjectRootPrompt(),
+        buildExactJobKeyPrompt(jobKey),
         buildRunContractPrompt(runId)
       ].join('\n');
     } else if (mode === 'chat') {
       message = [
         `/boss-sourcing --job "${jobKey}" --chat --run-id "${runId}"`,
+        buildProjectRootPrompt(),
+        buildExactJobKeyPrompt(jobKey),
         buildRunContractPrompt(runId)
       ].join('\n');
     } else if (mode === 'download') {
       message = [
         `/boss-sourcing --job "${jobKey}" --download --run-id "${runId}"`,
+        buildProjectRootPrompt(),
+        buildExactJobKeyPrompt(jobKey),
         buildRunContractPrompt(runId)
       ].join('\n');
     } else if (mode === 'status') {
       message = [
         `/boss-sourcing --status --job "${jobKey}" --run-id "${runId}"`,
+        buildProjectRootPrompt(),
+        buildExactJobKeyPrompt(jobKey),
         buildRunContractPrompt(runId)
       ].join('\n');
     } else {
       const jobContext = await this.#getJobNanobotContext(jobKey);
       message = [
         `/boss-sourcing --job "${jobKey}" --source --run-id "${runId}"`,
+        buildProjectRootPrompt(),
+        buildExactJobKeyPrompt(jobKey),
         buildCustomRequirementPrompt(jobContext.customRequirement),
         buildRunContractPrompt(runId),
+        buildSourceRecoveryPrompt(jobContext),
         '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
       ].join('\n');
     }
@@ -1013,7 +1039,9 @@ class AgentService {
 
     const message = [
       `/boss-sourcing --sync --run-id "${runId}"`,
+      buildProjectRootPrompt(),
       '只执行岗位同步：采集职位列表和职位详情，并调用 /api/agent/jobs/batch 回写本地后台。禁止进入推荐牛人、打招呼、聊天跟进、下载简历。',
+      '稳定性优先：以职位列表接口和当前页面可稳定读取的数据为准；如果详情接口中的 job 或 jdText 为空，允许保留空 jdText，并把原始详情放进 metadata/detailRaw，禁止为了补齐 JD 再打开编辑页、提取 HttpOnly cookie、写临时抓取脚本、复用浏览器 cookie 发起 Node 请求，或绕过 agent-callback-cli.js / 本地网络护栏。',
       buildRunContractPrompt(runId)
     ].join('\n');
     return this.#runNanobotWithStreaming({ runId, message });
@@ -1056,6 +1084,7 @@ class AgentService {
       `
         select
           job_name,
+          boss_encrypt_job_id,
           custom_requirement
         from jobs
         where job_key = $1
@@ -1069,6 +1098,8 @@ class AgentService {
     }
 
     return {
+      jobName: result.rows[0].job_name || '',
+      bossEncryptJobId: result.rows[0].boss_encrypt_job_id || '',
       customRequirement: normalizeJobRequirement(result.rows[0].custom_requirement)
     };
   }
@@ -1099,6 +1130,34 @@ function buildCustomRequirementPrompt(customRequirement) {
     '执行寻源匹配时，除 BOSS 职位信息外，还必须叠加本地数据库维护的岗位定制要求；该要求不会同步回 BOSS，但会影响候选人筛选与判断。',
     `岗位定制要求：${customRequirement}`
   ].join('\n');
+}
+
+function buildProjectRootPrompt() {
+  const projectRoot = path.resolve(__dirname, '..', '..');
+  const cliPath = path.join(projectRoot, 'scripts', 'agent-callback-cli.js');
+
+  return `本次运行只使用当前项目目录：PROJECT_ROOT="${projectRoot}"；回写 CLI="${cliPath}"。不要猜测或探测其它历史路径。`;
+}
+
+function buildExactJobKeyPrompt(jobKey) {
+  return `本次任务的唯一后端岗位标识是 JOB_KEY="${jobKey}"。禁止根据 jobName、encryptJobId、页面标题或短 id 重新拼接、改写或替换 jobKey；如果页面恢复后落到其他岗位，必须先切回该 JOB_KEY 对应岗位再继续。`;
+}
+
+function buildSourceRecoveryPrompt({ jobName, bossEncryptJobId }) {
+  const normalizedJobName = String(jobName || '').trim();
+  const recommendUrl = bossEncryptJobId
+    ? `https://www.zhipin.com/web/chat/recommend?jobid=${bossEncryptJobId}`
+    : '';
+
+  if (recommendUrl && normalizedJobName) {
+    return `岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，允许直接导航到目标推荐页 "${recommendUrl}" 并确认标题回到“${normalizedJobName}”。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。`;
+  }
+
+  if (recommendUrl) {
+    return `岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，允许直接导航到目标推荐页 "${recommendUrl}"。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。`;
+  }
+
+  return '岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，只允许使用显式导航重新打开目标推荐页。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。';
 }
 
 function buildRunContractPrompt(runId) {

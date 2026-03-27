@@ -1,7 +1,8 @@
 const fs = require('node:fs/promises');
+const { resolveRuntimeEnv } = require('../src/runtime-env');
 
-const DEFAULT_API_BASE = 'http://127.0.0.1:3000';
-const DEFAULT_TOKEN = 'search-boss-local-agent';
+const LEGACY_API_BASE = 'http://127.0.0.1:3000';
+const LEGACY_TOKEN = 'search-boss-local-agent';
 
 const COMMANDS = {
   'jobs-batch': { method: 'POST', path: () => '/api/agent/jobs/batch', requiresFile: true },
@@ -20,9 +21,19 @@ const COMMANDS = {
   'run-events': { method: 'GET', path: ({ runId, afterId }) => `/api/runs/${encodeURIComponent(runId)}/events${afterId ? `?afterId=${encodeURIComponent(afterId)}` : ''}`, requiresRunId: true, includeToken: false }
 };
 
-async function executeCli(argv, { requestImpl = defaultRequestImpl, stdout = process.stdout, stderr = process.stderr } = {}) {
+async function executeCli(
+  argv,
+  {
+    requestImpl = defaultRequestImpl,
+    stdout = process.stdout,
+    stderr = process.stderr,
+    env = process.env,
+    envFilePath
+  } = {}
+) {
   try {
-    const options = parseArgs(argv);
+    const runtimeEnv = resolveRuntimeEnv({ env, envFilePath });
+    const options = parseArgs(argv, { env: runtimeEnv });
     const command = COMMANDS[options.command];
 
     if (!command) {
@@ -48,12 +59,12 @@ async function executeCli(argv, { requestImpl = defaultRequestImpl, stdout = pro
   }
 }
 
-function parseArgs(argv) {
+function parseArgs(argv, { env = process.env } = {}) {
   const [command, ...rest] = argv;
   const options = {
     command,
-    apiBase: DEFAULT_API_BASE,
-    token: DEFAULT_TOKEN
+    apiBase: env.SEARCH_BOSS_API_BASE || env.AGENT_CALLBACK_API_BASE || LEGACY_API_BASE,
+    token: env.SEARCH_BOSS_AGENT_TOKEN || env.AGENT_TOKEN || LEGACY_TOKEN
   };
 
   for (let index = 0; index < rest.length; index += 1) {

@@ -139,3 +139,71 @@ test('agent callback cli fails fast on missing required args', async () => {
   assert.equal(result.exitCode, 1);
   assert.match(result.stderr, /Missing required argument: --run-id/);
 });
+
+test('agent callback cli reads api base and token from env when flags are omitted', async () => {
+  const calls = [];
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-callback-cli-'));
+  const payloadFile = path.join(tempDir, 'complete.json');
+
+  await fs.writeFile(payloadFile, JSON.stringify({
+    eventId: 'run-complete:41:attempt-1',
+    summary: 'done'
+  }));
+
+  const result = await executeCli(['run-complete', '--run-id', '41', '--file', payloadFile], {
+    env: {
+      SEARCH_BOSS_API_BASE: 'http://windows-host:3000',
+      SEARCH_BOSS_AGENT_TOKEN: 'windows-agent-token'
+    },
+    requestImpl: async (request) => {
+      calls.push(request);
+      return {
+        status: 200,
+        json: async () => ({ ok: true, status: 'completed' })
+      };
+    }
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(
+    calls[0].url,
+    'http://windows-host:3000/api/agent/runs/41/complete?token=windows-agent-token'
+  );
+});
+
+test('agent callback cli reads api base and token from .env file when process env is empty', async () => {
+  const calls = [];
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-callback-cli-'));
+  const payloadFile = path.join(tempDir, 'complete.json');
+  const envFilePath = path.join(tempDir, '.env');
+
+  await fs.writeFile(payloadFile, JSON.stringify({
+    eventId: 'run-complete:88:attempt-1',
+    summary: 'done'
+  }));
+  await fs.writeFile(
+    envFilePath,
+    [
+      'SEARCH_BOSS_API_BASE=http://macos-local:3011',
+      'SEARCH_BOSS_AGENT_TOKEN=macos-local-agent'
+    ].join('\n')
+  );
+
+  const result = await executeCli(['run-complete', '--run-id', '88', '--file', payloadFile], {
+    env: {},
+    envFilePath,
+    requestImpl: async (request) => {
+      calls.push(request);
+      return {
+        status: 200,
+        json: async () => ({ ok: true, status: 'completed' })
+      };
+    }
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(
+    calls[0].url,
+    'http://macos-local:3011/api/agent/runs/88/complete?token=macos-local-agent'
+  );
+});

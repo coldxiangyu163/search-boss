@@ -124,16 +124,18 @@
 
 文件：`src/config.js`
 
-- 默认端口：`3000`
-- 默认目标库：`postgresql://...@127.0.0.1:5432/search_boss_ops_20260324`
-- 默认源库：`postgresql://...@127.0.0.1:5432/search_boss_admin`
-- 默认 Agent Token：`search-boss-local-agent`
-- 默认 Nanobot 配置路径：`/Users/coldxiangyu/.nanobot-boss/config.json`
+- 默认端口仍是：`3000`
+- `DATABASE_URL`、`AGENT_TOKEN`、`NANOBOT_CONFIG_PATH` 已改为必填运行时配置
+- `SOURCE_DATABASE_URL` 现在是可选运行时配置
+- 服务启动时会优先读取进程环境变量，其次读取项目根目录 `.env` / `.env.local`
 
 文件：`scripts/agent-callback-cli.js`
 
-- 默认 API 地址：`http://127.0.0.1:3000`
-- 默认 token：`search-boss-local-agent`
+- CLI 现在会优先读取：
+  - `SEARCH_BOSS_API_BASE`
+  - `SEARCH_BOSS_AGENT_TOKEN`
+- 如果进程环境没有，再读取项目根目录 `.env` / `.env.local`
+- `--api-base` 和 `--token` 仍然可以显式覆盖
 
 ### 4.2 Nanobot 配置硬编码
 
@@ -147,26 +149,29 @@
 - `chrome-devtools` MCP 当前写死：
   - `--browser-url=http://127.0.0.1:9222`
 
-### 4.3 skill 硬编码
+### 4.3 skill 运行时契约
 
 文件：`workspace/skills/boss-sourcing/SKILL.md`
 
-- `PROJECT_ROOT = ~/work/百融云创/search-boss`
-- `LOCAL_API = http://127.0.0.1:3000`
-- `CLI = node ~/work/百融云创/search-boss/scripts/agent-callback-cli.js`
-- `TOKEN = search-boss-local-agent`
-- `NANOBOT_MEMORY_DIR = /Users/coldxiangyu/.nanobot-boss/workspace/memory`
-- `MEMORY_SUMMARY_FILE = /Users/coldxiangyu/.nanobot-boss/workspace/memory/MEMORY.md`
-- `MEMORY_HISTORY_FILE = /Users/coldxiangyu/.nanobot-boss/workspace/memory/HISTORY.md`
-- `RESUME_LEDGER_FILE = /Users/coldxiangyu/.nanobot-boss/workspace/memory/boss-sourcing-resume-ledger.jsonl`
-- 示例命令里还写死了：
-  - `uv run nanobot agent --config "/Users/coldxiangyu/.nanobot-boss/config.json" ...`
+- 已改成 runtime placeholder，不再直接写死旧机器路径
+- 当前约定优先级是：
+  1. 调用方显式传入
+  2. `NANOBOT_RUNTIME_FILE`
+  3. 环境变量
+- 关键逻辑名包括：
+  - `PROJECT_ROOT`
+  - `RESUME_DIR`
+  - `SEARCH_BOSS_API_BASE`
+  - `SEARCH_BOSS_AGENT_TOKEN`
+  - `NANOBOT_MEMORY_DIR`
+  - `MEMORY_SUMMARY_FILE`
+  - `MEMORY_HISTORY_FILE`
+  - `RESUME_LEDGER_FILE`
+  - `NANOBOT_CONFIG_PATH`
 
 文件：`workspace/skills/boss-resume-ingest/SKILL.md`
 
-- `PROJECT_ROOT = ~/work/百融云创/search-boss`
-- `CLI = node ~/work/百融云创/search-boss/scripts/agent-callback-cli.js`
-- `RESUME_LEDGER_FILE = /Users/coldxiangyu/.nanobot-boss/workspace/memory/boss-sourcing-resume-ledger.jsonl`
+- 已改成与 `boss-sourcing` 相同的 runtime contract，不再要求手工改 skill 本体
 
 ### 4.4 数据和运行目录强绑定
 
@@ -207,7 +212,15 @@
 
 ## 6. 新环境变量与配置清单
 
-当前项目没有内置 `dotenv`，所以你需要通过 shell、systemd、pm2、容器环境变量等方式注入。
+当前项目已经内置了轻量级 `.env` / `.env.local` 加载能力。
+
+优先级：
+
+1. 进程环境变量
+2. 项目根目录 `.env.local`
+3. 项目根目录 `.env`
+
+生产环境仍然推荐通过 systemd、pm2、容器环境变量等方式注入，不建议把正式密钥长期放在 `.env` 文件里。
 
 ### 6.1 `search-boss` 服务环境变量
 
@@ -230,7 +243,11 @@ export DATABASE_URL='postgresql://search_boss:strong_password@127.0.0.1:5432/sea
 export SOURCE_DATABASE_URL='postgresql://legacy_reader:strong_password@127.0.0.1:5432/search_boss_admin'
 export AGENT_TOKEN='replace-with-long-random-token'
 export NANOBOT_CONFIG_PATH='/opt/nanobot-boss/config.json'
+export SEARCH_BOSS_API_BASE='http://127.0.0.1:3000'
+export SEARCH_BOSS_AGENT_TOKEN="$AGENT_TOKEN"
 ```
+
+也可以直接写成项目根目录 `deploy.env.example` 对应的 `.env`。
 
 ### 6.2 Nanobot 配置项
 
@@ -452,12 +469,13 @@ google-chrome \
 
 ```bash
 cd /opt/search-boss
-export PORT=3000
-export DATABASE_URL='postgresql://search_boss:strong_password@127.0.0.1:5432/search_boss_ops'
-export AGENT_TOKEN='replace-with-long-random-token'
-export NANOBOT_CONFIG_PATH='/opt/nanobot-boss/config.json'
 npm start
 ```
+
+前提：
+
+- 你已经通过环境变量注入上述配置，或者
+- 你已经在项目根目录写好了 `.env`
 
 ### 7.11 验证后台可用
 
@@ -475,11 +493,10 @@ curl http://127.0.0.1:3000/health
 
 ```bash
 cd /opt/search-boss
-node scripts/agent-callback-cli.js dashboard-summary \
-  --api-base http://127.0.0.1:3000
+node scripts/agent-callback-cli.js dashboard-summary
 ```
 
-如果你换了 token，写接口命令要显式带：
+如果你不想依赖 `.env` / 环境变量，写接口命令仍可显式带参数：
 
 ```bash
 node scripts/agent-callback-cli.js jobs-batch \
@@ -598,11 +615,11 @@ curl -X POST http://127.0.0.1:3000/api/jobs/<jobKey>/tasks/followup/trigger
 
 这些不是“迁移必须”，但非常建议尽快补：
 
-- 把 `src/config.js` 的默认数据库连接串移除，改为必须显式注入
-- 把 `scripts/agent-callback-cli.js` 默认 `apiBase` 和 `token` 改为从环境变量读取
-- 把 skill 里的 `PROJECT_ROOT`、`CLI`、`LOCAL_API`、`TOKEN`、`NANOBOT_MEMORY_DIR` 全部改成占位变量或明确的部署说明
+- 保留 `src/config.js` 的显式必填策略，不要再把数据库串和 token 写回代码默认值
+- 保留 `scripts/agent-callback-cli.js` 的环境变量 / `.env` 优先策略
+- 继续把剩余 skill 收敛到同一套 runtime contract
 - 把 Nanobot `config.json` 里的 provider key、Slack、Feishu 等敏感信息迁出代码文件
-- 补一个真正的 `.env.example` 或 `deploy.env.example`
+- 维护好 `deploy.env.example`
 - 如果要长期自动运行，增加守护进程和真正的 scheduler worker
 
 ## 12. 最终迁移核对表
@@ -619,8 +636,8 @@ curl -X POST http://127.0.0.1:3000/api/jobs/<jobKey>/tasks/followup/trigger
 - 已部署 `/opt/nanobot-boss/config.json`
 - 已部署 `/opt/nanobot-boss/workspace`
 - 已复制 `skills`
-- 已修正 `boss-sourcing` 的路径和 API 地址
-- 已修正 `boss-resume-ingest` 的路径和 API 地址
+- 已准备项目根目录 `.env` 或等价环境变量
+- 已准备 `workspace/runtime.json`
 - 已启动 Chrome 远程调试 `9222`
 - Chrome 已登录 BOSS
 - `GET /health` 正常
@@ -632,9 +649,9 @@ curl -X POST http://127.0.0.1:3000/api/jobs/<jobKey>/tasks/followup/trigger
 按优先级排序：
 
 1. skill 里写死了旧电脑项目路径，导致 Nanobot 能启动但 CLI 回调失败。
-2. Nanobot `workspace` 写死了旧用户家目录，导致找不到 skill / memory / sessions。
+2. `workspace/runtime.json` 没有按新环境填写，导致 skill 找不到 `PROJECT_ROOT` / memory / ledger。
 3. `allowedUrls` 只放行 `127.0.0.1:3000`，一旦新环境改端口或走域名，本地 API 会被 Nanobot 拒绝。
-4. `AGENT_TOKEN` 与 skill 文档中的 `TOKEN` 不一致，导致写接口 401。
+4. `AGENT_TOKEN` 与 `SEARCH_BOSS_AGENT_TOKEN` 不一致，导致写接口 401。
 5. Chrome 没有用 `9222` 远程调试启动，`chrome-devtools` MCP 直接不可用。
 6. 新环境没有 `resumes/` 写权限，附件下载流程会在落盘阶段失败。
 7. 以为 `scheduled_jobs` 已经自动生效，实际上并没有独立调度进程。

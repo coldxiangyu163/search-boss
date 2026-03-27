@@ -228,9 +228,11 @@ function createApp({ services = {}, config = {} } = {}) {
         res.status(401).json({ error: 'unauthorized' });
         return;
       }
+
+      const payload = normalizeRunEventPayload(req.body, req.params.runId);
       const result = await services.agent.recordRunEvent({
         runId: req.params.runId,
-        ...req.body
+        ...payload
       });
       res.json(result);
     } catch (error) {
@@ -441,6 +443,37 @@ function normalizeImportEventsPayload(body, fallbackRunId) {
     runId: fallbackRunId,
     ...payload,
     events: []
+  };
+}
+
+function normalizeRunEventPayload(body, fallbackRunId) {
+  const payload = body && typeof body === 'object' ? body : {};
+
+  if (payload.eventId || payload.eventType) {
+    return payload;
+  }
+
+  if (payload.type !== 'bootstrap') {
+    return payload;
+  }
+
+  const occurredAt = payload.occurredAt || payload.timestamp || new Date().toISOString();
+  const runId = payload.runId || fallbackRunId;
+
+  return {
+    attemptId: payload.attemptId || null,
+    eventId: `bootstrap:${runId}:${occurredAt}`,
+    sequence: payload.sequence || null,
+    occurredAt,
+    eventType: 'agent_bootstrap',
+    stage: 'bootstrap',
+    message: payload.message || 'agent bootstrap',
+    payload: {
+      type: payload.type,
+      stage: payload.stage || null,
+      mode: payload.mode || null,
+      timestamp: payload.timestamp || null
+    }
   };
 }
 
