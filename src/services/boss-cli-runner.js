@@ -27,6 +27,32 @@ class BossCliRunner {
     return this.#run(['recommend', '--run-id', String(runId), '--limit', String(limit)]);
   }
 
+  async clickRecommendPager({ runId, direction = 'next' }) {
+    return this.#run([
+      'recommend-pager',
+      '--run-id',
+      String(runId),
+      '--direction',
+      String(direction)
+    ]);
+  }
+
+  async inspectRecommendState({ runId }) {
+    return this.#run([
+      'recommend-state',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
+  async inspectRecommendDetail({ runId }) {
+    return this.#run([
+      'recommend-detail',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
   async getJobDetail({ runId, jobId }) {
     return this.#run(['job-detail', '--run-id', String(runId), '--job-id', String(jobId)]);
   }

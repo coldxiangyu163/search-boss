@@ -174,6 +174,50 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
     };
   }
 
+  if (options.command === 'recommend-pager') {
+    const session = await sessionStore.loadSession(options.runId);
+    const direction = options.direction || 'next';
+    const result = await browserCommands.clickRecommendPager({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      direction
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
+  if (options.command === 'recommend-state') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.inspectRecommendState({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
+  if (options.command === 'recommend-detail') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.inspectRecommendDetail({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
   if (options.command === 'job-detail') {
     const session = await sessionStore.loadSession(options.runId);
     const jobListData = await browserCommands.bossFetch({

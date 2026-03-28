@@ -298,7 +298,7 @@ function createApp({ services = {}, config = {} } = {}) {
       }
       const result = await services.agent.completeRun({
         runId: req.params.runId,
-        ...req.body
+        ...normalizeTerminalPayload(req.body)
       });
       res.json(result);
     } catch (error) {
@@ -314,7 +314,7 @@ function createApp({ services = {}, config = {} } = {}) {
       }
       const result = await services.agent.failRun({
         runId: req.params.runId,
-        ...req.body
+        ...normalizeTerminalPayload(req.body)
       });
       res.json(result);
     } catch (error) {
@@ -499,6 +499,38 @@ function normalizeRunEventPayload(body, fallbackRunId) {
       mode: payload.mode || null,
       timestamp: payload.timestamp || null
     }
+  };
+}
+
+function normalizeTerminalPayload(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return body;
+  }
+
+  if (body.payload !== undefined) {
+    return body;
+  }
+
+  const {
+    eventId,
+    attemptId,
+    sequence,
+    occurredAt,
+    message,
+    ...legacyPayload
+  } = body;
+
+  if (Object.keys(legacyPayload).length === 0) {
+    return body;
+  }
+
+  return {
+    eventId,
+    attemptId,
+    sequence,
+    occurredAt,
+    message,
+    payload: legacyPayload
   };
 }
 

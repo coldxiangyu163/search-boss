@@ -200,6 +200,134 @@ test('recommend returns structured candidate rows from the current target', asyn
   assert.equal(payload.candidates[0].labels, '活跃');
 });
 
+test('recommend-pager triggers a real-click pager action on the bound target', async () => {
+  const stdout = createWritable();
+  const calls = [];
+
+  const result = await executeCli(['recommend-pager', '--run-id', '10', '--direction', 'next'], {
+    stdout,
+    env: {
+      DATABASE_URL: 'postgresql://example',
+      AGENT_TOKEN: 'token',
+      NANOBOT_CONFIG_PATH: '/tmp/nanobot.json'
+    },
+    dependencies: {
+      sessionStore: {
+        loadSession: async () => ({
+          runId: '10',
+          targetId: 'boss-1',
+          epoch: 0
+        })
+      },
+      browserCommands: {
+        clickRecommendPager: async (payload) => {
+          calls.push(payload);
+          return {
+            ok: true,
+            direction: 'next',
+            x: 120,
+            y: 240
+          };
+        }
+      }
+    }
+  });
+
+  const payload = JSON.parse(stdout.output);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(calls[0].targetId, 'boss-1');
+  assert.equal(calls[0].direction, 'next');
+  assert.equal(payload.direction, 'next');
+  assert.equal(payload.x, 120);
+});
+
+test('recommend-state returns deterministic recommend detail signals for the bound target', async () => {
+  const stdout = createWritable();
+  const calls = [];
+
+  const result = await executeCli(['recommend-state', '--run-id', '11'], {
+    stdout,
+    env: {
+      DATABASE_URL: 'postgresql://example',
+      AGENT_TOKEN: 'token',
+      NANOBOT_CONFIG_PATH: '/tmp/nanobot.json'
+    },
+    dependencies: {
+      sessionStore: {
+        loadSession: async () => ({
+          runId: '11',
+          targetId: 'boss-1',
+          epoch: 0
+        })
+      },
+      browserCommands: {
+        inspectRecommendState: async (payload) => {
+          calls.push(payload);
+          return {
+            ok: true,
+            detailOpen: true,
+            nextVisible: true,
+            prevVisible: true,
+            similarCandidatesVisible: true
+          };
+        }
+      }
+    }
+  });
+
+  const payload = JSON.parse(stdout.output);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(calls[0].targetId, 'boss-1');
+  assert.equal(payload.detailOpen, true);
+  assert.equal(payload.nextVisible, true);
+  assert.equal(payload.similarCandidatesVisible, true);
+});
+
+test('recommend-detail returns deterministic nested detail summary for the bound target', async () => {
+  const stdout = createWritable();
+  const calls = [];
+
+  const result = await executeCli(['recommend-detail', '--run-id', '12'], {
+    stdout,
+    env: {
+      DATABASE_URL: 'postgresql://example',
+      AGENT_TOKEN: 'token',
+      NANOBOT_CONFIG_PATH: '/tmp/nanobot.json'
+    },
+    dependencies: {
+      sessionStore: {
+        loadSession: async () => ({
+          runId: '12',
+          targetId: 'boss-1',
+          epoch: 0
+        })
+      },
+      browserCommands: {
+        inspectRecommendDetail: async (payload) => {
+          calls.push(payload);
+          return {
+            ok: true,
+            name: '王庭',
+            currentActionText: '继续沟通',
+            hasExperienceSection: true,
+            hasEducationSection: true
+          };
+        }
+      }
+    }
+  });
+
+  const payload = JSON.parse(stdout.output);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(calls[0].targetId, 'boss-1');
+  assert.equal(payload.name, '王庭');
+  assert.equal(payload.currentActionText, '继续沟通');
+  assert.equal(payload.hasExperienceSection, true);
+});
+
 test('chatlist reads the friend list for the bound target', async () => {
   const stdout = createWritable();
   const calls = [];

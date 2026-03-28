@@ -56,6 +56,8 @@ class AgentService {
     message,
     payload = {}
   }) {
+    const resolvedOccurredAt = occurredAt || new Date().toISOString();
+    const resolvedEventId = eventId || `${eventType}:${runId || 'no-run'}:${resolvedOccurredAt}`;
     const result = await this.pool.query(
       `
         insert into sourcing_run_events (
@@ -72,7 +74,17 @@ class AgentService {
         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         on conflict (run_id, event_id) do nothing
       `,
-      [runId, attemptId || null, eventId, sequence || null, stage || null, eventType, message || eventType, payload, occurredAt || new Date().toISOString()]
+      [
+        runId,
+        attemptId || null,
+        resolvedEventId,
+        sequence || null,
+        stage || null,
+        eventType,
+        message || eventType,
+        payload,
+        resolvedOccurredAt
+      ]
     );
 
     return { ok: true, duplicated: result.rowCount === 0 };
@@ -353,6 +365,8 @@ class AgentService {
     bossEncryptGeekId,
     payload = {}
   }) {
+    const resolvedOccurredAt = occurredAt || new Date().toISOString();
+    const resolvedEventId = eventId || `${actionType}:${runId || 'no-run'}:${resolvedOccurredAt}`;
     const jobCandidate = await this.resolveJobCandidateForWrite({
       candidateId,
       bossEncryptGeekId,
@@ -385,7 +399,23 @@ class AgentService {
               updated_at = now()
           where id = $1
         `,
-        [jobCandidate.id, occurredAt]
+        [jobCandidate.id, resolvedOccurredAt]
+      );
+    }
+
+    if (actionResult.rows[0] && actionType === 'greet_sent') {
+      await this.pool.query(
+        `
+          update job_candidates
+          set lifecycle_status = case
+                when lifecycle_status in ('responded', 'resume_requested', 'resume_received', 'resume_downloaded') then lifecycle_status
+                else 'greeted'
+              end,
+              last_outbound_at = $2,
+              updated_at = now()
+          where id = $1
+        `,
+        [jobCandidate.id, resolvedOccurredAt]
       );
     }
 
@@ -409,13 +439,13 @@ class AgentService {
         [
           runId,
           attemptId || null,
-          eventId,
+          resolvedEventId,
           sequence || null,
           'agent_action',
           actionType,
           actionType,
           payload,
-          occurredAt || new Date().toISOString()
+          resolvedOccurredAt
         ]
       );
     }
@@ -1036,7 +1066,7 @@ class AgentService {
         buildChatWriteContractPrompt(),
         buildRunContractPrompt(runId),
         buildNoRepoIntrospectionPrompt(),
-        buildBootstrapSequencePrompt(),
+        buildBootstrapSequencePrompt(mode),
         buildCliUsagePrompt(),
         buildAttachmentHandoffPrompt(runId),
         buildFailureEvidencePrompt(),
@@ -1051,7 +1081,7 @@ class AgentService {
         buildChatWriteContractPrompt(),
         buildRunContractPrompt(runId),
         buildNoRepoIntrospectionPrompt(),
-        buildBootstrapSequencePrompt(),
+        buildBootstrapSequencePrompt(mode),
         buildCliUsagePrompt(),
         buildAttachmentHandoffPrompt(runId),
         buildFailureEvidencePrompt(),
@@ -1066,7 +1096,7 @@ class AgentService {
         buildDownloadWriteContractPrompt(),
         buildRunContractPrompt(runId),
         buildNoRepoIntrospectionPrompt(),
-        buildBootstrapSequencePrompt(),
+        buildBootstrapSequencePrompt(mode),
         buildCliUsagePrompt(),
         buildAttachmentHandoffPrompt(runId),
         buildFailureEvidencePrompt(),
@@ -1079,7 +1109,7 @@ class AgentService {
         buildExactJobKeyPrompt(jobKey),
         buildRunContractPrompt(runId),
         buildNoRepoIntrospectionPrompt(),
-        buildBootstrapSequencePrompt(),
+        buildBootstrapSequencePrompt(mode),
         buildCliUsagePrompt(),
         buildFailureEvidencePrompt(),
         buildCompletionPrompt()
@@ -1095,14 +1125,14 @@ class AgentService {
         buildSourceWriteContractPrompt(),
         buildRunContractPrompt(runId),
         buildNoRepoIntrospectionPrompt(),
-        buildBootstrapSequencePrompt(),
+        buildBootstrapSequencePrompt(mode),
         buildCliUsagePrompt(),
         buildFailureEvidencePrompt(),
         buildCompletionPrompt(),
         buildSourceRecoveryPrompt(jobContext),
         buildTerminalFailPrompt(),
         buildSourceQuotaPrompt(),
-        '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
+        buildSourceStateGuardPrompt()
       ].filter(Boolean).join('\n');
     }
 
@@ -1142,7 +1172,7 @@ class AgentService {
       buildSyncWriteContractPrompt(),
       buildRunContractPrompt(runId),
       buildNoRepoIntrospectionPrompt(),
-      buildBootstrapSequencePrompt(),
+      buildBootstrapSequencePrompt('sync'),
       buildCliUsagePrompt(),
       buildFailureEvidencePrompt(),
       buildCompletionPrompt()
@@ -1556,14 +1586,14 @@ function buildSourceRecoveryPrompt({ jobName, bossEncryptJobId }) {
     : '';
 
   if (recommendUrl && normalizedJobName) {
-    return `岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，允许直接导航到目标推荐页 "${recommendUrl}" 并确认标题回到“${normalizedJobName}”。若外层 recommend URL 已是目标岗位，但页面标题、可见岗位名或 iframe jobid 仍指向其他岗位或出现 jobid=null，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。`;
+    return `岗位恢复规则：如果当前不在推荐牛人壳层，先通过页面可见导航进入推荐牛人；进入推荐牛人后，只允许通过页面可见的岗位切换 UI 切回目标岗位并确认标题回到“${normalizedJobName}”。若外层 recommend URL 已是目标岗位，但页面标题、可见岗位名或 iframe jobid 仍指向其他岗位或出现 jobid=null，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。禁止使用 Page.navigate、evaluate_script(...click())、或注入脚本直接修改 iframe.src、history、location、class 等页面状态来强行纠偏。`;
   }
 
   if (recommendUrl) {
-    return `岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，允许直接导航到目标推荐页 "${recommendUrl}"。若外层 recommend URL 已是目标岗位，但页面标题、可见岗位名或 iframe jobid 仍指向其他岗位或出现 jobid=null，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。`;
+    return `岗位恢复规则：如果当前不在推荐牛人壳层，先通过页面可见导航进入推荐牛人；进入推荐牛人后，只允许通过页面可见的岗位切换 UI 切回目标岗位。若外层 recommend URL 已是目标岗位，但页面标题、可见岗位名或 iframe jobid 仍指向其他岗位或出现 jobid=null，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。禁止使用 Page.navigate、evaluate_script(...click())、或注入脚本直接修改 iframe.src、history、location、class 等页面状态来强行纠偏。`;
   }
 
-  return '岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，只允许使用显式导航重新打开目标推荐页。若外层 recommend URL 已是目标岗位，但页面标题、可见岗位名或 iframe jobid 仍指向其他岗位或出现 jobid=null，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。';
+  return '岗位恢复规则：如果当前不在推荐牛人壳层，先通过页面可见导航进入推荐牛人；进入推荐牛人后，只允许通过页面可见的岗位切换 UI 切回目标岗位。若外层 recommend URL 已是目标岗位，但页面标题、可见岗位名或 iframe jobid 仍指向其他岗位或出现 jobid=null，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。禁止使用 Page.navigate、evaluate_script(...click())、或注入脚本直接修改 iframe.src、history、location、class 等页面状态来强行纠偏。';
 }
 
 function buildRunContractPrompt(runId) {
@@ -1577,12 +1607,20 @@ function buildNoRepoIntrospectionPrompt() {
   return '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。';
 }
 
-function buildBootstrapSequencePrompt() {
-  return '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。';
+function buildBootstrapSequencePrompt(mode = '') {
+  if (mode === 'source') {
+    return '固定启动顺序：先读 boss-sourcing SKILL 做路由；source 只继续读 boss-source-greet SKILL、boss-sourcing/references/runtime-contract.md、boss-source-greet/references/browser-states.md。不要再读 chat/followup 的页面 reference，也不要用 find、rg、python、rglob 重新定位这些固定路径。';
+  }
+
+  if (mode === 'chat' || mode === 'followup' || mode === 'download') {
+    return '固定启动顺序：先读 boss-sourcing SKILL 做路由；chat/followup/download 只继续读 boss-chat-followup SKILL、boss-sourcing/references/runtime-contract.md、boss-chat-followup/references/browser-states.md。不要再读 source 的页面 reference，也不要用 find、rg、python、rglob 重新定位这些固定路径。';
+  }
+
+  return '固定启动顺序：先读 boss-sourcing SKILL；run-scoped 流程只额外读取 boss-sourcing/references/runtime-contract.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。';
 }
 
 function buildCliUsagePrompt() {
-  return 'CLI 规则：直接使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。';
+  return 'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进可先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"。若推荐详情里的 next/prev 在视觉上存在但快照没有可点击 uid，可使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-pager --run-id "$RUN_ID" --direction next|prev；它会发送真实鼠标事件，不是 DOM click。';
 }
 
 function buildFailureEvidencePrompt() {
@@ -1607,6 +1645,10 @@ function buildSourceWriteContractPrompt() {
 
 function buildSourceQuotaPrompt() {
   return '执行目标：单次 source run 默认目标是成功打招呼 5 人。已沟通/继续沟通的不计入新增完成数；不要因为刚完成 1 人或当前一屏候选人偏弱就提前 run-complete，而是继续滚动、翻页、换批次筛选，直到本轮新增 greet_sent 达到 5 人，或已被当前页面证据证明暂无更多合格候选人，或出现明确阻塞。若最终少于 5 人就结束，run-complete summary 必须显式写出 targetCount=5、achievedCount 和不足原因。';
+}
+
+function buildSourceStateGuardPrompt() {
+  return '执行寻源打招呼时，只允许真实可见 UI 交互推进页面；禁止 Page.navigate、mcp_chrome-devtools_navigate_page 的 url/reload、evaluate_script(...click())、以及脚本改 iframe/location/history/class。只有看到工作经历/教育经历等详情区块，才算进入候选人详情；只有确认详情区块消失且推荐列表重新可见，才算回到列表态。greet_sent 后或列表/详情发生重排后，旧 uid 一律作废，下一次点击前必须 fresh snapshot。低于 quota 时，若页面出现相似牛人/推荐区，不得直接把它当 blocker；必须先用 recommend-state 重新确认 detailOpen 与 nextVisible。翻页后优先用 recommend-detail 轻量确认新候选人的姓名/履历摘要，不要默认依赖 verbose snapshot 或 reload。只要详情里的 next 仍可见，下一位候选人的唯一主路径就是先点 next；若快照没有可点击 uid，就立刻用 recommend-pager。若新候选人的详情未被重新证明，禁止退化成列表按钮直接打招呼。未达到 targetCount=5 时，不得仅因“当前页偏慢/候选人偏少”而 run-complete；summary 必须从本轮 events.jsonl 实算。';
 }
 
 function buildChatWriteContractPrompt() {

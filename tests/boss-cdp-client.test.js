@@ -46,7 +46,7 @@ test('BossCdpClient resolveBossTarget prefers an explicit targetId', async () =>
   assert.equal(target.url, 'https://www.zhipin.com/web/chat/index');
 });
 
-test('BossCdpClient resolveBossTarget falls back to the first matching BOSS page target', async () => {
+test('BossCdpClient resolveBossTarget prefers work pages over generic BOSS tabs', async () => {
   const client = new BossCdpClient({
     endpoint: 'http://127.0.0.1:9222',
     requestImpl: async () => ({
@@ -55,6 +55,8 @@ test('BossCdpClient resolveBossTarget falls back to the first matching BOSS page
         { id: 'blank', type: 'page', url: 'about:blank', title: 'about:blank' },
         { id: 'tools', type: 'page', url: 'devtools://devtools/bundled/inspector.html', title: 'DevTools' },
         { id: 'other', type: 'page', url: 'https://example.com/', title: 'Example' },
+        { id: 'boss-user', type: 'page', url: 'https://www.zhipin.com/web/user/?ka=bticket', title: 'BOSS直聘' },
+        { id: 'boss-chat', type: 'page', url: 'https://www.zhipin.com/web/chat/index', title: 'BOSS直聘' },
         { id: 'boss-1', type: 'page', url: 'https://www.zhipin.com/web/chat/recommend?jobid=1', title: 'BOSS直聘' },
         { id: 'boss-2', type: 'worker', url: 'https://www.zhipin.com/web/chat/index', title: 'Worker' }
       ])
@@ -66,6 +68,25 @@ test('BossCdpClient resolveBossTarget falls back to the first matching BOSS page
   });
 
   assert.equal(target.id, 'boss-1');
+});
+
+test('BossCdpClient resolveBossTarget falls back to chat workbench before user center tabs', async () => {
+  const client = new BossCdpClient({
+    endpoint: 'http://127.0.0.1:9222',
+    requestImpl: async () => ({
+      ok: true,
+      json: async () => ([
+        { id: 'boss-user', type: 'page', url: 'https://www.zhipin.com/web/user/?ka=bticket', title: 'BOSS直聘' },
+        { id: 'boss-chat', type: 'page', url: 'https://www.zhipin.com/web/chat/index', title: 'BOSS直聘' }
+      ])
+    })
+  });
+
+  const target = await client.resolveBossTarget({
+    urlPrefix: 'https://www.zhipin.com/'
+  });
+
+  assert.equal(target.id, 'boss-chat');
 });
 
 test('BossCdpClient resolveBossTarget rejects when no matching BOSS page target exists', async () => {
@@ -179,6 +200,54 @@ test('BossCdpClient evaluate uses small monotonic message ids', async () => {
 
   assert.equal(sentMessages[0].id, 1);
   assert.equal(sentMessages[1].id, 2);
+});
+
+test('BossCdpClient dispatchMouseClick emits moved, pressed, and released events', async () => {
+  const sentMessages = [];
+  const replies = [];
+  const client = new BossCdpClient({
+    endpoint: 'http://127.0.0.1:9222',
+    requestImpl: async () => ({
+      ok: true,
+      json: async () => ([
+        {
+          id: 'boss-1',
+          type: 'page',
+          url: 'https://www.zhipin.com/web/chat/recommend',
+          title: 'BOSS直聘',
+          webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/boss-1'
+        }
+      ])
+    }),
+    connectImpl: async () => ({
+      async send(message) {
+        const parsed = JSON.parse(message);
+        sentMessages.push(parsed);
+        replies.push(JSON.stringify({
+          id: parsed.id,
+          result: {}
+        }));
+      },
+      async waitForMessage() {
+        return replies.shift();
+      },
+      async close() {}
+    })
+  });
+
+  await client.dispatchMouseClick({
+    targetId: 'boss-1',
+    x: 100,
+    y: 200
+  });
+
+  assert.equal(sentMessages.length, 3);
+  assert.equal(sentMessages[0].method, 'Input.dispatchMouseEvent');
+  assert.equal(sentMessages[0].params.type, 'mouseMoved');
+  assert.equal(sentMessages[1].params.type, 'mousePressed');
+  assert.equal(sentMessages[2].params.type, 'mouseReleased');
+  assert.equal(sentMessages[2].params.x, 100);
+  assert.equal(sentMessages[2].params.y, 200);
 });
 
 test('connectWebSocket queues messages that arrive before waitForMessage is called', async () => {

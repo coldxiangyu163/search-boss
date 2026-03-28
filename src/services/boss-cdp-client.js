@@ -34,7 +34,10 @@ class BossCdpClient {
       throw new Error('boss_target_not_found');
     }
 
-    const target = targets.find((candidate) => isBossPageTarget(candidate, urlPrefix));
+    const target = targets
+      .filter((candidate) => isBossPageTarget(candidate, urlPrefix))
+      .sort(compareBossTargets)
+      .at(0);
 
     if (!target) {
       throw new Error('boss_target_not_found');
@@ -44,12 +47,31 @@ class BossCdpClient {
   }
 
   async evaluate({ targetId, expression, urlPrefix } = {}) {
+    return this.sendCommand({
+      targetId,
+      urlPrefix,
+      method: 'Runtime.evaluate',
+      params: {
+        expression,
+        awaitPromise: true,
+        returnByValue: true
+      }
+    });
+  }
+
+  async sendCommand({ targetId, method, params = {}, urlPrefix } = {}) {
     if (!targetId) {
       throw new Error('boss_target_id_required');
     }
 
-    if (!expression || typeof expression !== 'string') {
-      throw new Error('boss_expression_required');
+    if (!method || typeof method !== 'string') {
+      throw new Error('boss_cdp_method_required');
+    }
+
+    if (method === 'Runtime.evaluate') {
+      if (!params.expression || typeof params.expression !== 'string') {
+        throw new Error('boss_expression_required');
+      }
     }
 
     const target = await this.resolveBossTarget({ targetId, urlPrefix });
@@ -66,12 +88,8 @@ class BossCdpClient {
     try {
       await connection.send(JSON.stringify({
         id: messageId,
-        method: 'Runtime.evaluate',
-        params: {
-          expression,
-          awaitPromise: true,
-          returnByValue: true
-        }
+        method,
+        params
       }));
 
       while (true) {
@@ -92,6 +110,53 @@ class BossCdpClient {
       await connection.close();
     }
   }
+
+  async dispatchMouseClick({ targetId, x, y, urlPrefix } = {}) {
+    const normalizedX = Number(x);
+    const normalizedY = Number(y);
+
+    if (!Number.isFinite(normalizedX) || !Number.isFinite(normalizedY)) {
+      throw new Error('boss_mouse_coordinates_required');
+    }
+
+    await this.sendCommand({
+      targetId,
+      urlPrefix,
+      method: 'Input.dispatchMouseEvent',
+      params: {
+        type: 'mouseMoved',
+        x: normalizedX,
+        y: normalizedY,
+        button: 'none'
+      }
+    });
+
+    await this.sendCommand({
+      targetId,
+      urlPrefix,
+      method: 'Input.dispatchMouseEvent',
+      params: {
+        type: 'mousePressed',
+        x: normalizedX,
+        y: normalizedY,
+        button: 'left',
+        clickCount: 1
+      }
+    });
+
+    await this.sendCommand({
+      targetId,
+      urlPrefix,
+      method: 'Input.dispatchMouseEvent',
+      params: {
+        type: 'mouseReleased',
+        x: normalizedX,
+        y: normalizedY,
+        button: 'left',
+        clickCount: 1
+      }
+    });
+  }
 }
 
 function isBossPageTarget(target, urlPrefix) {
@@ -104,6 +169,32 @@ function isBossPageTarget(target, urlPrefix) {
   }
 
   return target.url.startsWith(urlPrefix);
+}
+
+function compareBossTargets(left, right) {
+  return scoreBossTarget(right) - scoreBossTarget(left);
+}
+
+function scoreBossTarget(target) {
+  const url = String(target?.url || '');
+
+  if (url.includes('/web/chat/recommend')) {
+    return 500;
+  }
+
+  if (url.includes('/web/chat/index')) {
+    return 400;
+  }
+
+  if (url.includes('/web/geek/')) {
+    return 300;
+  }
+
+  if (url.includes('/web/user/')) {
+    return 50;
+  }
+
+  return 100;
 }
 
 async function connectWebSocket(url) {

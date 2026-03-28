@@ -15,7 +15,7 @@
       "maxTokens": 8192,
       "temperature": 1.0,
       "maxToolIterations": 120,
-      "workspace": "/Users/coldxiangyu/.nanobot-boss/workspace"
+      "workspace": "/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/.nanobot-boss/workspace"
     }
   },
   "tools": {

@@ -1113,7 +1113,9 @@ test('POST /api/agent/runs/:runId/import-events accepts raw event arrays', async
   assert.equal(capturedPayload.events[0].eventId, 'greet:41:geek-1');
 });
 
-test('POST /api/agent/runs/:runId/complete marks run completed', async () => {
+test('POST /api/agent/runs/:runId/complete preserves legacy top-level summary fields in payload', async () => {
+  let capturedPayload = null;
+
   const app = createApp({
     services: {
       dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
@@ -1127,7 +1129,10 @@ test('POST /api/agent/runs/:runId/complete marks run completed', async () => {
         async recordAttachment() { return { ok: true }; },
         async createRun() { return { id: 1 }; },
         async recordRunEvent() { return { ok: true }; },
-        async completeRun() { return { ok: true, status: 'completed' }; }
+        async completeRun(payload) {
+          capturedPayload = payload;
+          return { ok: true, status: 'completed' };
+        }
       }
     },
     config: { agentToken: 'search-boss-local-agent' }
@@ -1139,11 +1144,24 @@ test('POST /api/agent/runs/:runId/complete marks run completed', async () => {
       attemptId: 'attempt-1',
       eventId: 'run-complete:1:attempt-1',
       sequence: 9,
-      occurredAt: '2026-03-24T12:30:00.000Z'
+      occurredAt: '2026-03-24T12:30:00.000Z',
+      summary: {
+        targetCount: 5,
+        achievedCount: 2
+      },
+      reason: 'candidate identifiers became unstable'
     });
 
   assert.equal(response.status, 200);
   assert.equal(response.body.status, 'completed');
+  assert.equal(capturedPayload.runId, '1');
+  assert.deepEqual(capturedPayload.payload, {
+    summary: {
+      targetCount: 5,
+      achievedCount: 2
+    },
+    reason: 'candidate identifiers became unstable'
+  });
 });
 
 test('POST /api/agent/runs/:runId/fail marks run failed', async () => {
@@ -1330,8 +1348,8 @@ test('JobService triggerSync creates sync run and calls nanobot', async () => {
       '回写格式固定：bootstrap 先写 run-event；jobs-batch 直接写 jobs 数组，不要为确认 payload 再读取 job-service.js 或 tests/api.test.js。每个 job 至少包含 { jobKey, encryptJobId, jobName, city, salary, status, jdText?, metadata? }。',
       '运行契约：必须复用调用方提供的 RUN_ID=33；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "33"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
-      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
-      'CLI 规则：直接使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。',
+      '固定启动顺序：先读 boss-sourcing SKILL；run-scoped 流程只额外读取 boss-sourcing/references/runtime-contract.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
+      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进可先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"。若推荐详情里的 next/prev 在视觉上存在但快照没有可点击 uid，可使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-pager --run-id "$RUN_ID" --direction next|prev；它会发送真实鼠标事件，不是 DOM click。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
     ].join('\n')
@@ -2111,14 +2129,14 @@ test('AgentService runNanobotForSchedule sends source workflow guardrails in mes
       '回写格式固定：run-candidate 必须直接写顶层 { jobKey, bossEncryptGeekId, name, status, city?, education?, experience?, school?, metadata? }；其中 metadata 承载 decision/priority/facts/reasoning。run-action(greet_sent) 必须直接写顶层 { actionType, jobKey, bossEncryptGeekId, dedupeKey, payload }；不要写 candidate.displayName 这类嵌套自定义结构，也不要读取 tests/api.test.js 或 src/services/*.js 反推字段。',
       '运行契约：必须复用调用方提供的 RUN_ID=88；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "88"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
-      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
-      'CLI 规则：直接使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。',
+      '固定启动顺序：先读 boss-sourcing SKILL 做路由；source 只继续读 boss-source-greet SKILL、boss-sourcing/references/runtime-contract.md、boss-source-greet/references/browser-states.md。不要再读 chat/followup 的页面 reference，也不要用 find、rg、python、rglob 重新定位这些固定路径。',
+      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进可先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"。若推荐详情里的 next/prev 在视觉上存在但快照没有可点击 uid，可使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-pager --run-id "$RUN_ID" --direction next|prev；它会发送真实鼠标事件，不是 DOM click。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。',
-      '岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，允许直接导航到目标推荐页 "https://www.zhipin.com/web/chat/recommend?jobid=target-job-encrypt-id" 并确认标题回到“健康顾问（B0047007）”。若外层 recommend URL 已是目标岗位，但页面标题、可见岗位名或 iframe jobid 仍指向其他岗位或出现 jobid=null，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。',
+      '岗位恢复规则：如果当前不在推荐牛人壳层，先通过页面可见导航进入推荐牛人；进入推荐牛人后，只允许通过页面可见的岗位切换 UI 切回目标岗位并确认标题回到“健康顾问（B0047007）”。若外层 recommend URL 已是目标岗位，但页面标题、可见岗位名或 iframe jobid 仍指向其他岗位或出现 jobid=null，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。禁止使用 Page.navigate、evaluate_script(...click())、或注入脚本直接修改 iframe.src、history、location、class 等页面状态来强行纠偏。',
       'run-fail 规则：run-fail 一律先写 tmp/run-fail.json 再执行 --file；禁止尝试内联 --message。只有在当前页面证据连续证明目标岗位无法恢复后，才允许终止 source run。',
       '执行目标：单次 source run 默认目标是成功打招呼 5 人。已沟通/继续沟通的不计入新增完成数；不要因为刚完成 1 人或当前一屏候选人偏弱就提前 run-complete，而是继续滚动、翻页、换批次筛选，直到本轮新增 greet_sent 达到 5 人，或已被当前页面证据证明暂无更多合格候选人，或出现明确阻塞。若最终少于 5 人就结束，run-complete summary 必须显式写出 targetCount=5、achievedCount 和不足原因。',
-      '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
+      '执行寻源打招呼时，只允许真实可见 UI 交互推进页面；禁止 Page.navigate、mcp_chrome-devtools_navigate_page 的 url/reload、evaluate_script(...click())、以及脚本改 iframe/location/history/class。只有看到工作经历/教育经历等详情区块，才算进入候选人详情；只有确认详情区块消失且推荐列表重新可见，才算回到列表态。greet_sent 后或列表/详情发生重排后，旧 uid 一律作废，下一次点击前必须 fresh snapshot。低于 quota 时，若页面出现相似牛人/推荐区，不得直接把它当 blocker；必须先用 recommend-state 重新确认 detailOpen 与 nextVisible。翻页后优先用 recommend-detail 轻量确认新候选人的姓名/履历摘要，不要默认依赖 verbose snapshot 或 reload。只要详情里的 next 仍可见，下一位候选人的唯一主路径就是先点 next；若快照没有可点击 uid，就立刻用 recommend-pager。若新候选人的详情未被重新证明，禁止退化成列表按钮直接打招呼。未达到 targetCount=5 时，不得仅因“当前页偏慢/候选人偏少”而 run-complete；summary 必须从本轮 events.jsonl 实算。'
     ].join('\n')
   );
 });
@@ -2167,8 +2185,8 @@ test('AgentService runNanobotForSchedule includes run id for followup mode', asy
       '回写格式固定：消息用 run-message；再次索简历前先 followup-decision；动作用 run-action；附件用 run-attachment；每次回写都显式携带 attemptId、eventId、sequence、jobKey。',
       '运行契约：必须复用调用方提供的 RUN_ID=91；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "91"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
-      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
-      'CLI 规则：直接使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。',
+      '固定启动顺序：先读 boss-sourcing SKILL 做路由；chat/followup/download 只继续读 boss-chat-followup SKILL、boss-sourcing/references/runtime-contract.md、boss-chat-followup/references/browser-states.md。不要再读 source 的页面 reference，也不要用 find、rg、python、rglob 重新定位这些固定路径。',
+      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进可先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"。若推荐详情里的 next/prev 在视觉上存在但快照没有可点击 uid，可使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-pager --run-id "$RUN_ID" --direction next|prev；它会发送真实鼠标事件，不是 DOM click。',
       '附件 handoff 模板：若当前线程已确认存在附件或预览，调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "91"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-91.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
@@ -2220,8 +2238,8 @@ test('AgentService runNanobotForSchedule maps chat mode to chat workflow message
       '回写格式固定：消息用 run-message；再次索简历前先 followup-decision；动作用 run-action；附件用 run-attachment；每次回写都显式携带 attemptId、eventId、sequence、jobKey。',
       '运行契约：必须复用调用方提供的 RUN_ID=92；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "92"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
-      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
-      'CLI 规则：直接使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。',
+      '固定启动顺序：先读 boss-sourcing SKILL 做路由；chat/followup/download 只继续读 boss-chat-followup SKILL、boss-sourcing/references/runtime-contract.md、boss-chat-followup/references/browser-states.md。不要再读 source 的页面 reference，也不要用 find、rg、python、rglob 重新定位这些固定路径。',
+      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进可先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"。若推荐详情里的 next/prev 在视觉上存在但快照没有可点击 uid，可使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-pager --run-id "$RUN_ID" --direction next|prev；它会发送真实鼠标事件，不是 DOM click。',
       '附件 handoff 模板：若当前线程已确认存在附件或预览，调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "92"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-92.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
@@ -2266,8 +2284,8 @@ test('AgentService runNanobotForSchedule maps download mode to download workflow
       '回写格式固定：附件发现/下载都用 run-attachment，下载完成后再写 run-action(resume_downloaded)；优先补偿 pending/failed callback，避免盲目重下。',
       '运行契约：必须复用调用方提供的 RUN_ID=93；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "93"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
-      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
-      'CLI 规则：直接使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。',
+      '固定启动顺序：先读 boss-sourcing SKILL 做路由；chat/followup/download 只继续读 boss-chat-followup SKILL、boss-sourcing/references/runtime-contract.md、boss-chat-followup/references/browser-states.md。不要再读 source 的页面 reference，也不要用 find、rg、python、rglob 重新定位这些固定路径。',
+      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进可先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"。若推荐详情里的 next/prev 在视觉上存在但快照没有可点击 uid，可使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-pager --run-id "$RUN_ID" --direction next|prev；它会发送真实鼠标事件，不是 DOM click。',
       '附件 handoff 模板：若当前线程已确认存在附件或预览，调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "93"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-93.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
@@ -2311,8 +2329,8 @@ test('AgentService runNanobotForSchedule maps status mode to status workflow mes
       '本次任务的唯一后端岗位标识是 JOB_KEY="健康顾问_B0047007"。禁止根据 jobName、encryptJobId、页面标题或短 id 重新拼接、改写或替换 jobKey；如果页面恢复后落到其他岗位，必须先切回该 JOB_KEY 对应岗位再继续。',
       '运行契约：必须复用调用方提供的 RUN_ID=94；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "94"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
-      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
-      'CLI 规则：直接使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。',
+      '固定启动顺序：先读 boss-sourcing SKILL；run-scoped 流程只额外读取 boss-sourcing/references/runtime-contract.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
+      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进可先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"。若推荐详情里的 next/prev 在视觉上存在但快照没有可点击 uid，可使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-pager --run-id "$RUN_ID" --direction next|prev；它会发送真实鼠标事件，不是 DOM click。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
     ].join('\n')
@@ -2365,14 +2383,14 @@ test('AgentService runNanobotForSchedule includes custom requirement in source m
       '回写格式固定：run-candidate 必须直接写顶层 { jobKey, bossEncryptGeekId, name, status, city?, education?, experience?, school?, metadata? }；其中 metadata 承载 decision/priority/facts/reasoning。run-action(greet_sent) 必须直接写顶层 { actionType, jobKey, bossEncryptGeekId, dedupeKey, payload }；不要写 candidate.displayName 这类嵌套自定义结构，也不要读取 tests/api.test.js 或 src/services/*.js 反推字段。',
       '运行契约：必须复用调用方提供的 RUN_ID=99；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "99"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
-      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
-      'CLI 规则：直接使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。',
+      '固定启动顺序：先读 boss-sourcing SKILL 做路由；source 只继续读 boss-source-greet SKILL、boss-sourcing/references/runtime-contract.md、boss-source-greet/references/browser-states.md。不要再读 chat/followup 的页面 reference，也不要用 find、rg、python、rglob 重新定位这些固定路径。',
+      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进可先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"。若推荐详情里的 next/prev 在视觉上存在但快照没有可点击 uid，可使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-pager --run-id "$RUN_ID" --direction next|prev；它会发送真实鼠标事件，不是 DOM click。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。',
-      '岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，允许直接导航到目标推荐页 "https://www.zhipin.com/web/chat/recommend?jobid=target-job-encrypt-id" 并确认标题回到“健康顾问（B0047007）”。若外层 recommend URL 已是目标岗位，但页面标题、可见岗位名或 iframe jobid 仍指向其他岗位或出现 jobid=null，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。',
+      '岗位恢复规则：如果当前不在推荐牛人壳层，先通过页面可见导航进入推荐牛人；进入推荐牛人后，只允许通过页面可见的岗位切换 UI 切回目标岗位并确认标题回到“健康顾问（B0047007）”。若外层 recommend URL 已是目标岗位，但页面标题、可见岗位名或 iframe jobid 仍指向其他岗位或出现 jobid=null，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。禁止使用 Page.navigate、evaluate_script(...click())、或注入脚本直接修改 iframe.src、history、location、class 等页面状态来强行纠偏。',
       'run-fail 规则：run-fail 一律先写 tmp/run-fail.json 再执行 --file；禁止尝试内联 --message。只有在当前页面证据连续证明目标岗位无法恢复后，才允许终止 source run。',
       '执行目标：单次 source run 默认目标是成功打招呼 5 人。已沟通/继续沟通的不计入新增完成数；不要因为刚完成 1 人或当前一屏候选人偏弱就提前 run-complete，而是继续滚动、翻页、换批次筛选，直到本轮新增 greet_sent 达到 5 人，或已被当前页面证据证明暂无更多合格候选人，或出现明确阻塞。若最终少于 5 人就结束，run-complete summary 必须显式写出 targetCount=5、achievedCount 和不足原因。',
-      '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
+      '执行寻源打招呼时，只允许真实可见 UI 交互推进页面；禁止 Page.navigate、mcp_chrome-devtools_navigate_page 的 url/reload、evaluate_script(...click())、以及脚本改 iframe/location/history/class。只有看到工作经历/教育经历等详情区块，才算进入候选人详情；只有确认详情区块消失且推荐列表重新可见，才算回到列表态。greet_sent 后或列表/详情发生重排后，旧 uid 一律作废，下一次点击前必须 fresh snapshot。低于 quota 时，若页面出现相似牛人/推荐区，不得直接把它当 blocker；必须先用 recommend-state 重新确认 detailOpen 与 nextVisible。翻页后优先用 recommend-detail 轻量确认新候选人的姓名/履历摘要，不要默认依赖 verbose snapshot 或 reload。只要详情里的 next 仍可见，下一位候选人的唯一主路径就是先点 next；若快照没有可点击 uid，就立刻用 recommend-pager。若新候选人的详情未被重新证明，禁止退化成列表按钮直接打招呼。未达到 targetCount=5 时，不得仅因“当前页偏慢/候选人偏少”而 run-complete；summary 必须从本轮 events.jsonl 实算。'
     ].join('\n')
   );
 });
@@ -2809,6 +2827,68 @@ test('AgentService recordAction scopes candidate lookup by jobKey when candidate
   );
   assert.ok(lookupQuery);
   assert.deepEqual(lookupQuery.params, ['geek-1', '健康顾问_B0047007']);
+});
+
+test('AgentService recordAction marks greet_sent candidates as greeted and generates an event id when omitted', async () => {
+  const queryCalls = [];
+  const { AgentService } = require('../src/services/agent-service');
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql, params = []) {
+        queryCalls.push({ sql, params });
+
+        if (sql.includes('join people p on p.id = jc.person_id') && sql.includes('join jobs j on j.id = jc.job_id')) {
+          return {
+            rows: [{
+              id: 77,
+              resume_state: 'not_requested',
+              last_resume_requested_at: null,
+              resume_request_count: 0
+            }],
+            rowCount: 1
+          };
+        }
+
+        if (sql.includes('insert into candidate_actions')) {
+          return { rows: [{ id: 92 }], rowCount: 1 };
+        }
+
+        if (sql.includes('update job_candidates')) {
+          return { rows: [], rowCount: 1 };
+        }
+
+        if (sql.includes('insert into sourcing_run_events')) {
+          return { rows: [], rowCount: 1 };
+        }
+
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    }
+  });
+
+  const occurredAt = '2026-03-28T08:55:01.446Z';
+  const result = await agentService.recordAction({
+    runId: 180,
+    occurredAt,
+    actionType: 'greet_sent',
+    dedupeKey: '180:greet_sent:geek-1',
+    jobKey: '健康顾问_B0047007',
+    bossEncryptGeekId: 'geek-1',
+    payload: { source: 'recommend' }
+  });
+
+  assert.equal(result.ok, true);
+
+  const updateQuery = queryCalls.find(({ sql }) =>
+    sql.includes('update job_candidates') && /greeted/.test(sql)
+  );
+  assert.ok(updateQuery);
+  assert.deepEqual(updateQuery.params, [77, occurredAt]);
+
+  const runEventQuery = queryCalls.find(({ sql }) => sql.includes('insert into sourcing_run_events'));
+  assert.ok(runEventQuery);
+  assert.match(String(runEventQuery.params[2]), /^greet_sent:180:/);
 });
 
 test('AgentService recordMessage uses explicit candidateId when provided', async () => {
@@ -3326,6 +3406,32 @@ test('AgentService completeRun generates terminal event when eventId is omitted'
   assert.equal(recordedPayload.eventType, 'run_completed');
   assert.equal(recordedPayload.occurredAt, '2026-03-27T14:52:22.363Z');
   assert.equal(recordedPayload.eventId, 'run-complete:158:2026-03-27T14:52:22.363Z');
+});
+
+test('AgentService recordRunEvent generates an event id when omitted', async () => {
+  const queryCalls = [];
+  const { AgentService } = require('../src/services/agent-service');
+
+  const service = new AgentService({
+    pool: {
+      async query(sql, params = []) {
+        queryCalls.push({ sql, params });
+        return { rows: [], rowCount: 1 };
+      }
+    }
+  });
+
+  const result = await service.recordRunEvent({
+    runId: 159,
+    occurredAt: '2026-03-28T09:29:49.198Z',
+    eventType: 'run_bootstrap',
+    stage: 'bootstrap',
+    message: 'run bootstrap confirmed'
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(queryCalls[0].sql, /insert into sourcing_run_events/i);
+  assert.equal(queryCalls[0].params[2], 'run_bootstrap:159:2026-03-28T09:29:49.198Z');
 });
 
 test('AgentService failRun generates terminal event when eventId is omitted', async () => {
