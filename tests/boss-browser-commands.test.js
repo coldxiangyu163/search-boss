@@ -256,6 +256,7 @@ test('inspectRecommendDetail returns current detail summary from nested resume i
         type: 'string',
         value: JSON.stringify({
           ok: true,
+          bossEncryptGeekId: '85ba23b5c93cef231nZ609q8GVdX',
           name: '王庭',
           currentActionText: '继续沟通',
           hasExperienceSection: true,
@@ -272,11 +273,14 @@ test('inspectRecommendDetail returns current detail summary from nested resume i
   });
 
   assert.equal(result.ok, true);
+  assert.equal(result.bossEncryptGeekId, '85ba23b5c93cef231nZ609q8GVdX');
   assert.equal(result.name, '王庭');
   assert.equal(result.currentActionText, '继续沟通');
   assert.equal(result.hasExperienceSection, true);
   assert.equal(result.hasEducationSection, true);
   assert.match(cdpCalls[0].expression, /c-resume/);
+  assert.match(cdpCalls[0].expression, /encrypt-geek-id/);
+  assert.match(cdpCalls[0].expression, /btn-continue|font-hightlight/);
 });
 
 test('inspectRecommendDetail fails when the detail iframe payload is structurally empty', async () => {

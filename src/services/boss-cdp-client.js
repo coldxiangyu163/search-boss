@@ -31,7 +31,7 @@ class BossCdpClient {
         return target;
       }
 
-      throw new Error('boss_target_not_found');
+      // targetId is stale (tab closed/refreshed) — fall through to URL-based discovery
     }
 
     const target = targets
@@ -59,7 +59,7 @@ class BossCdpClient {
     });
   }
 
-  async sendCommand({ targetId, method, params = {}, urlPrefix } = {}) {
+  async sendCommand({ targetId, method, params = {}, urlPrefix, timeoutMs = 15_000, retries = 3 } = {}) {
     if (!targetId) {
       throw new Error('boss_target_id_required');
     }
@@ -74,41 +74,64 @@ class BossCdpClient {
       }
     }
 
-    const target = await this.resolveBossTarget({ targetId, urlPrefix });
-    const websocketUrl = target.webSocketDebuggerUrl;
-
-    if (!websocketUrl) {
-      throw new Error('boss_target_websocket_missing');
-    }
-
-    const connection = await this.connectImpl(websocketUrl);
-    const messageId = this.nextMessageId;
-    this.nextMessageId += 1;
-
-    try {
-      await connection.send(JSON.stringify({
-        id: messageId,
-        method,
-        params
-      }));
-
-      while (true) {
-        const rawMessage = await connection.waitForMessage();
-        const message = JSON.parse(rawMessage);
-
-        if (message.id !== messageId) {
-          continue;
-        }
-
-        if (message.error) {
-          throw new Error(message.error.message || 'boss_cdp_evaluate_failed');
-        }
-
-        return message.result?.result || null;
+    let lastError;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 200 * 2 ** (attempt - 1)));
       }
-    } finally {
-      await connection.close();
+
+      let connection;
+      try {
+        const target = await this.resolveBossTarget({ targetId, urlPrefix });
+        const websocketUrl = target.webSocketDebuggerUrl;
+
+        if (!websocketUrl) {
+          throw new Error('boss_target_websocket_missing');
+        }
+
+        connection = await this.connectImpl(websocketUrl);
+        const messageId = this.nextMessageId;
+        this.nextMessageId += 1;
+
+        await connection.send(JSON.stringify({ id: messageId, method, params }));
+
+        while (true) {
+          const rawMessage = await Promise.race([
+            connection.waitForMessage(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('boss_cdp_command_timeout')), timeoutMs)
+            )
+          ]);
+
+          const message = JSON.parse(rawMessage);
+
+          if (message.id !== messageId) {
+            continue;
+          }
+
+          if (message.error) {
+            throw new Error(message.error.message || 'boss_cdp_evaluate_failed');
+          }
+
+          return message.result?.result || null;
+        }
+      } catch (err) {
+        lastError = err;
+        if (connection) {
+          await connection.close().catch(() => {});
+          connection = null;
+        }
+        if (!isTransientCdpError(err)) {
+          throw err;
+        }
+      } finally {
+        if (connection) {
+          await connection.close().catch(() => {});
+        }
+      }
     }
+
+    throw lastError;
   }
 
   async dispatchMouseClick({ targetId, x, y, urlPrefix } = {}) {
@@ -292,6 +315,17 @@ function waitForSocketOpen(socket) {
     socket.addEventListener('error', handleError, { once: true });
     socket.addEventListener('close', handleClose, { once: true });
   });
+}
+
+function isTransientCdpError(err) {
+  const msg = String(err?.message || '');
+  return (
+    msg.includes('boss_cdp_socket_error') ||
+    msg.includes('boss_cdp_socket_closed') ||
+    msg.includes('boss_cdp_list_targets_failed') ||
+    msg.includes('boss_target_not_found') ||
+    msg.includes('boss_cdp_command_timeout')
+  );
 }
 
 module.exports = {

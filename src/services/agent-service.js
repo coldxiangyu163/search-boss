@@ -1344,201 +1344,23 @@ class AgentService {
       return '';
     }
 
-    await this.recordRunEvent({
-      runId,
-      eventId: `boss-cli-bind-started:${runId}:${mode}`,
-      occurredAt: new Date().toISOString(),
-      eventType: 'boss_cli_bind_started',
-      stage: 'deterministic_bootstrap',
-      message: 'boss cli bind started',
-      payload: { mode, jobKey }
-    });
-
     try {
-      const bindResult = await this.bossCliRunner.bindTarget({ runId });
-      await this.recordRunEvent({
-        runId,
-        eventId: `boss-cli-bind-succeeded:${runId}:${mode}`,
-        occurredAt: new Date().toISOString(),
-        eventType: 'boss_cli_command_succeeded',
-        stage: 'deterministic_bootstrap',
-        message: 'boss cli bind succeeded',
-        payload: {
-          mode,
-          command: 'target bind',
-          targetId: bindResult?.session?.targetId || null
-        }
-      });
-
-      if (mode !== 'source' && mode !== 'chat' && mode !== 'followup' && mode !== 'download') {
-        return '';
-      }
-
-      const commandName = mode === 'source' ? 'recommend' : 'chatlist';
-      let jobDetailResult = null;
-
-      if (mode === 'source') {
-        const jobContext = await this.#getJobNanobotContext(jobKey);
-        if (jobContext.bossEncryptJobId) {
-          await this.recordRunEvent({
-            runId,
-            eventId: `boss-cli-command-started:${runId}:${mode}:job-detail`,
-            occurredAt: new Date().toISOString(),
-            eventType: 'boss_cli_command_started',
-            stage: 'deterministic_bootstrap',
-            message: 'boss cli job-detail started',
-            payload: { mode, command: 'job-detail', jobKey }
-          });
-
-          jobDetailResult = await this.bossCliRunner.getJobDetail({
-            runId,
-            jobId: jobContext.bossEncryptJobId
-          });
-
-          await this.recordRunEvent({
-            runId,
-            eventId: `boss-cli-command-succeeded:${runId}:${mode}:job-detail`,
-            occurredAt: new Date().toISOString(),
-            eventType: 'boss_cli_command_succeeded',
-            stage: 'deterministic_bootstrap',
-            message: 'boss cli job-detail succeeded',
-            payload: {
-              mode,
-              command: 'job-detail',
-              jobName: jobDetailResult?.job?.name || '',
-              jobId: jobContext.bossEncryptJobId
-            }
-          });
-        }
-      }
-
-      await this.recordRunEvent({
-        runId,
-        eventId: `boss-cli-command-started:${runId}:${mode}:${commandName}`,
-        occurredAt: new Date().toISOString(),
-        eventType: 'boss_cli_command_started',
-        stage: 'deterministic_bootstrap',
-        message: `boss cli ${commandName} started`,
-        payload: { mode, command: commandName, jobKey }
-      });
-
-      const commandResult = mode === 'source'
-        ? await this.bossCliRunner.listRecommendations({ runId, limit: 5 })
-        : await this.bossCliRunner.listChats({ runId, limit: 5 });
-
-      let threadResult = null;
-      if ((mode === 'chat' || mode === 'followup' || mode === 'download') && Array.isArray(commandResult?.chats) && commandResult.chats[0]?.encryptUid) {
-        await this.recordRunEvent({
-          runId,
-          eventId: `boss-cli-command-started:${runId}:${mode}:chatmsg`,
-          occurredAt: new Date().toISOString(),
-          eventType: 'boss_cli_command_started',
-          stage: 'deterministic_bootstrap',
-          message: 'boss cli chatmsg started',
-          payload: { mode, command: 'chatmsg', uid: commandResult.chats[0].encryptUid }
-        });
-
-        threadResult = await this.bossCliRunner.listMessages({
-          runId,
-          uid: commandResult.chats[0].encryptUid,
-          page: 1
-        });
-
-        await this.recordRunEvent({
-          runId,
-          eventId: `boss-cli-command-succeeded:${runId}:${mode}:chatmsg`,
-          occurredAt: new Date().toISOString(),
-          eventType: 'boss_cli_command_succeeded',
-          stage: 'deterministic_bootstrap',
-          message: 'boss cli chatmsg succeeded',
-          payload: {
-            mode,
-            command: 'chatmsg',
-            uid: commandResult.chats[0].encryptUid,
-            itemCount: threadResult?.messages?.length || 0
-          }
-        });
-      }
-
-      const itemCount = mode === 'source'
-        ? commandResult?.candidates?.length || 0
-        : commandResult?.chats?.length || 0;
-
-      await this.recordRunEvent({
-        runId,
-        eventId: `boss-cli-command-succeeded:${runId}:${mode}:${commandName}`,
-        occurredAt: new Date().toISOString(),
-        eventType: 'boss_cli_command_succeeded',
-        stage: 'deterministic_bootstrap',
-        message: `boss cli ${commandName} succeeded`,
-        payload: { mode, command: commandName, itemCount }
-      });
-
-      let contextFilePath = null;
-      const deterministicContext = {
-        mode,
-        bindResult,
-        jobDetailResult,
-        commandResult,
-        threadResult
-      };
-
-      if (this.bossContextStore) {
-        try {
-          const saveResult = await this.bossContextStore.saveContext(runId, deterministicContext);
-          contextFilePath = saveResult.filePath;
-          await this.recordRunEvent({
-            runId,
-            eventId: `boss-cli-context-ready:${runId}:${mode}`,
-            occurredAt: new Date().toISOString(),
-            eventType: 'boss_cli_context_ready',
-            stage: 'deterministic_bootstrap',
-            message: 'boss cli context saved',
-            payload: { mode, filePath: contextFilePath }
-          });
-        } catch (saveError) {
-          await this.recordRunEvent({
-            runId,
-            eventId: `boss-cli-context-save-failed:${runId}:${mode}`,
-            occurredAt: new Date().toISOString(),
-            eventType: 'boss_cli_command_failed',
-            stage: 'deterministic_bootstrap',
-            message: saveError.message,
-            payload: { mode, command: 'save-context' }
-          });
-        }
-      }
-
-      return buildDeterministicContextPrompt({
-        mode,
-        bindResult,
-        jobDetailResult,
-        commandResult,
-        threadResult,
-        contextFilePath
-      });
+      await this.bossCliRunner.bindTarget({ runId });
     } catch (error) {
       await this.recordRunEvent({
         runId,
-        eventId: `boss-cli-command-failed:${runId}:${mode}`,
+        eventId: `boss-cli-bind-failed:${runId}:${mode}`,
         occurredAt: new Date().toISOString(),
         eventType: 'boss_cli_command_failed',
         stage: 'deterministic_bootstrap',
         message: error.message,
-        payload: { mode, jobKey }
+        payload: { mode, jobKey, command: 'target bind' }
       });
-      await this.recordRunEvent({
-        runId,
-        eventId: `boss-cli-fallback:${runId}:${mode}`,
-        occurredAt: new Date().toISOString(),
-        eventType: 'boss_cli_fallback_to_nanobot',
-        stage: 'deterministic_bootstrap',
-        message: 'boss cli fallback to nanobot',
-        payload: { mode, jobKey, reason: error.message }
-      });
-      return '';
     }
+
+    return '';
   }
+
 }
 
 function sanitizeNanobotLog(line) {
@@ -1584,16 +1406,23 @@ function buildSourceRecoveryPrompt({ jobName, bossEncryptJobId }) {
   const recommendUrl = bossEncryptJobId
     ? `https://www.zhipin.com/web/chat/recommend?jobid=${bossEncryptJobId}`
     : '';
+  const recoveryTail = '如果当前落在错误岗位的候选人详情里，先安全退出详情：只能使用页面上明确可见的返回/关闭控件，或在 fresh snapshot 证明详情仍开着时尝试一次 Escape；点击“不合适/提交”不等于详情已关闭。只有确认工作经历/教育经历等详情区块已经消失，且推荐列表重新可见后，才允许切换岗位或进入下一个候选人。恢复过程中禁止点击收藏、分享、共享、举报等无关工具图标，也不要把无文案小图标猜成返回入口。';
 
   if (recommendUrl && normalizedJobName) {
-    return `岗位恢复规则：如果当前不在推荐牛人壳层，先通过页面可见导航进入推荐牛人；进入推荐牛人后，只允许通过页面可见的岗位切换 UI 切回目标岗位并确认标题回到“${normalizedJobName}”。若外层 recommend URL 已是目标岗位，但页面标题、可见岗位名或 iframe jobid 仍指向其他岗位或出现 jobid=null，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。禁止使用 Page.navigate、evaluate_script(...click())、或注入脚本直接修改 iframe.src、history、location、class 等页面状态来强行纠偏。`;
+    return `岗位恢复规则：如果当前不在推荐牛人壳层，先通过页面可见导航进入推荐牛人；进入推荐牛人后，只允许通过页面可见的岗位切换 UI 切回目标岗位并确认标题回到“${normalizedJobName}”。若外层 recommend URL 已是目标岗位，但页面标题或可见岗位名仍指向其他岗位，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。` +
+      '如果 iframe src 暂时还是 jobid=null，但可见岗位条、当前详情和候选人信息都已稳定指向目标岗位，这只是弱负信号，不能单独作为 run-fail 依据；只有当 jobid=null 与可见岗位漂移/缺失同时成立时，才算未恢复成功。' +
+      `禁止使用 Page.navigate、evaluate_script(...click())、或注入脚本直接修改 iframe.src、history、location、class 等页面状态来强行纠偏。${recoveryTail}`;
   }
 
   if (recommendUrl) {
-    return `岗位恢复规则：如果当前不在推荐牛人壳层，先通过页面可见导航进入推荐牛人；进入推荐牛人后，只允许通过页面可见的岗位切换 UI 切回目标岗位。若外层 recommend URL 已是目标岗位，但页面标题、可见岗位名或 iframe jobid 仍指向其他岗位或出现 jobid=null，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。禁止使用 Page.navigate、evaluate_script(...click())、或注入脚本直接修改 iframe.src、history、location、class 等页面状态来强行纠偏。`;
+    return '岗位恢复规则：如果当前不在推荐牛人壳层，先通过页面可见导航进入推荐牛人；进入推荐牛人后，只允许通过页面可见的岗位切换 UI 切回目标岗位。若外层 recommend URL 已是目标岗位，但页面标题或可见岗位名仍指向其他岗位，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。' +
+      '如果 iframe src 暂时还是 jobid=null，但可见岗位条、当前详情和候选人信息都已稳定指向目标岗位，这只是弱负信号，不能单独作为 run-fail 依据；只有当 jobid=null 与可见岗位漂移/缺失同时成立时，才算未恢复成功。' +
+      `禁止使用 Page.navigate、evaluate_script(...click())、或注入脚本直接修改 iframe.src、history、location、class 等页面状态来强行纠偏。${recoveryTail}`;
   }
 
-  return '岗位恢复规则：如果当前不在推荐牛人壳层，先通过页面可见导航进入推荐牛人；进入推荐牛人后，只允许通过页面可见的岗位切换 UI 切回目标岗位。若外层 recommend URL 已是目标岗位，但页面标题、可见岗位名或 iframe jobid 仍指向其他岗位或出现 jobid=null，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。禁止使用 Page.navigate、evaluate_script(...click())、或注入脚本直接修改 iframe.src、history、location、class 等页面状态来强行纠偏。';
+  return '岗位恢复规则：如果当前不在推荐牛人壳层，先通过页面可见导航进入推荐牛人；进入推荐牛人后，只允许通过页面可见的岗位切换 UI 切回目标岗位。若外层 recommend URL 已是目标岗位，但页面标题或可见岗位名仍指向其他岗位，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。' +
+    '如果 iframe src 暂时还是 jobid=null，但可见岗位条、当前详情和候选人信息都已稳定指向目标岗位，这只是弱负信号，不能单独作为 run-fail 依据；只有当 jobid=null 与可见岗位漂移/缺失同时成立时，才算未恢复成功。' +
+    `禁止使用 Page.navigate、evaluate_script(...click())、或注入脚本直接修改 iframe.src、history、location、class 等页面状态来强行纠偏。${recoveryTail}`;
 }
 
 function buildRunContractPrompt(runId) {
@@ -1648,7 +1477,7 @@ function buildSourceQuotaPrompt() {
 }
 
 function buildSourceStateGuardPrompt() {
-  return '执行寻源打招呼时，只允许真实可见 UI 交互推进页面；禁止 Page.navigate、mcp_chrome-devtools_navigate_page 的 url/reload、evaluate_script(...click())、以及脚本改 iframe/location/history/class。只有看到工作经历/教育经历等详情区块，才算进入候选人详情；只有确认详情区块消失且推荐列表重新可见，才算回到列表态。greet_sent 后或列表/详情发生重排后，旧 uid 一律作废，下一次点击前必须 fresh snapshot。低于 quota 时，若页面出现相似牛人/推荐区，不得直接把它当 blocker；必须先用 recommend-state 重新确认 detailOpen 与 nextVisible。翻页后优先用 recommend-detail 轻量确认新候选人的姓名/履历摘要，不要默认依赖 verbose snapshot 或 reload。只要详情里的 next 仍可见，下一位候选人的唯一主路径就是先点 next；若快照没有可点击 uid，就立刻用 recommend-pager。若新候选人的详情未被重新证明，禁止退化成列表按钮直接打招呼。未达到 targetCount=5 时，不得仅因“当前页偏慢/候选人偏少”而 run-complete；summary 必须从本轮 events.jsonl 实算。';
+  return '执行寻源打招呼时，只允许真实可见 UI 交互推进页面；禁止 Page.navigate、mcp_chrome-devtools_navigate_page 的 url/reload、evaluate_script(...click())、以及脚本改 iframe/location/history/class。只有看到工作经历/教育经历等详情区块，才算进入候选人详情；直渲染的 `.resume-detail-wrap` 加详情区块也算 detail open，不要求一定有嵌套 iframe。只有确认详情区块消失且推荐列表重新可见，才算回到列表态；点击“不合适/提交”不等于详情已关闭。greet_sent 后或列表/详情发生重排后，旧 uid 一律作废，下一次点击前必须 fresh snapshot。低于 quota 时，若页面出现相似牛人/推荐区，不得直接把它当 blocker；必须先用 recommend-state 重新确认 detailOpen 与 nextVisible。翻页后优先用 recommend-detail 轻量确认新候选人的姓名/履历摘要，不要默认依赖 verbose snapshot 或 reload。只要详情里的 next 仍可见，下一位候选人的唯一主路径就是先点 next；若快照没有可点击 uid，就立刻用 recommend-pager。若新候选人的详情未被重新证明，禁止退化成列表按钮直接打招呼。错误岗位恢复时，禁止把收藏、分享、共享、举报等无关图标当作返回入口。未达到 targetCount=5 时，不得仅因“当前页偏慢/候选人偏少”而 run-complete；summary 必须从本轮 events.jsonl 实算。';
 }
 
 function buildChatWriteContractPrompt() {

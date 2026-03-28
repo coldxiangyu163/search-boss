@@ -72,6 +72,27 @@ async function clickRecommendPager({
     y: target.y
   });
 
+  // Wait for the page to stabilize after click before returning.
+  // Polls inspectRecommendState until detailOpen changes or timeout (2s).
+  const clickedAt = Date.now();
+  let settled = false;
+  while (!settled && Date.now() - clickedAt < 2_000) {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    try {
+      const state = await evaluateJson({
+        cdpClient,
+        targetId,
+        urlPrefix,
+        expression: buildRecommendStateExpression()
+      });
+      if (state?.ok) {
+        settled = true;
+      }
+    } catch (_) {
+      // ignore transient errors during stabilization
+    }
+  }
+
   return {
     ok: true,
     direction: normalizedDirection,
@@ -217,6 +238,7 @@ function buildRecommendPagerTargetExpression({ direction }) {
   const selector = `.turn-btn.${direction}`;
 
   return `(() => {
+    try {
     const recFrame = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
     const recDoc = recFrame?.contentDocument;
     if (!recFrame || !recDoc) {
@@ -251,11 +273,15 @@ function buildRecommendPagerTargetExpression({ direction }) {
       x: frameRect.left + pagerRect.left + pagerRect.width / 2,
       y: frameRect.top + pagerRect.top + pagerRect.height / 2
     });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_recommend_pager_error:' + (err && err.message || String(err)) });
+    }
   })()`;
 }
 
 function buildRecommendStateExpression() {
   return `(() => {
+    try {
     const recFrame = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
     const recDoc = recFrame?.contentDocument;
     if (!recFrame || !recDoc) {
@@ -295,11 +321,15 @@ function buildRecommendStateExpression() {
         && rect.width > 0
         && rect.height > 0;
     }
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_recommend_state_error:' + (err && err.message || String(err)) });
+    }
   })()`;
 }
 
 function buildRecommendDetailExpression() {
   return `(() => {
+    try {
     const recFrame = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
     const recDoc = recFrame?.contentDocument;
     if (!recFrame || !recDoc) {
@@ -307,40 +337,50 @@ function buildRecommendDetailExpression() {
     }
 
     const detailWrap = recDoc.querySelector('.resume-detail-wrap');
-    const detailFrame = detailWrap?.querySelector('iframe[src*="/web/frame/c-resume/"]');
-    const detailDoc = detailFrame?.contentDocument;
-    if (!detailWrap || !detailFrame || !detailDoc) {
+    if (!detailWrap) {
       return JSON.stringify({ ok: false, reason: 'boss_recommend_detail_not_open' });
     }
 
-    const detailText = (detailDoc.body?.innerText || '').replace(/\\s+/g, ' ').trim();
-    const name = findFirstText(detailDoc, [
-      '.name',
+    const detailFrame = detailWrap.querySelector('iframe[src*="/web/frame/c-resume/"]');
+    const detailDoc = detailFrame?.contentDocument || null;
+    const detailRoot = detailDoc?.body || detailWrap;
+    const detailText = (detailRoot?.innerText || '').replace(/\\s+/g, ' ').trim();
+    const directIdNode = detailWrap.querySelector('[encrypt-geek-id]');
+    const detailFrameSrc = detailFrame?.getAttribute('src') || '';
+    const identityHints = collectIdentityHints({
+      detailSrc: detailFrameSrc,
+      directId: directIdNode?.getAttribute('encrypt-geek-id') || ''
+    });
+    const detailName = findFirstText(detailRoot, [
       '.resume-name',
       '.geek-name',
       '.base-name',
+      '[class*="geek-name"]',
+      '[class*="resume-name"]',
       'h1',
       'h2'
     ]);
-    const identityHints = collectIdentityHints(detailFrame.getAttribute('src') || '');
+    const selectedCardName = resolveSelectedCardName(recDoc);
     const currentActionText = Array.from(recDoc.querySelectorAll('.resume-detail-wrap button, .resume-detail-wrap a, .resume-detail-wrap .btn, .resume-detail-wrap .btn-v2'))
       .map((node) => (node.textContent || '').trim())
       .find(Boolean) || null;
 
     return JSON.stringify({
       ok: true,
-      name,
-      detailFrameSrc: detailFrame.getAttribute('src') || '',
+      bossEncryptGeekId: identityHints[0] || null,
+      name: detailName || selectedCardName,
+      detailFrameSrc,
       identityHints,
+      selectedCardName,
       currentActionText,
       hasExperienceSection: detailText.includes('工作经历'),
       hasEducationSection: detailText.includes('教育经历'),
       detailText: detailText.slice(0, 2000)
     });
 
-    function findFirstText(doc, selectors) {
+    function findFirstText(root, selectors) {
       for (const selector of selectors) {
-        const node = doc.querySelector(selector);
+        const node = root.querySelector(selector);
         const text = (node?.textContent || '').trim();
         if (text) {
           return text;
@@ -350,8 +390,36 @@ function buildRecommendDetailExpression() {
       return null;
     }
 
-    function collectIdentityHints(detailSrc) {
+    function resolveSelectedCardName(doc) {
+      const highlighted = doc.querySelector('.similar-geek-wrap .title .font-hightlight, .similar-geek-wrap .title .font-highlight');
+      const highlightedText = (highlighted?.textContent || '').trim();
+      if (highlightedText) {
+        return highlightedText;
+      }
+
+      const continueButton = Array.from(doc.querySelectorAll('.card-list .btn, .card-list .btn-v2, .card-list button, .card-list a'))
+        .find((node) => (node.textContent || '').replace(/\\s+/g, ' ').trim() === '继续沟通');
+      if (!continueButton) {
+        return null;
+      }
+
+      const card = continueButton.closest('.candidate-card-wrap, .geek-card-small, .geek-card, .card-inner');
+      if (!card) {
+        return null;
+      }
+
+      return findFirstText(card, [
+        '.row.name-wrap .name',
+        '.name',
+        '[class*="name"]'
+      ]);
+    }
+
+    function collectIdentityHints({ detailSrc, directId }) {
       const hints = [];
+      if (directId) {
+        hints.push(directId);
+      }
       const patterns = [
         /encryptGeekId=([^&#]+)/ig,
         /geekId=([^&#]+)/ig,
@@ -368,6 +436,9 @@ function buildRecommendDetailExpression() {
       }
 
       return [...new Set(hints)];
+    }
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_recommend_detail_error:' + (err && err.message || String(err)) });
     }
   })()`;
 }

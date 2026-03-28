@@ -14,7 +14,7 @@
       "provider": "custom",
       "maxTokens": 8192,
       "temperature": 1.0,
-      "maxToolIterations": 120,
+      "maxToolIterations": 200,
       "workspace": "/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/.nanobot-boss/workspace"
     }
   },

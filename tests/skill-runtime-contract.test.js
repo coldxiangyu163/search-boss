@@ -7,6 +7,7 @@ const skillRoot = path.resolve(__dirname, '..', '.nanobot-boss', 'workspace', 's
 const bossSourcingSkill = fs.readFileSync(path.join(skillRoot, 'boss-sourcing', 'SKILL.md'), 'utf8');
 const runtimeContract = fs.readFileSync(path.join(skillRoot, 'boss-sourcing', 'references', 'runtime-contract.md'), 'utf8');
 const bossSourceGreetSkill = fs.readFileSync(path.join(skillRoot, 'boss-source-greet', 'SKILL.md'), 'utf8');
+const bossSourceBrowserStates = fs.readFileSync(path.join(skillRoot, 'boss-source-greet', 'references', 'browser-states.md'), 'utf8');
 const bossChatFollowupSkill = fs.readFileSync(path.join(skillRoot, 'boss-chat-followup', 'SKILL.md'), 'utf8');
 const bossResumeIngestSkill = fs.readFileSync(path.join(skillRoot, 'boss-resume-ingest', 'SKILL.md'), 'utf8');
 
@@ -44,6 +45,15 @@ test('boss-source-greet skill documents source callback identifier requirements'
   assert.match(bossSourceGreetSkill, /5 new greetings|5 个|5 new successful/i);
   assert.match(bossSourceGreetSkill, /unknown-\*/i);
   assert.match(bossSourceGreetSkill, /run-complete/i);
+});
+
+test('boss-source-greet references document direct-render detail anchors and forbid utility-icon recovery', () => {
+  assert.match(bossSourceBrowserStates, /工作经历/);
+  assert.match(bossSourceBrowserStates, /教育经历/);
+  assert.match(bossSourceBrowserStates, /resume-detail-wrap/);
+  assert.match(bossSourceBrowserStates, /jobid=null.*weak negative evidence|weak negative evidence.*jobid=null/i);
+  assert.match(bossSourceBrowserStates, /收藏.*分享.*共享|收藏\s*\/\s*分享\s*\/\s*共享/);
+  assert.match(bossSourceBrowserStates, /不合适.*提交.*detail has closed|不合适.*提交.*详情已关闭/i);
 });
 
 test('boss-chat-followup skill documents attachment-state decisions', () => {
