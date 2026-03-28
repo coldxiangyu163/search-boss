@@ -272,6 +272,9 @@ class AgentService {
   }
 
   async completeRun({ runId, eventId, attemptId, sequence, occurredAt, payload = {} }) {
+    const resolvedOccurredAt = occurredAt || new Date().toISOString();
+    const resolvedEventId = eventId || `run-complete:${runId}:${resolvedOccurredAt}`;
+
     await this.pool.query(
       `
         update sourcing_runs
@@ -280,22 +283,20 @@ class AgentService {
             updated_at = now()
         where id = $1
       `,
-      [runId, occurredAt || new Date().toISOString()]
+      [runId, resolvedOccurredAt]
     );
 
-    if (eventId) {
-      await this.recordRunEvent({
-        runId,
-        attemptId,
-        eventId,
-        sequence,
-        occurredAt,
-        eventType: 'run_completed',
-        stage: 'complete',
-        message: 'run completed',
-        payload
-      });
-    }
+    await this.recordRunEvent({
+      runId,
+      attemptId,
+      eventId: resolvedEventId,
+      sequence,
+      occurredAt: resolvedOccurredAt,
+      eventType: 'run_completed',
+      stage: 'complete',
+      message: 'run completed',
+      payload
+    });
 
     return {
       ok: true,
@@ -304,6 +305,9 @@ class AgentService {
   }
 
   async failRun({ runId, eventId, attemptId, sequence, occurredAt, message, payload = {} }) {
+    const resolvedOccurredAt = occurredAt || new Date().toISOString();
+    const resolvedEventId = eventId || `run-fail:${runId}:${resolvedOccurredAt}`;
+
     await this.pool.query(
       `
         update sourcing_runs
@@ -312,22 +316,20 @@ class AgentService {
             updated_at = now()
         where id = $1
       `,
-      [runId, occurredAt || new Date().toISOString()]
+      [runId, resolvedOccurredAt]
     );
 
-    if (eventId) {
-      await this.recordRunEvent({
-        runId,
-        attemptId,
-        eventId,
-        sequence,
-        occurredAt,
-        eventType: 'run_failed',
-        stage: 'complete',
-        message: message || 'run failed',
-        payload
-      });
-    }
+    await this.recordRunEvent({
+      runId,
+      attemptId,
+      eventId: resolvedEventId,
+      sequence,
+      occurredAt: resolvedOccurredAt,
+      eventType: 'run_failed',
+      stage: 'complete',
+      message: message || 'run failed',
+      payload
+    });
 
     return {
       ok: true,
@@ -999,28 +1001,51 @@ class AgentService {
         `/boss-sourcing --job "${jobKey}" --followup --run-id "${runId}"`,
         buildProjectRootPrompt(),
         buildExactJobKeyPrompt(jobKey),
-        buildRunContractPrompt(runId)
+        buildChatWriteContractPrompt(),
+        buildRunContractPrompt(runId),
+        buildNoRepoIntrospectionPrompt(),
+        buildBootstrapSequencePrompt(),
+        buildCliUsagePrompt(),
+        buildFailureEvidencePrompt(),
+        buildCompletionPrompt()
       ].join('\n');
     } else if (mode === 'chat') {
       message = [
         `/boss-sourcing --job "${jobKey}" --chat --run-id "${runId}"`,
         buildProjectRootPrompt(),
         buildExactJobKeyPrompt(jobKey),
-        buildRunContractPrompt(runId)
+        buildChatWriteContractPrompt(),
+        buildRunContractPrompt(runId),
+        buildNoRepoIntrospectionPrompt(),
+        buildBootstrapSequencePrompt(),
+        buildCliUsagePrompt(),
+        buildFailureEvidencePrompt(),
+        buildCompletionPrompt()
       ].join('\n');
     } else if (mode === 'download') {
       message = [
         `/boss-sourcing --job "${jobKey}" --download --run-id "${runId}"`,
         buildProjectRootPrompt(),
         buildExactJobKeyPrompt(jobKey),
-        buildRunContractPrompt(runId)
+        buildDownloadWriteContractPrompt(),
+        buildRunContractPrompt(runId),
+        buildNoRepoIntrospectionPrompt(),
+        buildBootstrapSequencePrompt(),
+        buildCliUsagePrompt(),
+        buildFailureEvidencePrompt(),
+        buildCompletionPrompt()
       ].join('\n');
     } else if (mode === 'status') {
       message = [
         `/boss-sourcing --status --job "${jobKey}" --run-id "${runId}"`,
         buildProjectRootPrompt(),
         buildExactJobKeyPrompt(jobKey),
-        buildRunContractPrompt(runId)
+        buildRunContractPrompt(runId),
+        buildNoRepoIntrospectionPrompt(),
+        buildBootstrapSequencePrompt(),
+        buildCliUsagePrompt(),
+        buildFailureEvidencePrompt(),
+        buildCompletionPrompt()
       ].join('\n');
     } else {
       const jobContext = await this.#getJobNanobotContext(jobKey);
@@ -1029,7 +1054,13 @@ class AgentService {
         buildProjectRootPrompt(),
         buildExactJobKeyPrompt(jobKey),
         buildCustomRequirementPrompt(jobContext.customRequirement),
+        buildSourceWriteContractPrompt(),
         buildRunContractPrompt(runId),
+        buildNoRepoIntrospectionPrompt(),
+        buildBootstrapSequencePrompt(),
+        buildCliUsagePrompt(),
+        buildFailureEvidencePrompt(),
+        buildCompletionPrompt(),
         buildSourceRecoveryPrompt(jobContext),
         '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
       ].join('\n');
@@ -1048,7 +1079,13 @@ class AgentService {
       buildProjectRootPrompt(),
       '只执行岗位同步：采集职位列表和职位详情，并调用 /api/agent/jobs/batch 回写本地后台。禁止进入推荐牛人、打招呼、聊天跟进、下载简历。',
       '稳定性优先：以职位列表接口和当前页面可稳定读取的数据为准；如果详情接口中的 job 或 jdText 为空，允许保留空 jdText，并把原始详情放进 metadata/detailRaw，禁止为了补齐 JD 再打开编辑页、提取 HttpOnly cookie、写临时抓取脚本、复用浏览器 cookie 发起 Node 请求，或绕过 agent-callback-cli.js / 本地网络护栏。',
-      buildRunContractPrompt(runId)
+      buildSyncWriteContractPrompt(),
+      buildRunContractPrompt(runId),
+      buildNoRepoIntrospectionPrompt(),
+      buildBootstrapSequencePrompt(),
+      buildCliUsagePrompt(),
+      buildFailureEvidencePrompt(),
+      buildCompletionPrompt()
     ].join('\n');
     return this.#runNanobotWithStreaming({ runId, message });
   }
@@ -1169,9 +1206,44 @@ function buildSourceRecoveryPrompt({ jobName, bossEncryptJobId }) {
 function buildRunContractPrompt(runId) {
   return [
     `运行契约：必须复用调用方提供的 RUN_ID=${runId}；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。`,
-    `所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "${runId}"。`,
-    '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
+    `所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "${runId}"。`
   ].join('');
+}
+
+function buildNoRepoIntrospectionPrompt() {
+  return '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。';
+}
+
+function buildBootstrapSequencePrompt() {
+  return '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。';
+}
+
+function buildCliUsagePrompt() {
+  return 'CLI 规则：直接使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。';
+}
+
+function buildFailureEvidencePrompt() {
+  return '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。';
+}
+
+function buildCompletionPrompt() {
+  return '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。';
+}
+
+function buildSyncWriteContractPrompt() {
+  return '回写格式固定：bootstrap 先写 run-event；jobs-batch 直接写 jobs 数组，不要为确认 payload 再读取 job-service.js 或 tests/api.test.js。每个 job 至少包含 { jobKey, encryptJobId, jobName, city, salary, status, jdText?, metadata? }。';
+}
+
+function buildSourceWriteContractPrompt() {
+  return '回写格式固定：候选人事实用 run-candidate，打招呼动作用 run-action(greet_sent)；不要读取 tests/api.test.js 或 src/services/*.js 反推字段。';
+}
+
+function buildChatWriteContractPrompt() {
+  return '回写格式固定：消息用 run-message；再次索简历前先 followup-decision；动作用 run-action；附件用 run-attachment；每次回写都显式携带 attemptId、eventId、sequence、jobKey。';
+}
+
+function buildDownloadWriteContractPrompt() {
+  return '回写格式固定：附件发现/下载都用 run-attachment，下载完成后再写 run-action(resume_downloaded)；优先补偿 pending/failed callback，避免盲目重下。';
 }
 
 function normalizeJobRequirement(value) {

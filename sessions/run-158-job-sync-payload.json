@@ -1,0 +1,128 @@
+{
+  "jobs": [
+    {
+      "jobKey": "面点师傅（B0038011）",
+      "encryptJobId": "8eca6cadddd93ddf0nVz39W7GFZT",
+      "jobName": "面点师傅（B0038011）",
+      "city": "重庆",
+      "salary": "8-9K",
+      "status": "open",
+      "jdText": "岗位职责:  \n1. 负责日常面点的制作与创新，确保出品质量与口味  \n2. 配合团队完成门店餐品供应任务，保障出餐效率  \n3. 参与食材准备及厨房卫生管理工作  \n\n任职要求：  \n1. 善于沟通、按时完成上级交给的工作  \n2. 拥有良好的团队合作精神，能迅速融入团队  \n3. 具备良好的学习能力，能够不断改进工作方法",
+      "metadata": {
+        "source": "boss_job_sync",
+        "listRaw": {
+          "jobStatus": 0,
+          "jobAuditStatus": 3,
+          "brandName": "北京好还",
+          "experienceName": "3-5年",
+          "degreeName": "本科",
+          "jobTypeName": "全职",
+          "viewCount": 326,
+          "concatCount": 112,
+          "interestCount": 2,
+          "paidJobEndDate": "2027-03-04"
+        },
+        "detailRaw": {
+          "auditStatus": 3,
+          "jobStatus": 0,
+          "positionName": "面点师",
+          "addressText": "重庆两江新区渝兴广场B1栋19楼3号房",
+          "brandName": "北京好还"
+        }
+      }
+    },
+    {
+      "jobKey": "健康顾问（B0047007）",
+      "encryptJobId": "87ad5537fb5d102b0nVy0960FFtY",
+      "jobName": "健康顾问（B0047007）",
+      "city": "重庆",
+      "salary": "5-6K",
+      "status": "open",
+      "jdText": "岗位职责:  \n1. 为客户提供健康相关的专业咨询服务  \n2. 协助客户制定个性化健康管理方案  \n3. 收集并整理客户反馈，优化服务流程  \n\n任职要求：  \n1. 善于沟通、按时完成上级交给的工作  \n2. 拥有良好的团队合作精神，能迅速融入团队  \n3. 具备良好的学习能力，能够不断改进工作方法",
+      "metadata": {
+        "source": "boss_job_sync",
+        "listRaw": {
+          "jobStatus": 0,
+          "jobAuditStatus": 3,
+          "brandName": "北京好还",
+          "experienceName": "经验不限",
+          "degreeName": "大专",
+          "jobTypeName": "全职",
+          "viewCount": 108,
+          "concatCount": 80,
+          "interestCount": 3,
+          "paidJobEndDate": "2027-03-04"
+        },
+        "detailRaw": {
+          "auditStatus": 3,
+          "jobStatus": 0,
+          "positionName": "健康顾问",
+          "addressText": "重庆两江新区渝兴广场B1栋19楼3号房",
+          "brandName": "北京好还"
+        }
+      }
+    },
+    {
+      "jobKey": "面点师傅（B0038007）",
+      "encryptJobId": "f1794dc9d966f4f80nVy0960E1ZX",
+      "jobName": "面点师傅（B0038007）",
+      "city": "重庆",
+      "salary": "5-6K",
+      "status": "pending_open",
+      "jdText": "岗位职责:  \n1. 负责面点的制作与出品，确保口味与品质符合标准  \n2. 协助完成日常厨房相关工作，保持工作区域整洁有序  \n3. 根据需求灵活调整工作内容，保证出餐效率  \n\n任职要求：  \n1、善于沟通、按时完成上级交给的工作  \n2、拥有良好的团队合作精神，能迅速融入团队  \n3、具备良好的学习能力，能够不断改进工作方法",
+      "metadata": {
+        "source": "boss_job_sync",
+        "listRaw": {
+          "jobStatus": 3,
+          "jobAuditStatus": 0,
+          "brandName": "百融睿达",
+          "experienceName": "3-5年",
+          "degreeName": "大专",
+          "jobTypeName": "全职",
+          "viewCount": 0,
+          "concatCount": 0,
+          "interestCount": 0,
+          "paidJobEndDate": null
+        },
+        "detailRaw": {
+          "auditStatus": 0,
+          "jobStatus": 3,
+          "positionName": "面点师",
+          "addressText": "重庆两江新区渝兴广场B1栋19楼3号房",
+          "brandName": "百融睿达"
+        }
+      }
+    },
+    {
+      "jobKey": "销售专员",
+      "encryptJobId": "0207b7bb2f6d36180nVy39-9F1FV",
+      "jobName": "销售专员",
+      "city": "重庆",
+      "salary": "10-12K",
+      "status": "closed",
+      "jdText": "岗位职责：\n1. 负责公司产品的销售及；\n2. 制定和执行市场营销策略与计划，并完成业绩指标；\n3. 开拓新市场，发展新客户；\n4. 建立和维护良好的客户关系，提高客户满意度\n4. 参与行业调研和分析,为公司决策提供建议性意见。\n任职要求：\n1. 只要有2年销售相关的工作经验；\n2. 有韧性、有较强的抗压能力；\n3. 善于与人沟通，可以抓住用户痛点，共情能力强。\n薪资待遇：\n1. 各种团建\n2. 定期团队培训\n3. 五险一金、法定节假日\n4. 销售额提成\n5. 月薪10000-12000万",
+      "metadata": {
+        "source": "boss_job_sync",
+        "listRaw": {
+          "jobStatus": 1,
+          "jobAuditStatus": 3,
+          "brandName": "北京好还科技有限公司",
+          "experienceName": "1-3年",
+          "degreeName": "本科",
+          "jobTypeName": "全职",
+          "viewCount": 6,
+          "concatCount": 3,
+          "interestCount": 0,
+          "paidJobEndDate": null
+        },
+        "detailRaw": {
+          "auditStatus": 3,
+          "jobStatus": 1,
+          "positionName": "销售专员",
+          "addressText": "重庆两江新区渝兴广场B1栋19楼3号房",
+          "brandName": "北京好还科技有限公司"
+        }
+      }
+    }
+  ]
+}

@@ -18,9 +18,15 @@ test('boss-sourcing skill documents runtime placeholders instead of machine-spec
   assert.match(bossSourcingSkill, /SEARCH_BOSS_AGENT_TOKEN/);
 });
 
+test('boss-sourcing skill forbids repo introspection and CLI probing during bootstrap', () => {
+  assert.match(bossSourcingSkill, /AGENTS\.md/);
+  assert.match(bossSourcingSkill, /tests\/\*/);
+  assert.match(bossSourcingSkill, /--help/);
+  assert.match(bossSourcingSkill, /dashboard-summary/);
+});
+
 test('boss-resume-ingest skill documents runtime placeholders instead of machine-specific paths', () => {
   assert.doesNotMatch(bossResumeIngestSkill, /\/Users\/coldxiangyu/);
   assert.match(bossResumeIngestSkill, /NANOBOT_RUNTIME_FILE/);
   assert.match(bossResumeIngestSkill, /RESUME_LEDGER_FILE/);
 });
-

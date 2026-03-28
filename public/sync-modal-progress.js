@@ -17,6 +17,26 @@ function updateSyncModalProgress(progress, event = {}) {
   };
 }
 
+function resolveSyncTerminalStatus(event = {}) {
+  const eventType = String(event.eventType || '').trim();
+
+  if (eventType === 'run_completed') {
+    return {
+      status: 'completed',
+      error: ''
+    };
+  }
+
+  if (['run_failed', 'sync_failed'].includes(eventType)) {
+    return {
+      status: 'failed',
+      error: event.message || ''
+    };
+  }
+
+  return null;
+}
+
 function buildSyncStages({ runId, status, error, progress }) {
   const resolvedProgress = progress || createSyncModalProgress();
   const hasRequested = Boolean(runId) || resolvedProgress.hasRequested;
@@ -52,6 +72,7 @@ if (typeof window !== 'undefined') {
   window.SyncModalProgress = {
     createSyncModalProgress,
     updateSyncModalProgress,
+    resolveSyncTerminalStatus,
     buildSyncStages
   };
 }
@@ -60,6 +81,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     createSyncModalProgress,
     updateSyncModalProgress,
+    resolveSyncTerminalStatus,
     buildSyncStages
   };
 }

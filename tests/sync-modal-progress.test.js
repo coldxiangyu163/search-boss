@@ -7,6 +7,7 @@ const vm = require('node:vm');
 const {
   createSyncModalProgress,
   updateSyncModalProgress,
+  resolveSyncTerminalStatus,
   buildSyncStages
 } = require('../public/sync-modal-progress');
 
@@ -32,6 +33,40 @@ test('buildSyncStages keeps request stage done after bootstrap event scrolls out
   assert.equal(stages[0].active, false);
   assert.equal(stages[0].desc, '已生成 run 并开始跟踪。');
   assert.equal(stages[1].done, true);
+});
+
+test('resolveSyncTerminalStatus ignores recoverable nanobot stream messages that mention errors', () => {
+  assert.equal(
+    resolveSyncTerminalStatus({
+      eventType: 'nanobot_stream',
+      message: 'run-candidate 首次回写返回 Local API error，准备重试'
+    }),
+    null
+  );
+});
+
+test('resolveSyncTerminalStatus only marks explicit terminal failures as failed', () => {
+  assert.deepEqual(
+    resolveSyncTerminalStatus({
+      eventType: 'run_failed',
+      message: '回写失败'
+    }),
+    {
+      status: 'failed',
+      error: '回写失败'
+    }
+  );
+
+  assert.deepEqual(
+    resolveSyncTerminalStatus({
+      eventType: 'run_completed',
+      message: '已完成'
+    }),
+    {
+      status: 'completed',
+      error: ''
+    }
+  );
 });
 
 test('sync modal helper and app scripts can load together in a browser context', () => {

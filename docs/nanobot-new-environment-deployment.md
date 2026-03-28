@@ -158,6 +158,10 @@
   1. 调用方显式传入
   2. `NANOBOT_RUNTIME_FILE`
   3. 环境变量
+- bootstrap 纪律也要一致：
+  - 已给定 `PROJECT_ROOT` / `RUN_ID` / CLI 时，不再读 `AGENTS.md`、`tests/*`、旧 `tmp/run-*.json` 或历史失败文件来反推契约
+  - 不执行 `agent-callback-cli.js --help` 或裸命令探测
+  - 先 `dashboard-summary`，再 bootstrap 回写，再尝试 Chrome/MCP
 - 关键逻辑名包括：
   - `PROJECT_ROOT`
   - `RESUME_DIR`

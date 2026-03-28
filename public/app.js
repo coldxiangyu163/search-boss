@@ -80,6 +80,7 @@ const {
 const {
   createSyncModalProgress: createSyncModalProgressState,
   updateSyncModalProgress: updateSyncModalProgressState,
+  resolveSyncTerminalStatus: resolveSyncTerminalStatusForEvent,
   buildSyncStages: buildSyncTimelineStages
 } = window.SyncModalProgress;
 
@@ -537,16 +538,18 @@ async function pollSyncEvents() {
 }
 
 function applySyncEventStatus(event) {
-  if (event.eventType === 'run_completed') {
+  const terminalStatus = resolveSyncTerminalStatusForEvent(event);
+
+  if (terminalStatus?.status === 'completed') {
     state.syncModal.status = 'completed';
     stopSyncPolling();
     loadData().catch(() => {});
     return;
   }
 
-  if (/failed|error/i.test(event.eventType) || /失败|error/i.test(event.message || '')) {
+  if (terminalStatus?.status === 'failed') {
     state.syncModal.status = 'failed';
-    state.syncModal.error = event.message || state.syncModal.error;
+    state.syncModal.error = terminalStatus.error || state.syncModal.error;
     stopSyncPolling();
     return;
   }

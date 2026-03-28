@@ -63,6 +63,8 @@ LOCAL_API    = http://127.0.0.1:3000
 API_VERSION  = 2026-03-24
 ```
 
+如果调用方已经显式给出 `PROJECT_ROOT`、`RUN_ID`、回写 CLI 或本地 API，不要再通过读取 `AGENTS.md`、`tests/*`、旧 `tmp/run-*.json`、历史失败文件或历史 session 去反推运行契约。
+
 ## Modes
 
 ```text
@@ -183,6 +185,14 @@ async function getLocal(path) {
 ## Workflow
 
 ### 0. Bootstrap
+
+启动纪律：
+
+1. 只读取本 skill 与当前模式必需的 reference，禁止先扫项目目录或测试文件找契约。
+2. 禁止执行 `agent-callback-cli.js --help`、裸命令探测、或通过源码/测试反推 payload。
+3. 先确保 `tmp/`、`sessions/`、`RESUME_DIR` 存在。
+4. 先执行 `dashboard-summary` 验证本地后台，再写 bootstrap event。
+5. 只有在当前 run 内完成后台探活、bootstrap 回写，并亲自尝试过 Chrome/MCP 读取后，才允许因浏览器阻塞 `run-fail`；禁止直接复用旧失败文件。
 
 1. 确认 Chrome 已打开并连接到 `chrome-devtools`
 2. 确认 BOSS 招聘端已登录
