@@ -59,11 +59,18 @@ allowed-tools: mcp__chrome-devtools__*
 ```text
 PROJECT_ROOT = ~/work/百融云创/search-boss
 RESUME_DIR   = $PROJECT_ROOT/resumes
+BOSS_CONTEXT_FILE = $PROJECT_ROOT/tmp/boss-context-$RUN_ID.json
 LOCAL_API    = http://127.0.0.1:3000
 API_VERSION  = 2026-03-24
 ```
 
 如果调用方已经显式给出 `PROJECT_ROOT`、`RUN_ID`、回写 CLI 或本地 API，不要再通过读取 `AGENTS.md`、`tests/*`、旧 `tmp/run-*.json`、历史失败文件或历史 session 去反推运行契约。
+
+如果当前模式是 `--source`、`--chat` 或 `--followup`，且 `BOSS_CONTEXT_FILE` 存在：
+
+- 先读取它，再做任何页面级决策
+- 它是当前 run 的第一结构化事实来源
+- 浏览器负责确认当前 UI 是否与该文件一致，以及在不一致时恢复
 
 ## Modes
 
@@ -193,8 +200,10 @@ async function getLocal(path) {
 2. 禁止执行 `agent-callback-cli.js --help`、裸命令探测、或通过源码/测试反推 payload。
 3. 先确保 `tmp/`、`sessions/`、`RESUME_DIR` 存在。
 4. 先执行 `dashboard-summary` 验证本地后台，再写 bootstrap event。
-5. 只有在当前 run 内完成后台探活、bootstrap 回写，并亲自尝试过 Chrome/MCP 读取后，才允许因浏览器阻塞 `run-fail`；禁止直接复用旧失败文件。
-6. `run-fail` / `run-complete` 也必须先写 JSON 文件，再用 `--file` 调用；禁止先试内联 `--message`。
+5. 对 `--source`、`--chat`、`--followup`，若 `BOSS_CONTEXT_FILE` 存在，先读取它并提取期望的岗位、推荐列表、队列或线程上下文；浏览器探索降级为确认与兜底。
+6. 如果 `BOSS_CONTEXT_FILE` 与当前可见页面不一致，先按漂移或未恢复状态处理，不要即兴改流程。
+7. 只有在当前 run 内完成后台探活、bootstrap 回写，并亲自尝试过 Chrome/MCP 读取后，才允许因浏览器阻塞 `run-fail`；禁止直接复用旧失败文件。
+8. `run-fail` / `run-complete` 也必须先写 JSON 文件，再用 `--file` 调用；禁止先试内联 `--message`。
 
 1. 确认 Chrome 已打开并连接到 `chrome-devtools`
 2. 确认 BOSS 招聘端已登录
@@ -251,6 +260,7 @@ await postLocal('/api/agent/jobs/batch', {
 业务目标：
 
 - 选定岗位后，先读取职位详情，整理本轮寻源画像，再开始看人
+- 如果 `BOSS_CONTEXT_FILE` 已给出职位详情或推荐列表，先用它建立本轮岗位画像和首批候选人上下文
 - 不能只看推荐列表卡片就打招呼；必须进入候选人详情页看具体简历内容后再决定
 - 打招呼次数是稀缺资源，优先留给高匹配候选人，不为了“打满次数”而联系低质人选
 - 按岗位要求筛选，只对明确匹配或高潜匹配的人打招呼
@@ -259,14 +269,15 @@ await postLocal('/api/agent/jobs/batch', {
 
 执行前必须先做岗位画像：
 
-1. 调用 `GET /api/jobs/:jobKey` 读取职位详情，拿到 `jdText`、`city`、`salary`、`sync_metadata`
-2. 如果职位画像缺少关键字段，先回到 BOSS 职位详情页补读，再继续 `--source`
+1. 优先读取 `BOSS_CONTEXT_FILE` 中的 `jobDetail`、`recommendations`、目标岗位上下文
+2. 若 deterministic context 缺少关键字段，再调用 `GET /api/jobs/:jobKey` 或回到 BOSS 职位详情页补读
 3. 整理出本轮筛选标准：
    - `mustHave`: 硬条件，例如城市、学历、经验、核心岗位经历
    - `preferred`: 加分项，例如销售转化、电话沟通、咨询、相关行业经验
    - `redFlags`: 排除项，例如城市明显不符、经历方向严重错位、频繁短期跳槽
    - `greetingPriority`: `A`/`B`/`C`
 4. 未完成岗位画像前，禁止开始批量打招呼
+5. 如果页面当前显示的岗位、推荐列表或 `jobid` 与 `BOSS_CONTEXT_FILE` 不一致，先按页面漂移恢复，不要直接把页面当成新的真相源
 
 候选人判断必须分两层：
 
@@ -355,6 +366,7 @@ await postLocal(`/api/agent/runs/${RUN_ID}/actions`, {
 - 读取候选人新消息
 - 按消息粒度写后台
 - 只有后台允许时才继续索简历
+- 如果 `BOSS_CONTEXT_FILE` 已提供未读队列或线程摘要，先用它确定预期队列和首个目标线程，再用浏览器确认当前 UI
 
 #### 3a. 先写消息，再做决策
 
@@ -385,6 +397,11 @@ const decision = await getLocal(`/api/agent/candidates/${candidateId}/followup-d
 ```
 
 只有 `decision.allowed === true` 才允许继续索简历。
+
+页面纪律：
+
+- 若 `BOSS_CONTEXT_FILE` 指明了目标岗位、未读队列或首条线程，而当前 UI 不一致，先恢复页面状态
+- 浏览器中的列表顺序、线程面板和消息时间线，只用于确认或补足 deterministic context，不用于推翻同一 run 的结构化上下文
 
 如果 `allowed === false`：
 
@@ -483,6 +500,32 @@ await postLocal(`/api/agent/runs/${RUN_ID}/actions`, {
   payload: { storedPath: `resumes/${JOB_KEY}/${fileName}` }
 });
 ```
+
+### 4a. 跟进主线 `--followup`
+
+执行顺序：
+
+1. 若 `BOSS_CONTEXT_FILE` 存在，先读取其中的未读队列、首条线程、已有附件线索
+2. 按 `--chat` 规则确认当前 UI 与 deterministic context 是否一致
+3. 只有确认线程内已存在附件时，才进入 `--download` / `boss-resume-ingest`
+4. 若上下文文件与当前页面持续不一致，按漂移或未恢复状态处理，不要直接临场改为别的岗位或线程
+
+### 4b. 附件子流程 handoff
+
+一旦 `--chat`、`--download` 或 `--followup` 需要切到附件阶段，传给 `boss-resume-ingest` 的消息必须保持同一 run 契约：
+
+- 复用同一个 `RUN_ID`
+- 复用同一个 `JOB_KEY`
+- 显式传 `BOSS_CONTEXT_FILE`
+- 显式传 `bossEncryptGeekId`
+- 已知时传 `candidateId` 和 `candidateName`
+- 明确说明当前线程里附件是“已可见”、“已预览”还是“仅由 deterministic context 提示”
+
+禁止：
+
+- 为附件阶段新造一个 run
+- 不带 `JOB_KEY` / `bossEncryptGeekId` 就直接 handoff
+- 明明已有 `BOSS_CONTEXT_FILE`，却要求 sub-skill 从列表重新猜岗位、线程或候选人
 
 ### 5. 任务结束
 

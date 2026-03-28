@@ -1,0 +1,11 @@
+{
+  "projectRoot": "/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f",
+  "resumeDir": "/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/resumes",
+  "searchBossApiBase": "http://127.0.0.1:3000",
+  "searchBossAgentToken": "search-boss-local-agent",
+  "nanobotConfigPath": "/Users/coldxiangyu/.nanobot-boss/config.json",
+  "memoryDir": "/Users/coldxiangyu/.nanobot-boss/workspace/memory",
+  "memorySummaryFile": "/Users/coldxiangyu/.nanobot-boss/workspace/memory/MEMORY.md",
+  "memoryHistoryFile": "/Users/coldxiangyu/.nanobot-boss/workspace/memory/HISTORY.md",
+  "resumeLedgerFile": "/Users/coldxiangyu/.nanobot-boss/workspace/memory/boss-sourcing-resume-ledger.jsonl"
+}

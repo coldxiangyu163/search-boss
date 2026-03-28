@@ -1,10 +1,16 @@
+const path = require('node:path');
 const { resolveRuntimeEnv } = require('./runtime-env');
+
+const REPO_ROOT = path.resolve(__dirname, '..');
+const DEFAULT_BOSS_CLI_SESSION_DIR = path.join(REPO_ROOT, 'tmp');
 
 function buildConfig(env = process.env) {
   const missing = [];
   const databaseUrl = readRequiredEnv(env, 'DATABASE_URL', missing);
   const agentToken = readRequiredEnv(env, 'AGENT_TOKEN', missing);
-  const nanobotConfigPath = readRequiredEnv(env, 'NANOBOT_CONFIG_PATH', missing);
+  const nanobotConfigPath = resolveRepoRelativePath(
+    readRequiredEnv(env, 'NANOBOT_CONFIG_PATH', missing)
+  );
 
   if (missing.length > 0) {
     throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
@@ -15,7 +21,12 @@ function buildConfig(env = process.env) {
     databaseUrl,
     sourceDatabaseUrl: readOptionalEnv(env, 'SOURCE_DATABASE_URL'),
     agentToken,
-    nanobotConfigPath
+    nanobotConfigPath,
+    bossCdpEndpoint: readOptionalEnv(env, 'BOSS_CDP_ENDPOINT') || 'http://127.0.0.1:9222',
+    bossCdpTargetUrlPrefix:
+      readOptionalEnv(env, 'BOSS_CDP_TARGET_URL_PREFIX') || 'https://www.zhipin.com/',
+    bossCliSessionDir: readOptionalEnv(env, 'BOSS_CLI_SESSION_DIR') || DEFAULT_BOSS_CLI_SESSION_DIR,
+    bossCliEnabled: readBooleanEnv(env, 'BOSS_CLI_ENABLED', false)
   };
 }
 
@@ -38,6 +49,28 @@ function readOptionalEnv(env, key) {
 
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function readBooleanEnv(env, key, defaultValue) {
+  const value = readOptionalEnv(env, key);
+
+  if (value === null) {
+    return defaultValue;
+  }
+
+  return /^(1|true|yes|on)$/i.test(value);
+}
+
+function resolveRepoRelativePath(value) {
+  if (!value || isAbsolutePath(value)) {
+    return value;
+  }
+
+  return path.resolve(REPO_ROOT, value);
+}
+
+function isAbsolutePath(value) {
+  return path.isAbsolute(value) || /^[a-zA-Z]:[\\/]/.test(value) || value.startsWith('\\\\');
 }
 
 function loadConfig({ env = process.env, envFilePath } = {}) {

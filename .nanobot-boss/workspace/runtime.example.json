@@ -1,0 +1,11 @@
+{
+  "projectRoot": "C:\\apps\\search-boss",
+  "resumeDir": "C:\\apps\\search-boss\\resumes",
+  "searchBossApiBase": "http://127.0.0.1:3000",
+  "searchBossAgentToken": "replace-me",
+  "nanobotConfigPath": "C:\\apps\\nanobot-boss\\config.json",
+  "memoryDir": "C:\\apps\\nanobot-boss\\workspace\\memory",
+  "memorySummaryFile": "C:\\apps\\nanobot-boss\\workspace\\memory\\MEMORY.md",
+  "memoryHistoryFile": "C:\\apps\\nanobot-boss\\workspace\\memory\\HISTORY.md",
+  "resumeLedgerFile": "C:\\apps\\nanobot-boss\\workspace\\memory\\boss-sourcing-resume-ledger.jsonl"
+}

@@ -165,6 +165,7 @@
 - 关键逻辑名包括：
   - `PROJECT_ROOT`
   - `RESUME_DIR`
+  - `BOSS_CONTEXT_FILE`
   - `SEARCH_BOSS_API_BASE`
   - `SEARCH_BOSS_AGENT_TOKEN`
   - `NANOBOT_MEMORY_DIR`
@@ -176,6 +177,7 @@
 文件：`workspace/skills/boss-resume-ingest/SKILL.md`
 
 - 已改成与 `boss-sourcing` 相同的 runtime contract，不再要求手工改 skill 本体
+- 若 `tmp/boss-context-<RUN_ID>.json` 存在，`boss-resume-ingest` 也会先读它，再确认当前线程和附件
 
 ### 4.4 数据和运行目录强绑定
 

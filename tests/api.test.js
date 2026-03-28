@@ -1911,6 +1911,113 @@ test('JobService triggerSync records stream events from nanobot output', async (
   assert.deepEqual(streamedMessages, ['Starting sync', 'Warning line']);
 });
 
+test('AgentService runNanobotForJobSync uses deterministic boss cli sync when available', async () => {
+  const events = [];
+  const syncedPayloads = [];
+  let nanobotCalled = false;
+
+  const pool = {
+    async query(sql, params = []) {
+      if (sql.includes('insert into sourcing_run_events')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes('insert into jobs')) {
+        syncedPayloads.push(params);
+        return { rows: [{ id: syncedPayloads.length }], rowCount: 1 };
+      }
+
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+
+  const { AgentService } = require('../src/services/agent-service');
+  const { JobService } = require('../src/services/job-service');
+
+  const agentService = new AgentService({
+    pool,
+    nanobotRunner: {
+      async run() {
+        nanobotCalled = true;
+        return { ok: true, stdout: 'should_not_run' };
+      }
+    },
+    bossCliRunner: {
+      async bindTarget(payload) {
+        return {
+          ok: true,
+          session: {
+            runId: String(payload.runId),
+            targetId: 'boss-1',
+            tabUrl: 'https://www.zhipin.com/web/chat/index'
+          }
+        };
+      },
+      async listJobs() {
+        return {
+          ok: true,
+          jobs: [
+            {
+              jobName: '健康顾问（B0047007）',
+              encryptJobId: 'enc-job-1',
+              city: '重庆',
+              salary: '8-10K',
+              status: 'online'
+            },
+            {
+              jobName: '面点师傅（B0038011）',
+              encryptJobId: 'enc-job-2',
+              city: '重庆',
+              salary: '8-9K',
+              status: 'online'
+            }
+          ]
+        };
+      },
+      async getJobDetail({ jobId }) {
+        if (jobId === 'enc-job-1') {
+          return {
+            ok: true,
+            job: {
+              name: '健康顾问（B0047007）',
+              salary: '8-10K',
+              city: '重庆',
+              description: '负责客户跟进'
+            }
+          };
+        }
+
+        return {
+          ok: true,
+          job: {
+            name: '面点师傅（B0038011）',
+            salary: '8-9K',
+            city: '重庆',
+            description: '负责面点制作'
+          }
+        };
+      }
+    }
+  });
+
+  const originalRecordRunEvent = agentService.recordRunEvent.bind(agentService);
+  agentService.recordRunEvent = async (payload) => {
+    events.push(payload);
+    return originalRecordRunEvent(payload);
+  };
+
+  const jobService = new JobService({ pool, agentService });
+  agentService.jobService = jobService;
+
+  const result = await agentService.runNanobotForJobSync({ runId: 55 });
+
+  assert.equal(nanobotCalled, false);
+  assert.equal(result.ok, true);
+  assert.equal(result.syncedCount, 2);
+  assert.equal(syncedPayloads.length, 2);
+  assert.equal(events.some((event) => event.eventType === 'jobs_batch_synced'), true);
+});
+
 test('AgentService runNanobotForSchedule records stream events from nanobot output', async () => {
   const events = [];
   const pool = {
@@ -2062,6 +2169,7 @@ test('AgentService runNanobotForSchedule includes run id for followup mode', asy
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
       '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
       'CLI 规则：直接使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。',
+      '附件 handoff 模板：若当前线程已确认存在附件或预览，调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "91"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-91.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
     ].join('\n')
@@ -2114,6 +2222,7 @@ test('AgentService runNanobotForSchedule maps chat mode to chat workflow message
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
       '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
       'CLI 规则：直接使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。',
+      '附件 handoff 模板：若当前线程已确认存在附件或预览，调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "92"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-92.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
     ].join('\n')
@@ -2159,6 +2268,7 @@ test('AgentService runNanobotForSchedule maps download mode to download workflow
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
       '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
       'CLI 规则：直接使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。',
+      '附件 handoff 模板：若当前线程已确认存在附件或预览，调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "93"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-93.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
     ].join('\n')
@@ -2265,6 +2375,382 @@ test('AgentService runNanobotForSchedule includes custom requirement in source m
       '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
     ].join('\n')
   );
+});
+
+test('AgentService runNanobotForSchedule prepends deterministic source context when boss cli is enabled', async () => {
+  const { AgentService } = require('../src/services/agent-service');
+  let capturedMessage = null;
+  const recordedEvents = [];
+  const bossCliCalls = [];
+  const contextWrites = [];
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql) {
+        if (sql.includes('from jobs') && sql.includes('custom_requirement')) {
+          return {
+            rows: [{
+              custom_requirement: null,
+              job_name: '健康顾问（B0047007）',
+              boss_encrypt_job_id: 'target-job-encrypt-id'
+            }],
+            rowCount: 1
+          };
+        }
+
+        if (sql.includes('insert into sourcing_run_events')) {
+          return { rows: [], rowCount: 1 };
+        }
+
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    },
+    nanobotRunner: {
+      async run({ message }) {
+        capturedMessage = message;
+        return { ok: true, stdout: 'done' };
+      }
+    },
+    bossContextStore: {
+      async saveContext(runId, context) {
+        contextWrites.push({ runId, context });
+        return {
+          filePath: `/tmp/boss-context-${runId}.json`,
+          context
+        };
+      }
+    },
+    bossCliRunner: {
+      async bindTarget(payload) {
+        bossCliCalls.push({ command: 'bindTarget', payload });
+        return {
+          ok: true,
+          session: {
+            runId: String(payload.runId),
+            targetId: 'boss-1',
+            tabUrl: 'https://www.zhipin.com/web/chat/recommend?jobid=target-job-encrypt-id'
+          }
+        };
+      },
+      async getJobDetail(payload) {
+        bossCliCalls.push({ command: 'getJobDetail', payload });
+        return {
+          ok: true,
+          job: {
+            name: '健康顾问',
+            salary: '8-10K',
+            city: '重庆',
+            experience: '3-5年',
+            degree: '本科',
+            description: '负责客户跟进'
+          }
+        };
+      },
+      async listRecommendations(payload) {
+        bossCliCalls.push({ command: 'listRecommendations', payload });
+        return {
+          ok: true,
+          candidates: [
+            {
+              name: '张三',
+              jobName: '健康顾问',
+              labels: '活跃',
+              encryptUid: 'enc-uid-1'
+            },
+            {
+              name: '李四',
+              jobName: '健康顾问',
+              labels: '继续沟通',
+              encryptUid: 'enc-uid-2'
+            }
+          ]
+        };
+      }
+    }
+  });
+
+  const originalRecordRunEvent = agentService.recordRunEvent.bind(agentService);
+  agentService.recordRunEvent = async (payload) => {
+    recordedEvents.push(payload);
+    return originalRecordRunEvent(payload);
+  };
+
+  await agentService.runNanobotForSchedule({
+    runId: 108,
+    jobKey: '健康顾问_B0047007',
+    mode: 'source'
+  });
+
+  assert.equal(bossCliCalls.length, 3);
+  assert.equal(bossCliCalls[0].command, 'bindTarget');
+  assert.equal(bossCliCalls[1].command, 'getJobDetail');
+  assert.equal(bossCliCalls[2].command, 'listRecommendations');
+  assert.equal(contextWrites.length, 1);
+  assert.match(capturedMessage, /Deterministic browser context: current BOSS tab already bound/);
+  assert.match(capturedMessage, /Deterministic context file: \/tmp\/boss-context-108\.json/);
+  assert.match(capturedMessage, /Pre-read job detail:/);
+  assert.match(capturedMessage, /健康顾问 \| 8-10K \| 重庆 \| 3-5年 \| 本科/);
+  assert.match(capturedMessage, /张三/);
+  assert.equal(
+    recordedEvents.some((event) => event.eventType === 'boss_cli_command_succeeded'),
+    true
+  );
+});
+
+test('AgentService runNanobotForSchedule falls back to nanobot guardrails when boss cli bootstrap fails', async () => {
+  const { AgentService } = require('../src/services/agent-service');
+  let capturedMessage = null;
+  const recordedEvents = [];
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql) {
+        if (sql.includes('from jobs') && sql.includes('custom_requirement')) {
+          return {
+            rows: [{
+              custom_requirement: null,
+              job_name: '健康顾问（B0047007）',
+              boss_encrypt_job_id: 'target-job-encrypt-id'
+            }],
+            rowCount: 1
+          };
+        }
+
+        if (sql.includes('insert into sourcing_run_events')) {
+          return { rows: [], rowCount: 1 };
+        }
+
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    },
+    nanobotRunner: {
+      async run({ message }) {
+        capturedMessage = message;
+        return { ok: true, stdout: 'done' };
+      }
+    },
+    bossCliRunner: {
+      async bindTarget() {
+        throw new Error('boss_target_not_found');
+      }
+    }
+  });
+
+  const originalRecordRunEvent = agentService.recordRunEvent.bind(agentService);
+  agentService.recordRunEvent = async (payload) => {
+    recordedEvents.push(payload);
+    return originalRecordRunEvent(payload);
+  };
+
+  await agentService.runNanobotForSchedule({
+    runId: 109,
+    jobKey: '健康顾问_B0047007',
+    mode: 'source'
+  });
+
+  assert.doesNotMatch(capturedMessage, /Deterministic browser context:/);
+  assert.equal(
+    recordedEvents.some((event) => event.eventType === 'boss_cli_fallback_to_nanobot'),
+    true
+  );
+});
+
+test('AgentService runNanobotForSchedule prepends deterministic chat context when boss cli is enabled', async () => {
+  const { AgentService } = require('../src/services/agent-service');
+  let capturedMessage = null;
+  const bossCliCalls = [];
+  const contextWrites = [];
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql) {
+        if (sql.includes('from jobs') && sql.includes('custom_requirement')) {
+          return {
+            rows: [{
+              custom_requirement: null,
+              job_name: '健康顾问（B0047007）',
+              boss_encrypt_job_id: 'target-job-encrypt-id'
+            }],
+            rowCount: 1
+          };
+        }
+
+        if (sql.includes('insert into sourcing_run_events')) {
+          return { rows: [], rowCount: 1 };
+        }
+
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    },
+    nanobotRunner: {
+      async run({ message }) {
+        capturedMessage = message;
+        return { ok: true, stdout: 'done' };
+      }
+    },
+    bossContextStore: {
+      async saveContext(runId, context) {
+        contextWrites.push({ runId, context });
+        return {
+          filePath: `/tmp/boss-context-${runId}.json`,
+          context
+        };
+      }
+    },
+    bossCliRunner: {
+      async bindTarget(payload) {
+        bossCliCalls.push({ command: 'bindTarget', payload });
+        return {
+          ok: true,
+          session: {
+            runId: String(payload.runId),
+            targetId: 'boss-1',
+            tabUrl: 'https://www.zhipin.com/web/chat/index'
+          }
+        };
+      },
+      async listChats(payload) {
+        bossCliCalls.push({ command: 'listChats', payload });
+        return {
+          ok: true,
+          chats: [
+            {
+              name: '王五',
+              jobName: '健康顾问',
+              lastMessage: '您好，可以发我简历吗',
+              encryptUid: 'enc-uid-3'
+            }
+          ]
+        };
+      },
+      async listMessages(payload) {
+        bossCliCalls.push({ command: 'listMessages', payload });
+        return {
+          ok: true,
+          messages: [
+            { from: '王五', type: 'text', text: '您好，可以发我简历吗', time: '10:00' },
+            { from: 'me', type: 'text', text: '可以，稍后发您', time: '10:01' }
+          ]
+        };
+      }
+    }
+  });
+
+  await agentService.runNanobotForSchedule({
+    runId: 110,
+    jobKey: '健康顾问_B0047007',
+    mode: 'chat'
+  });
+
+  assert.equal(bossCliCalls.length, 3);
+  assert.equal(bossCliCalls[0].command, 'bindTarget');
+  assert.equal(bossCliCalls[1].command, 'listChats');
+  assert.equal(bossCliCalls[2].command, 'listMessages');
+  assert.equal(contextWrites.length, 1);
+  assert.match(capturedMessage, /Deterministic context file: \/tmp\/boss-context-110\.json/);
+  assert.match(capturedMessage, /Pre-read chat queue:/);
+  assert.match(capturedMessage, /王五 \| 健康顾问 \| 您好，可以发我简历吗/);
+  assert.match(capturedMessage, /Pre-read latest thread:/);
+  assert.match(capturedMessage, /\[10:00\] 王五: 您好，可以发我简历吗/);
+});
+
+test('AgentService runNanobotForSchedule prepends deterministic download context when boss cli is enabled', async () => {
+  const { AgentService } = require('../src/services/agent-service');
+  let capturedMessage = null;
+  const bossCliCalls = [];
+  const contextWrites = [];
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql) {
+        if (sql.includes('from jobs') && sql.includes('custom_requirement')) {
+          return {
+            rows: [{
+              custom_requirement: null,
+              job_name: '健康顾问（B0047007）',
+              boss_encrypt_job_id: 'target-job-encrypt-id'
+            }],
+            rowCount: 1
+          };
+        }
+
+        if (sql.includes('insert into sourcing_run_events')) {
+          return { rows: [], rowCount: 1 };
+        }
+
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    },
+    nanobotRunner: {
+      async run({ message }) {
+        capturedMessage = message;
+        return { ok: true, stdout: 'done' };
+      }
+    },
+    bossContextStore: {
+      async saveContext(runId, context) {
+        contextWrites.push({ runId, context });
+        return {
+          filePath: `/tmp/boss-context-${runId}.json`,
+          context
+        };
+      }
+    },
+    bossCliRunner: {
+      async bindTarget(payload) {
+        bossCliCalls.push({ command: 'bindTarget', payload });
+        return {
+          ok: true,
+          session: {
+            runId: String(payload.runId),
+            targetId: 'boss-1',
+            tabUrl: 'https://www.zhipin.com/web/chat/index'
+          }
+        };
+      },
+      async listChats(payload) {
+        bossCliCalls.push({ command: 'listChats', payload });
+        return {
+          ok: true,
+          chats: [
+            {
+              name: '赵六',
+              jobName: '健康顾问',
+              lastMessage: '我这边已上传附件简历',
+              encryptUid: 'enc-uid-4'
+            }
+          ]
+        };
+      },
+      async listMessages(payload) {
+        bossCliCalls.push({ command: 'listMessages', payload });
+        return {
+          ok: true,
+          messages: [
+            { from: '赵六', type: 'text', text: '我这边已上传附件简历', time: '11:00' },
+            { from: 'system', type: 'attachment', text: '附件简历', time: '11:01' }
+          ]
+        };
+      }
+    }
+  });
+
+  await agentService.runNanobotForSchedule({
+    runId: 111,
+    jobKey: '健康顾问_B0047007',
+    mode: 'download'
+  });
+
+  assert.equal(bossCliCalls.length, 3);
+  assert.equal(bossCliCalls[0].command, 'bindTarget');
+  assert.equal(bossCliCalls[1].command, 'listChats');
+  assert.equal(bossCliCalls[2].command, 'listMessages');
+  assert.equal(contextWrites.length, 1);
+  assert.match(capturedMessage, /Deterministic context file: \/tmp\/boss-context-111\.json/);
+  assert.match(capturedMessage, /Pre-read chat queue:/);
+  assert.match(capturedMessage, /赵六 \| 健康顾问 \| 我这边已上传附件简历/);
+  assert.match(capturedMessage, /Pre-read latest thread:/);
+  assert.match(capturedMessage, /\[11:01\] system: 附件简历/);
 });
 
 test('AgentService recordAction scopes candidate lookup by jobKey when candidateId is absent', async () => {

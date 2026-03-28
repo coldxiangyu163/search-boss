@@ -142,6 +142,7 @@ Windows 上常用：
 典型硬编码包括：
 
 - `PROJECT_ROOT = ~/work/百融云创/search-boss`
+- `BOSS_CONTEXT_FILE = $PROJECT_ROOT/tmp/boss-context-$RUN_ID.json`
 - `CLI = node ~/work/百融云创/search-boss/scripts/agent-callback-cli.js`
 - `NANOBOT_MEMORY_DIR = /Users/coldxiangyu/.nanobot-boss/workspace/memory`
 - `RESUME_LEDGER_FILE = /Users/coldxiangyu/.nanobot-boss/workspace/memory/boss-sourcing-resume-ledger.jsonl`

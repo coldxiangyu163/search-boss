@@ -1,9 +1,12 @@
 const path = require('node:path');
 
 class AgentService {
-  constructor({ pool, nanobotRunner = null }) {
+  constructor({ pool, nanobotRunner = null, bossCliRunner = null, bossContextStore = null, jobService = null }) {
     this.pool = pool;
     this.nanobotRunner = nanobotRunner;
+    this.bossCliRunner = bossCliRunner;
+    this.bossContextStore = bossContextStore;
+    this.jobService = jobService;
   }
 
   async createRun({ runKey, jobKey, mode }) {
@@ -1017,11 +1020,17 @@ class AgentService {
       throw new Error('nanobot_runner_not_configured');
     }
 
+    const deterministicContextPrompt = await this.#buildDeterministicContextPrompt({
+      runId,
+      jobKey,
+      mode
+    });
     let message = null;
 
     if (mode === 'followup') {
       message = [
         `/boss-sourcing --job "${jobKey}" --followup --run-id "${runId}"`,
+        deterministicContextPrompt,
         buildProjectRootPrompt(),
         buildExactJobKeyPrompt(jobKey),
         buildChatWriteContractPrompt(),
@@ -1029,12 +1038,14 @@ class AgentService {
         buildNoRepoIntrospectionPrompt(),
         buildBootstrapSequencePrompt(),
         buildCliUsagePrompt(),
+        buildAttachmentHandoffPrompt(runId),
         buildFailureEvidencePrompt(),
         buildCompletionPrompt()
-      ].join('\n');
+      ].filter(Boolean).join('\n');
     } else if (mode === 'chat') {
       message = [
         `/boss-sourcing --job "${jobKey}" --chat --run-id "${runId}"`,
+        deterministicContextPrompt,
         buildProjectRootPrompt(),
         buildExactJobKeyPrompt(jobKey),
         buildChatWriteContractPrompt(),
@@ -1042,12 +1053,14 @@ class AgentService {
         buildNoRepoIntrospectionPrompt(),
         buildBootstrapSequencePrompt(),
         buildCliUsagePrompt(),
+        buildAttachmentHandoffPrompt(runId),
         buildFailureEvidencePrompt(),
         buildCompletionPrompt()
-      ].join('\n');
+      ].filter(Boolean).join('\n');
     } else if (mode === 'download') {
       message = [
         `/boss-sourcing --job "${jobKey}" --download --run-id "${runId}"`,
+        deterministicContextPrompt,
         buildProjectRootPrompt(),
         buildExactJobKeyPrompt(jobKey),
         buildDownloadWriteContractPrompt(),
@@ -1055,9 +1068,10 @@ class AgentService {
         buildNoRepoIntrospectionPrompt(),
         buildBootstrapSequencePrompt(),
         buildCliUsagePrompt(),
+        buildAttachmentHandoffPrompt(runId),
         buildFailureEvidencePrompt(),
         buildCompletionPrompt()
-      ].join('\n');
+      ].filter(Boolean).join('\n');
     } else if (mode === 'status') {
       message = [
         `/boss-sourcing --status --job "${jobKey}" --run-id "${runId}"`,
@@ -1074,6 +1088,7 @@ class AgentService {
       const jobContext = await this.#getJobNanobotContext(jobKey);
       message = [
         `/boss-sourcing --job "${jobKey}" --source --run-id "${runId}"`,
+        deterministicContextPrompt,
         buildProjectRootPrompt(),
         buildExactJobKeyPrompt(jobKey),
         buildCustomRequirementPrompt(jobContext.customRequirement),
@@ -1088,13 +1103,33 @@ class AgentService {
         buildTerminalFailPrompt(),
         buildSourceQuotaPrompt(),
         '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
-      ].join('\n');
+      ].filter(Boolean).join('\n');
     }
 
     return this.#runNanobotWithStreaming({ runId, message });
   }
 
   async runNanobotForJobSync({ runId }) {
+    if (this.bossCliRunner && this.jobService) {
+      try {
+        return await this.#runDeterministicJobSync({ runId });
+      } catch (error) {
+        if (!this.nanobotRunner) {
+          throw error;
+        }
+
+        await this.recordRunEvent({
+          runId,
+          eventId: `boss-cli-sync-fallback:${runId}`,
+          occurredAt: new Date().toISOString(),
+          eventType: 'boss_cli_fallback_to_nanobot',
+          stage: 'deterministic_sync',
+          message: 'boss cli sync fallback to nanobot',
+          payload: { reason: error.message }
+        });
+      }
+    }
+
     if (!this.nanobotRunner) {
       throw new Error('nanobot_runner_not_configured');
     }
@@ -1113,6 +1148,108 @@ class AgentService {
       buildCompletionPrompt()
     ].join('\n');
     return this.#runNanobotWithStreaming({ runId, message });
+  }
+
+  async #runDeterministicJobSync({ runId }) {
+    await this.recordRunEvent({
+      runId,
+      eventId: `boss-cli-bind-started:${runId}:sync`,
+      occurredAt: new Date().toISOString(),
+      eventType: 'boss_cli_bind_started',
+      stage: 'deterministic_sync',
+      message: 'boss cli bind started',
+      payload: { mode: 'sync_jobs' }
+    });
+
+    const bindResult = await this.bossCliRunner.bindTarget({ runId });
+
+    await this.recordRunEvent({
+      runId,
+      eventId: `boss-cli-bind-succeeded:${runId}:sync`,
+      occurredAt: new Date().toISOString(),
+      eventType: 'boss_cli_command_succeeded',
+      stage: 'deterministic_sync',
+      message: 'boss cli bind succeeded',
+      payload: {
+        mode: 'sync_jobs',
+        command: 'target bind',
+        targetId: bindResult?.session?.targetId || null
+      }
+    });
+
+    await this.recordRunEvent({
+      runId,
+      eventId: `boss-cli-command-started:${runId}:sync:joblist`,
+      occurredAt: new Date().toISOString(),
+      eventType: 'boss_cli_command_started',
+      stage: 'deterministic_sync',
+      message: 'boss cli joblist started',
+      payload: { mode: 'sync_jobs', command: 'joblist' }
+    });
+
+    const jobListResult = await this.bossCliRunner.listJobs({ runId });
+    const rawJobs = Array.isArray(jobListResult?.jobs) ? jobListResult.jobs : [];
+    const jobs = [];
+
+    for (const job of rawJobs) {
+      let detailJob = null;
+
+      if (job.encryptJobId) {
+        try {
+          detailJob = (await this.bossCliRunner.getJobDetail({
+            runId,
+            jobId: job.encryptJobId
+          }))?.job || null;
+        } catch (error) {
+          detailJob = null;
+        }
+      }
+
+      jobs.push({
+        encryptJobId: job.encryptJobId || '',
+        jobName: detailJob?.name || job.jobName || '',
+        city: detailJob?.city || job.city || '',
+        salary: detailJob?.salary || job.salary || '',
+        status: normalizeSyncJobStatus(job.status),
+        jdText: detailJob?.description || '',
+        metadata: {
+          syncSource: 'boss_cli',
+          detailRaw: detailJob
+        }
+      });
+    }
+
+    await this.recordRunEvent({
+      runId,
+      eventId: `boss-cli-command-succeeded:${runId}:sync:joblist`,
+      occurredAt: new Date().toISOString(),
+      eventType: 'boss_cli_command_succeeded',
+      stage: 'deterministic_sync',
+      message: 'boss cli joblist succeeded',
+      payload: {
+        mode: 'sync_jobs',
+        command: 'joblist',
+        itemCount: jobs.length
+      }
+    });
+
+    const syncedAt = new Date().toISOString();
+    const result = await this.jobService.upsertJobsBatch({
+      runId,
+      eventId: `boss-cli-jobs-batch:${runId}:${syncedAt}`,
+      occurredAt: syncedAt,
+      jobs
+    });
+
+    return {
+      ok: true,
+      deterministic: true,
+      stdout: JSON.stringify({
+        eventType: 'jobs_batch_synced',
+        syncedCount: result.syncedCount
+      }),
+      ...result
+    };
   }
 
   #runNanobotWithStreaming({ runId, message }) {
@@ -1170,6 +1307,207 @@ class AgentService {
       bossEncryptJobId: result.rows[0].boss_encrypt_job_id || '',
       customRequirement: normalizeJobRequirement(result.rows[0].custom_requirement)
     };
+  }
+
+  async #buildDeterministicContextPrompt({ runId, jobKey, mode }) {
+    if (!this.bossCliRunner || !runId) {
+      return '';
+    }
+
+    await this.recordRunEvent({
+      runId,
+      eventId: `boss-cli-bind-started:${runId}:${mode}`,
+      occurredAt: new Date().toISOString(),
+      eventType: 'boss_cli_bind_started',
+      stage: 'deterministic_bootstrap',
+      message: 'boss cli bind started',
+      payload: { mode, jobKey }
+    });
+
+    try {
+      const bindResult = await this.bossCliRunner.bindTarget({ runId });
+      await this.recordRunEvent({
+        runId,
+        eventId: `boss-cli-bind-succeeded:${runId}:${mode}`,
+        occurredAt: new Date().toISOString(),
+        eventType: 'boss_cli_command_succeeded',
+        stage: 'deterministic_bootstrap',
+        message: 'boss cli bind succeeded',
+        payload: {
+          mode,
+          command: 'target bind',
+          targetId: bindResult?.session?.targetId || null
+        }
+      });
+
+      if (mode !== 'source' && mode !== 'chat' && mode !== 'followup' && mode !== 'download') {
+        return '';
+      }
+
+      const commandName = mode === 'source' ? 'recommend' : 'chatlist';
+      let jobDetailResult = null;
+
+      if (mode === 'source') {
+        const jobContext = await this.#getJobNanobotContext(jobKey);
+        if (jobContext.bossEncryptJobId) {
+          await this.recordRunEvent({
+            runId,
+            eventId: `boss-cli-command-started:${runId}:${mode}:job-detail`,
+            occurredAt: new Date().toISOString(),
+            eventType: 'boss_cli_command_started',
+            stage: 'deterministic_bootstrap',
+            message: 'boss cli job-detail started',
+            payload: { mode, command: 'job-detail', jobKey }
+          });
+
+          jobDetailResult = await this.bossCliRunner.getJobDetail({
+            runId,
+            jobId: jobContext.bossEncryptJobId
+          });
+
+          await this.recordRunEvent({
+            runId,
+            eventId: `boss-cli-command-succeeded:${runId}:${mode}:job-detail`,
+            occurredAt: new Date().toISOString(),
+            eventType: 'boss_cli_command_succeeded',
+            stage: 'deterministic_bootstrap',
+            message: 'boss cli job-detail succeeded',
+            payload: {
+              mode,
+              command: 'job-detail',
+              jobName: jobDetailResult?.job?.name || '',
+              jobId: jobContext.bossEncryptJobId
+            }
+          });
+        }
+      }
+
+      await this.recordRunEvent({
+        runId,
+        eventId: `boss-cli-command-started:${runId}:${mode}:${commandName}`,
+        occurredAt: new Date().toISOString(),
+        eventType: 'boss_cli_command_started',
+        stage: 'deterministic_bootstrap',
+        message: `boss cli ${commandName} started`,
+        payload: { mode, command: commandName, jobKey }
+      });
+
+      const commandResult = mode === 'source'
+        ? await this.bossCliRunner.listRecommendations({ runId, limit: 5 })
+        : await this.bossCliRunner.listChats({ runId, limit: 5 });
+
+      let threadResult = null;
+      if ((mode === 'chat' || mode === 'followup' || mode === 'download') && Array.isArray(commandResult?.chats) && commandResult.chats[0]?.encryptUid) {
+        await this.recordRunEvent({
+          runId,
+          eventId: `boss-cli-command-started:${runId}:${mode}:chatmsg`,
+          occurredAt: new Date().toISOString(),
+          eventType: 'boss_cli_command_started',
+          stage: 'deterministic_bootstrap',
+          message: 'boss cli chatmsg started',
+          payload: { mode, command: 'chatmsg', uid: commandResult.chats[0].encryptUid }
+        });
+
+        threadResult = await this.bossCliRunner.listMessages({
+          runId,
+          uid: commandResult.chats[0].encryptUid,
+          page: 1
+        });
+
+        await this.recordRunEvent({
+          runId,
+          eventId: `boss-cli-command-succeeded:${runId}:${mode}:chatmsg`,
+          occurredAt: new Date().toISOString(),
+          eventType: 'boss_cli_command_succeeded',
+          stage: 'deterministic_bootstrap',
+          message: 'boss cli chatmsg succeeded',
+          payload: {
+            mode,
+            command: 'chatmsg',
+            uid: commandResult.chats[0].encryptUid,
+            itemCount: threadResult?.messages?.length || 0
+          }
+        });
+      }
+
+      const itemCount = mode === 'source'
+        ? commandResult?.candidates?.length || 0
+        : commandResult?.chats?.length || 0;
+
+      await this.recordRunEvent({
+        runId,
+        eventId: `boss-cli-command-succeeded:${runId}:${mode}:${commandName}`,
+        occurredAt: new Date().toISOString(),
+        eventType: 'boss_cli_command_succeeded',
+        stage: 'deterministic_bootstrap',
+        message: `boss cli ${commandName} succeeded`,
+        payload: { mode, command: commandName, itemCount }
+      });
+
+      let contextFilePath = null;
+      const deterministicContext = {
+        mode,
+        bindResult,
+        jobDetailResult,
+        commandResult,
+        threadResult
+      };
+
+      if (this.bossContextStore) {
+        try {
+          const saveResult = await this.bossContextStore.saveContext(runId, deterministicContext);
+          contextFilePath = saveResult.filePath;
+          await this.recordRunEvent({
+            runId,
+            eventId: `boss-cli-context-ready:${runId}:${mode}`,
+            occurredAt: new Date().toISOString(),
+            eventType: 'boss_cli_context_ready',
+            stage: 'deterministic_bootstrap',
+            message: 'boss cli context saved',
+            payload: { mode, filePath: contextFilePath }
+          });
+        } catch (saveError) {
+          await this.recordRunEvent({
+            runId,
+            eventId: `boss-cli-context-save-failed:${runId}:${mode}`,
+            occurredAt: new Date().toISOString(),
+            eventType: 'boss_cli_command_failed',
+            stage: 'deterministic_bootstrap',
+            message: saveError.message,
+            payload: { mode, command: 'save-context' }
+          });
+        }
+      }
+
+      return buildDeterministicContextPrompt({
+        mode,
+        bindResult,
+        jobDetailResult,
+        commandResult,
+        threadResult,
+        contextFilePath
+      });
+    } catch (error) {
+      await this.recordRunEvent({
+        runId,
+        eventId: `boss-cli-command-failed:${runId}:${mode}`,
+        occurredAt: new Date().toISOString(),
+        eventType: 'boss_cli_command_failed',
+        stage: 'deterministic_bootstrap',
+        message: error.message,
+        payload: { mode, jobKey }
+      });
+      await this.recordRunEvent({
+        runId,
+        eventId: `boss-cli-fallback:${runId}:${mode}`,
+        occurredAt: new Date().toISOString(),
+        eventType: 'boss_cli_fallback_to_nanobot',
+        stage: 'deterministic_bootstrap',
+        message: 'boss cli fallback to nanobot',
+        payload: { mode, jobKey, reason: error.message }
+      });
+      return '';
+    }
   }
 }
 
@@ -1279,12 +1617,97 @@ function buildDownloadWriteContractPrompt() {
   return '回写格式固定：附件发现/下载都用 run-attachment，下载完成后再写 run-action(resume_downloaded)；优先补偿 pending/failed callback，避免盲目重下。';
 }
 
+function buildAttachmentHandoffPrompt(runId) {
+  return `附件 handoff 模板：若当前线程已确认存在附件或预览，调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "${runId}"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-${runId}.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。`;
+}
+
+function buildDeterministicContextPrompt({
+  mode,
+  bindResult,
+  jobDetailResult,
+  commandResult,
+  threadResult,
+  contextFilePath
+}) {
+  const lines = [
+    'Deterministic browser context: current BOSS tab already bound.',
+    `Bound targetId=${bindResult?.session?.targetId || 'unknown'} url=${bindResult?.session?.tabUrl || 'unknown'}`
+  ];
+
+  if (contextFilePath) {
+    lines.push(`Deterministic context file: ${contextFilePath}`);
+    lines.push('Read this context file before deciding whether the current UI matches the expected queue, job, or thread.');
+  }
+
+  if (mode === 'source') {
+    if (jobDetailResult?.job) {
+      const job = jobDetailResult.job;
+      lines.push('Pre-read job detail:');
+      lines.push(
+        `${job.name || ''} | ${job.salary || ''} | ${job.city || ''} | ${job.experience || ''} | ${job.degree || ''}`.trim()
+      );
+      if (job.description) {
+        lines.push(`JD: ${String(job.description).slice(0, 200)}`);
+      }
+    }
+
+    const candidates = Array.isArray(commandResult?.candidates)
+      ? commandResult.candidates.slice(0, 5)
+      : [];
+
+    if (candidates.length === 0) {
+      lines.push('Pre-read recommend list is empty. Treat this as a hint only and verify against current UI before failing the run.');
+      return lines.join('\n');
+    }
+
+    lines.push('Pre-read recommend candidates:');
+    for (const candidate of candidates) {
+      lines.push(`- ${candidate.name || 'unknown'} | ${candidate.jobName || ''} | ${candidate.labels || ''} | uid=${candidate.encryptUid || ''}`);
+    }
+    lines.push('Use these structured facts as a starting point, but re-check the visible UI state before any click or write action.');
+    return lines.join('\n');
+  }
+
+  const chats = Array.isArray(commandResult?.chats) ? commandResult.chats.slice(0, 5) : [];
+  if (chats.length === 0) {
+    lines.push('Pre-read chat list is empty. Verify current UI before deciding the queue is exhausted.');
+    return lines.join('\n');
+  }
+
+  lines.push('Pre-read chat queue:');
+  for (const chat of chats) {
+    lines.push(`- ${chat.name || 'unknown'} | ${chat.jobName || ''} | ${chat.lastMessage || ''} | uid=${chat.encryptUid || ''}`);
+  }
+  if (Array.isArray(threadResult?.messages) && threadResult.messages.length > 0) {
+    lines.push('Pre-read latest thread:');
+    for (const message of threadResult.messages.slice(0, 5)) {
+      lines.push(`[${message.time || ''}] ${message.from || 'unknown'}: ${message.text || ''}`);
+    }
+  }
+  if (mode === 'download') {
+    lines.push('Use these structured facts as a starting point, but re-check the visible UI state before attachment discovery, download, or callback writes.');
+    return lines.join('\n');
+  }
+
+  lines.push('Use these structured facts as a starting point, but re-check the visible UI state before sending messages or requesting resumes.');
+  return lines.join('\n');
+}
+
 function normalizeJobRequirement(value) {
   if (value === null || value === undefined) {
     return '';
   }
 
   return String(value).trim();
+}
+
+function normalizeSyncJobStatus(status) {
+  if (!status) {
+    return 'open';
+  }
+
+  const normalized = String(status).trim().toLowerCase();
+  return normalized === 'online' ? 'open' : normalized;
 }
 
 function normalizeCandidateStatus(status) {
