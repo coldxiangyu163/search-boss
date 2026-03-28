@@ -49,6 +49,9 @@ async function executeCli(
       url,
       body: payload
     });
+    if (response && (response.ok === false || response.status >= 400)) {
+      throw await buildLocalApiError(response);
+    }
     const data = await response.json();
     stdout.write(`${JSON.stringify(data, null, 2)}\n`);
     return { exitCode: 0, stdout: JSON.stringify(data) };
@@ -147,10 +150,54 @@ async function defaultRequestImpl({ method, url, body }) {
   });
 
   if (!response.ok) {
-    throw new Error(`Local API failed: ${response.status}`);
+    throw await buildLocalApiError(response);
   }
 
   return response;
+}
+
+async function buildLocalApiError(response) {
+  const status = Number(response?.status) || 0;
+  const detail = await readErrorDetail(response);
+  return new Error(detail ? `Local API failed: ${status} - ${detail}` : `Local API failed: ${status}`);
+}
+
+async function readErrorDetail(response) {
+  try {
+    const contentType = typeof response?.headers?.get === 'function'
+      ? response.headers.get('content-type')
+      : response?.headers instanceof Map
+        ? response.headers.get('content-type')
+        : '';
+
+    if (contentType && /application\/json/i.test(contentType) && typeof response?.json === 'function') {
+      const payload = await response.json();
+      return payload?.message || payload?.error || '';
+    }
+
+    if (typeof response?.json === 'function' && typeof response?.text !== 'function') {
+      const payload = await response.json();
+      return payload?.message || payload?.error || '';
+    }
+
+    if (typeof response?.text === 'function') {
+      const text = await response.text();
+      if (!text) {
+        return '';
+      }
+
+      try {
+        const payload = JSON.parse(text);
+        return payload?.message || payload?.error || text;
+      } catch {
+        return text;
+      }
+    }
+  } catch {
+    return '';
+  }
+
+  return '';
 }
 
 function toCamelCase(value) {

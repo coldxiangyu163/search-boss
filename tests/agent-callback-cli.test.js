@@ -207,3 +207,33 @@ test('agent callback cli reads api base and token from .env file when process en
     'http://macos-local:3011/api/agent/runs/88/complete?token=macos-local-agent'
   );
 });
+
+test('agent callback cli surfaces Local API error payload details', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-callback-cli-'));
+  const payloadFile = path.join(tempDir, 'candidate.json');
+
+  await fs.writeFile(payloadFile, JSON.stringify({
+    jobKey: '面点师傅_B0038011',
+    name: '某某'
+  }));
+
+  const result = await executeCli(['run-candidate', '--run-id', '163', '--file', payloadFile], {
+    requestImpl: async () => ({
+      ok: false,
+      status: 400,
+      headers: new Map([['content-type', 'application/json']]),
+      json: async () => ({
+        error: 'boss_encrypt_geek_id_missing',
+        message: '候选人写入缺少 bossEncryptGeekId。'
+      }),
+      text: async () => JSON.stringify({
+        error: 'boss_encrypt_geek_id_missing',
+        message: '候选人写入缺少 bossEncryptGeekId。'
+      })
+    })
+  });
+
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /400/);
+  assert.match(result.stderr, /bossEncryptGeekId/);
+});

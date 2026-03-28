@@ -458,6 +458,37 @@ test('GET /api/runs/:runId/events returns run events payload', async () => {
   assert.equal(response.body.items[0].id, 11);
 });
 
+test('GET /api/runs/:runId returns run status payload', async () => {
+  let capturedRunId = null;
+
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: { async listSchedules() { return []; }, async upsertSchedule() { return {}; } },
+      agent: {
+        async getRun(runId) {
+          capturedRunId = runId;
+          return {
+            id: Number(runId),
+            status: 'completed',
+            mode: 'sync_jobs'
+          };
+        }
+      }
+    }
+  });
+
+  const response = await request(app).get('/api/runs/33');
+
+  assert.equal(response.status, 200);
+  assert.equal(capturedRunId, '33');
+  assert.equal(response.body.item.id, 33);
+  assert.equal(response.body.item.status, 'completed');
+  assert.equal(response.body.item.mode, 'sync_jobs');
+});
+
 test('POST /api/agent/jobs/batch upserts jobs through agent API', async () => {
   let capturedPayload = null;
 
@@ -1299,7 +1330,7 @@ test('JobService triggerSync creates sync run and calls nanobot', async () => {
       '回写格式固定：bootstrap 先写 run-event；jobs-batch 直接写 jobs 数组，不要为确认 payload 再读取 job-service.js 或 tests/api.test.js。每个 job 至少包含 { jobKey, encryptJobId, jobName, city, salary, status, jdText?, metadata? }。',
       '运行契约：必须复用调用方提供的 RUN_ID=33；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "33"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
-      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。',
+      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
       'CLI 规则：直接使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
@@ -1970,14 +2001,16 @@ test('AgentService runNanobotForSchedule sends source workflow guardrails in mes
       '本次运行只使用当前项目目录：PROJECT_ROOT="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f"；回写 CLI="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/scripts/agent-callback-cli.js"。不要猜测或探测其它历史路径。',
       '本次任务的唯一后端岗位标识是 JOB_KEY="健康顾问_B0047007"。禁止根据 jobName、encryptJobId、页面标题或短 id 重新拼接、改写或替换 jobKey；如果页面恢复后落到其他岗位，必须先切回该 JOB_KEY 对应岗位再继续。',
       '如数据库中没有额外岗位定制要求，仅按 BOSS 职位信息正常执行寻源。',
-      '回写格式固定：候选人事实用 run-candidate，打招呼动作用 run-action(greet_sent)；不要读取 tests/api.test.js 或 src/services/*.js 反推字段。',
+      '回写格式固定：run-candidate 必须直接写顶层 { jobKey, bossEncryptGeekId, name, status, city?, education?, experience?, school?, metadata? }；其中 metadata 承载 decision/priority/facts/reasoning。run-action(greet_sent) 必须直接写顶层 { actionType, jobKey, bossEncryptGeekId, dedupeKey, payload }；不要写 candidate.displayName 这类嵌套自定义结构，也不要读取 tests/api.test.js 或 src/services/*.js 反推字段。',
       '运行契约：必须复用调用方提供的 RUN_ID=88；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "88"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
-      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。',
+      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
       'CLI 规则：直接使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。',
-      '岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，允许直接导航到目标推荐页 "https://www.zhipin.com/web/chat/recommend?jobid=target-job-encrypt-id" 并确认标题回到“健康顾问（B0047007）”。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。',
+      '岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，允许直接导航到目标推荐页 "https://www.zhipin.com/web/chat/recommend?jobid=target-job-encrypt-id" 并确认标题回到“健康顾问（B0047007）”。若外层 recommend URL 已是目标岗位，但页面标题、可见岗位名或 iframe jobid 仍指向其他岗位或出现 jobid=null，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。',
+      'run-fail 规则：run-fail 一律先写 tmp/run-fail.json 再执行 --file；禁止尝试内联 --message。只有在当前页面证据连续证明目标岗位无法恢复后，才允许终止 source run。',
+      '执行目标：单次 source run 默认目标是成功打招呼 5 人。已沟通/继续沟通的不计入新增完成数；不要因为刚完成 1 人或当前一屏候选人偏弱就提前 run-complete，而是继续滚动、翻页、换批次筛选，直到本轮新增 greet_sent 达到 5 人，或已被当前页面证据证明暂无更多合格候选人，或出现明确阻塞。若最终少于 5 人就结束，run-complete summary 必须显式写出 targetCount=5、achievedCount 和不足原因。',
       '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
     ].join('\n')
   );
@@ -2027,7 +2060,7 @@ test('AgentService runNanobotForSchedule includes run id for followup mode', asy
       '回写格式固定：消息用 run-message；再次索简历前先 followup-decision；动作用 run-action；附件用 run-attachment；每次回写都显式携带 attemptId、eventId、sequence、jobKey。',
       '运行契约：必须复用调用方提供的 RUN_ID=91；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "91"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
-      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。',
+      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
       'CLI 规则：直接使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
@@ -2079,7 +2112,7 @@ test('AgentService runNanobotForSchedule maps chat mode to chat workflow message
       '回写格式固定：消息用 run-message；再次索简历前先 followup-decision；动作用 run-action；附件用 run-attachment；每次回写都显式携带 attemptId、eventId、sequence、jobKey。',
       '运行契约：必须复用调用方提供的 RUN_ID=92；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "92"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
-      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。',
+      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
       'CLI 规则：直接使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
@@ -2124,7 +2157,7 @@ test('AgentService runNanobotForSchedule maps download mode to download workflow
       '回写格式固定：附件发现/下载都用 run-attachment，下载完成后再写 run-action(resume_downloaded)；优先补偿 pending/failed callback，避免盲目重下。',
       '运行契约：必须复用调用方提供的 RUN_ID=93；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "93"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
-      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。',
+      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
       'CLI 规则：直接使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
@@ -2168,7 +2201,7 @@ test('AgentService runNanobotForSchedule maps status mode to status workflow mes
       '本次任务的唯一后端岗位标识是 JOB_KEY="健康顾问_B0047007"。禁止根据 jobName、encryptJobId、页面标题或短 id 重新拼接、改写或替换 jobKey；如果页面恢复后落到其他岗位，必须先切回该 JOB_KEY 对应岗位再继续。',
       '运行契约：必须复用调用方提供的 RUN_ID=94；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "94"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
-      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。',
+      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
       'CLI 规则：直接使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
@@ -2219,14 +2252,16 @@ test('AgentService runNanobotForSchedule includes custom requirement in source m
       '本次任务的唯一后端岗位标识是 JOB_KEY="健康顾问_B0047007"。禁止根据 jobName、encryptJobId、页面标题或短 id 重新拼接、改写或替换 jobKey；如果页面恢复后落到其他岗位，必须先切回该 JOB_KEY 对应岗位再继续。',
       '执行寻源匹配时，除 BOSS 职位信息外，还必须叠加本地数据库维护的岗位定制要求；该要求不会同步回 BOSS，但会影响候选人筛选与判断。',
       '岗位定制要求：必须有电话销售经验',
-      '回写格式固定：候选人事实用 run-candidate，打招呼动作用 run-action(greet_sent)；不要读取 tests/api.test.js 或 src/services/*.js 反推字段。',
+      '回写格式固定：run-candidate 必须直接写顶层 { jobKey, bossEncryptGeekId, name, status, city?, education?, experience?, school?, metadata? }；其中 metadata 承载 decision/priority/facts/reasoning。run-action(greet_sent) 必须直接写顶层 { actionType, jobKey, bossEncryptGeekId, dedupeKey, payload }；不要写 candidate.displayName 这类嵌套自定义结构，也不要读取 tests/api.test.js 或 src/services/*.js 反推字段。',
       '运行契约：必须复用调用方提供的 RUN_ID=99；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "99"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
-      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。',
+      '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
       'CLI 规则：直接使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。',
-      '岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，允许直接导航到目标推荐页 "https://www.zhipin.com/web/chat/recommend?jobid=target-job-encrypt-id" 并确认标题回到“健康顾问（B0047007）”。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。',
+      '岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，允许直接导航到目标推荐页 "https://www.zhipin.com/web/chat/recommend?jobid=target-job-encrypt-id" 并确认标题回到“健康顾问（B0047007）”。若外层 recommend URL 已是目标岗位，但页面标题、可见岗位名或 iframe jobid 仍指向其他岗位或出现 jobid=null，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。',
+      'run-fail 规则：run-fail 一律先写 tmp/run-fail.json 再执行 --file；禁止尝试内联 --message。只有在当前页面证据连续证明目标岗位无法恢复后，才允许终止 source run。',
+      '执行目标：单次 source run 默认目标是成功打招呼 5 人。已沟通/继续沟通的不计入新增完成数；不要因为刚完成 1 人或当前一屏候选人偏弱就提前 run-complete，而是继续滚动、翻页、换批次筛选，直到本轮新增 greet_sent 达到 5 人，或已被当前页面证据证明暂无更多合格候选人，或出现明确阻塞。若最终少于 5 人就结束，run-complete summary 必须显式写出 targetCount=5、achievedCount 和不足原因。',
       '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
     ].join('\n')
   );
@@ -2409,6 +2444,39 @@ test('POST /api/agent/runs/:runId/messages rejects geek-only writes without jobK
 
   assert.equal(response.status, 400);
   assert.equal(response.body.error, 'job_key_required_for_geek_lookup');
+});
+
+test('POST /api/agent/runs/:runId/candidates rejects writes without bossEncryptGeekId', async () => {
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: { async listSchedules() { return []; }, async upsertSchedule() { return {}; } },
+      agent: {
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return { allowed: true }; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; },
+        async createRun() { return { id: 1 }; },
+        async recordRunEvent() { return { ok: true }; },
+        async upsertCandidate() { throw new Error('boss_encrypt_geek_id_missing'); }
+      }
+    },
+    config: { agentToken: 'search-boss-local-agent' }
+  });
+
+  const response = await request(app)
+    .post('/api/agent/runs/12/candidates?token=search-boss-local-agent')
+    .send({
+      eventId: 'candidate-observed:12:moumou',
+      jobKey: '面点师傅_B0038011',
+      name: '某某',
+      status: 'recommended'
+    });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'boss_encrypt_geek_id_missing');
 });
 
 test('AgentService upsertCandidate records candidate_upserted event after database write', async () => {

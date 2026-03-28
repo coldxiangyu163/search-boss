@@ -884,6 +884,29 @@ class AgentService {
     return result.rows[0]?.status || null;
   }
 
+  async getRun(runId) {
+    const result = await this.pool.query(
+      `
+        select
+          id,
+          run_key as "runKey",
+          mode,
+          status,
+          attempt_count as "attemptCount",
+          started_at as "startedAt",
+          completed_at as "completedAt",
+          created_at as "createdAt",
+          updated_at as "updatedAt"
+        from sourcing_runs
+        where id = $1
+        limit 1
+      `,
+      [runId]
+    );
+
+    return result.rows[0] || null;
+  }
+
   async failReplacementRunsForRunId({ runId, occurredAt, message = 'replacement_run_created' }) {
     const result = await this.pool.query(
       `
@@ -1062,6 +1085,8 @@ class AgentService {
         buildFailureEvidencePrompt(),
         buildCompletionPrompt(),
         buildSourceRecoveryPrompt(jobContext),
+        buildTerminalFailPrompt(),
+        buildSourceQuotaPrompt(),
         '执行寻源打招呼时，按浏览器当前状态推进，不要按预设流程脑补。硬规则：只有看到工作经历/教育经历等详情区块，才算进入候选人详情；点击“不合适/提交”不等于详情已关闭；只有确认详情区块消失且推荐列表重新可见，才允许进入下一个候选人；每一步动作后都要先校验页面状态，不满足就先重新 snapshot / wait_for / recover；不要在刚找到 1 到 2 个 A 候选人后提前结束，summary 统计必须从本轮 events.jsonl 实算。'
       ].join('\n');
     }
@@ -1193,14 +1218,14 @@ function buildSourceRecoveryPrompt({ jobName, bossEncryptJobId }) {
     : '';
 
   if (recommendUrl && normalizedJobName) {
-    return `岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，允许直接导航到目标推荐页 "${recommendUrl}" 并确认标题回到“${normalizedJobName}”。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。`;
+    return `岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，允许直接导航到目标推荐页 "${recommendUrl}" 并确认标题回到“${normalizedJobName}”。若外层 recommend URL 已是目标岗位，但页面标题、可见岗位名或 iframe jobid 仍指向其他岗位或出现 jobid=null，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。`;
   }
 
   if (recommendUrl) {
-    return `岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，允许直接导航到目标推荐页 "${recommendUrl}"。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。`;
+    return `岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，允许直接导航到目标推荐页 "${recommendUrl}"。若外层 recommend URL 已是目标岗位，但页面标题、可见岗位名或 iframe jobid 仍指向其他岗位或出现 jobid=null，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。`;
   }
 
-  return '岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，只允许使用显式导航重新打开目标推荐页。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。';
+  return '岗位恢复规则：如果当前页面落到其他岗位，优先通过页面可见的岗位切换 UI 切回目标岗位；若 UI 恢复失败，只允许使用显式导航重新打开目标推荐页。若外层 recommend URL 已是目标岗位，但页面标题、可见岗位名或 iframe jobid 仍指向其他岗位或出现 jobid=null，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。禁止使用 evaluate_script 或注入脚本直接修改 iframe.src、history、location 或其它页面状态来强行纠偏。';
 }
 
 function buildRunContractPrompt(runId) {
@@ -1215,7 +1240,7 @@ function buildNoRepoIntrospectionPrompt() {
 }
 
 function buildBootstrapSequencePrompt() {
-  return '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。';
+  return '固定启动顺序：只允许先读 boss-sourcing SKILL；run-scoped 流程只额外读取 references/runtime-contract.md；只有 source/chat/followup 才额外读取 references/browser-states.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。';
 }
 
 function buildCliUsagePrompt() {
@@ -1230,12 +1255,20 @@ function buildCompletionPrompt() {
   return '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。';
 }
 
+function buildTerminalFailPrompt() {
+  return 'run-fail 规则：run-fail 一律先写 tmp/run-fail.json 再执行 --file；禁止尝试内联 --message。只有在当前页面证据连续证明目标岗位无法恢复后，才允许终止 source run。';
+}
+
 function buildSyncWriteContractPrompt() {
   return '回写格式固定：bootstrap 先写 run-event；jobs-batch 直接写 jobs 数组，不要为确认 payload 再读取 job-service.js 或 tests/api.test.js。每个 job 至少包含 { jobKey, encryptJobId, jobName, city, salary, status, jdText?, metadata? }。';
 }
 
 function buildSourceWriteContractPrompt() {
-  return '回写格式固定：候选人事实用 run-candidate，打招呼动作用 run-action(greet_sent)；不要读取 tests/api.test.js 或 src/services/*.js 反推字段。';
+  return '回写格式固定：run-candidate 必须直接写顶层 { jobKey, bossEncryptGeekId, name, status, city?, education?, experience?, school?, metadata? }；其中 metadata 承载 decision/priority/facts/reasoning。run-action(greet_sent) 必须直接写顶层 { actionType, jobKey, bossEncryptGeekId, dedupeKey, payload }；不要写 candidate.displayName 这类嵌套自定义结构，也不要读取 tests/api.test.js 或 src/services/*.js 反推字段。';
+}
+
+function buildSourceQuotaPrompt() {
+  return '执行目标：单次 source run 默认目标是成功打招呼 5 人。已沟通/继续沟通的不计入新增完成数；不要因为刚完成 1 人或当前一屏候选人偏弱就提前 run-complete，而是继续滚动、翻页、换批次筛选，直到本轮新增 greet_sent 达到 5 人，或已被当前页面证据证明暂无更多合格候选人，或出现明确阻塞。若最终少于 5 人就结束，run-complete summary 必须显式写出 targetCount=5、achievedCount 和不足原因。';
 }
 
 function buildChatWriteContractPrompt() {

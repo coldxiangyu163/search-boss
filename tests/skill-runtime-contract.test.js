@@ -25,6 +25,18 @@ test('boss-sourcing skill forbids repo introspection and CLI probing during boot
   assert.match(bossSourcingSkill, /dashboard-summary/);
 });
 
+test('boss-sourcing skill forbids recursive reference discovery and requires file-backed terminal callbacks', () => {
+  assert.match(bossSourcingSkill, /find.*rg.*python.*rglob/i);
+  assert.match(bossSourcingSkill, /run-fail\.json/);
+  assert.match(bossSourcingSkill, /jobid=null/i);
+});
+
+test('boss-sourcing skill documents source callback identifier requirements', () => {
+  assert.match(bossSourcingSkill, /bossEncryptGeekId/);
+  assert.match(bossSourcingSkill, /candidate\.displayName/);
+  assert.match(bossSourcingSkill, /5 new successful greetings|5 new successful greeting|5 个/i);
+});
+
 test('boss-resume-ingest skill documents runtime placeholders instead of machine-specific paths', () => {
   assert.doesNotMatch(bossResumeIngestSkill, /\/Users\/coldxiangyu/);
   assert.match(bossResumeIngestSkill, /NANOBOT_RUNTIME_FILE/);

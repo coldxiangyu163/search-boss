@@ -8,6 +8,7 @@ const {
   createSyncModalProgress,
   updateSyncModalProgress,
   resolveSyncTerminalStatus,
+  resolveSyncTerminalStatusFromRun,
   buildSyncStages
 } = require('../public/sync-modal-progress');
 
@@ -66,6 +67,35 @@ test('resolveSyncTerminalStatus only marks explicit terminal failures as failed'
       status: 'completed',
       error: ''
     }
+  );
+});
+
+test('resolveSyncTerminalStatusFromRun treats persisted run state as terminal fallback', () => {
+  assert.deepEqual(
+    resolveSyncTerminalStatusFromRun({
+      status: 'completed'
+    }),
+    {
+      status: 'completed',
+      error: ''
+    }
+  );
+
+  assert.deepEqual(
+    resolveSyncTerminalStatusFromRun({
+      status: 'failed'
+    }),
+    {
+      status: 'failed',
+      error: ''
+    }
+  );
+
+  assert.equal(
+    resolveSyncTerminalStatusFromRun({
+      status: 'running'
+    }),
+    null
   );
 });
 

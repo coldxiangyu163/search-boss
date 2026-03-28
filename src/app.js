@@ -100,6 +100,23 @@ function createApp({ services = {}, config = {} } = {}) {
     }
   });
 
+  app.get('/api/runs/:runId', async (req, res, next) => {
+    try {
+      const item = await services.agent.getRun(req.params.runId);
+      if (!item) {
+        res.status(404).json({
+          error: 'run_not_found',
+          message: '未找到对应执行任务。'
+        });
+        return;
+      }
+
+      res.json({ item });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get('/api/candidates', async (req, res, next) => {
     try {
       const result = await services.candidates.listCandidates({
@@ -356,6 +373,14 @@ function createApp({ services = {}, config = {} } = {}) {
   });
 
   app.use((error, _req, res, _next) => {
+    if (error.message === 'boss_encrypt_geek_id_missing') {
+      res.status(400).json({
+        error: 'boss_encrypt_geek_id_missing',
+        message: '候选人写入缺少 bossEncryptGeekId。'
+      });
+      return;
+    }
+
     if (error.message === 'candidate_identifier_missing') {
       res.status(400).json({
         error: 'candidate_identifier_missing',

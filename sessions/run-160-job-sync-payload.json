@@ -1,0 +1,107 @@
+{
+  "jobs": [
+    {
+      "jobKey": "面点师傅_B0038011",
+      "encryptJobId": "8eca6cadddd93ddf0nVz39W7GFZT",
+      "jobName": "面点师傅（B0038011）",
+      "city": "重庆",
+      "salary": "8-9K",
+      "status": "open",
+      "jdText": "岗位职责:  \n1. 负责日常面点的制作与创新，确保出品质量与口味  \n2. 配合团队完成门店餐品供应任务，保障出餐效率  \n3. 参与食材准备及厨房卫生管理工作  \n\n任职要求：  \n1. 善于沟通、按时完成上级交给的工作  \n2. 拥有良好的团队合作精神，能迅速融入团队  \n3. 具备良好的学习能力，能够不断改进工作方法",
+      "metadata": {
+        "source": "boss_job_list_and_detail",
+        "brandName": "北京好还",
+        "companyName": "北京好还科技有限公司",
+        "positionName": "面点师",
+        "experience": "3-5年",
+        "education": "本科",
+        "jobType": "全职",
+        "jobStatusCode": 0,
+        "jobAuditStatus": 3,
+        "viewCount": 329,
+        "concatCount": 114,
+        "interestCount": 2,
+        "addressText": "重庆两江新区渝兴广场B1栋19楼3号房",
+        "detailRaw": {
+          "pre": {"code":0,"message":"Success","zpData":{"auditStatus":3,"jobStatus":0,"deleted":0,"hitJobScheme":false,"hitNewUnpassDetail":false}},
+          "edit": {"code":0,"message":"Success","zpData":{"hunterIdentity":0,"delayDeadLine":0,"proxyPublishJobFirstTip":null,"needProxyCom":true,"cityName":"重庆","cityLocation":101040100,"delExperienceJobTip":false,"inputEditMap":{"banEditAddress":false,"banEditSalary":false,"banEditJobName":true},"showWorkAddress":0,"bossAddress":null,"bpoExposureCitys":null,"remindLocationMap":{},"onlyRemindMap":{},"positionSuggest":null,"suggestSalaryDesc":null,"modifyAuditSuggest":null,"humanTagSuggest":null,"job":{"encryptId":"8eca6cadddd93ddf0nVz39W7GFZT","userId":740169172,"auditId":0,"brandId":23206247,"position":290213,"jobName":"面点师傅（B0038011）","lowSalary":8,"highSalary":9,"salaryType":0,"location":101040100,"experience":105,"degree":203,"jobType":0,"jobStatus":0,"deleted":0,"auditStatus":3,"browseTimes":0,"customPositionId":0,"salaryMonth":12,"comId":12491548,"proxyJob":1,"lowRecruitNum":0,"highRecruitNum":0,"source":0,"flag":1,"performance":"","postDescription":"岗位职责:  \n1. 负责日常面点的制作与创新，确保出品质量与口味  \n2. 配合团队完成门店餐品供应任务，保障出餐效率  \n3. 参与食材准备及厨房卫生管理工作  \n\n任职要求：  \n1. 善于沟通、按时完成上级交给的工作  \n2. 拥有良好的团队合作精神，能迅速融入团队  \n3. 具备良好的学习能力，能够不断改进工作方法","positionName":"面点师","locationName":"重庆","blueCollar":true,"encRelationId":"d4c4d1d1ddec12af1HV83dW4GFFSxIi8Uvye","relationIdJson":"[{\"addressText\":\"重庆两江新区渝兴广场B1栋19楼3号房\",\"cover\":1,\"encRelationId\":\"d4c4d1d1ddec12af1HV83dW4GFFSxIi8Uvye\"}]","addressText":"重庆两江新区渝兴广场B1栋19楼3号房","leastMonth":0,"daysPerWeek":0,"department":"","reportObject":"","anonymous":0,"proxyType":1,"graduateYear":0,"lowGraduateYear":0,"recruitEndTime":null,"requireIndustries":"","requireIndustriesDesc":"","trainingPlan":"","jobGrade":0,"certificates":"","certificatesDesc":null,"lowAge":0,"highAge":0,"acceptOverseas":0,"overseasArea":"","overseasAreaDesc":null,"overseasLanguage":"","overseasLanguageDesc":null,"overseasDuration":"","overseasDurationDesc":null,"acType":0,"periodType":0,"period":null,"workday":null,"deadline":null,"partTimeJobJson":null,"partTimeJobDesc":null,"partTimeLowSalary":0,"partTimeHighSalary":0,"partTimeSalaryType":0,"partTimeSalaryDesc":null,"partTimeSwitchStatus":0,"basicSalary":0,"salaryDay":0,"socialInsuranceType":0,"socialInsuranceTypeName":null,"other":null,"highBasicSalary":0,"performanceTag":null,"otherTag":null,"probation":0,"performanceExplain":null,"settlementType":0,"settlementTypeDesc":null,"settlementDetail":0,"settlementDetailDesc":null,"employmentTime":0,"employmentTimeDesc":null,"unrealSalaryTip":null,"timeType":0,"timeLength":null,"timeDetail":null,"vacation":null,"jobAuditSuggest":null,"payRejectJobTip":null,"spreadCity":null,"spreadCityShowText":null,"preferenceJsonStr":"{\"nlpSkills\":[{\"id\":7184,\"options\":[{\"hidden\":false,\"id\":130096,\"name\":\"连锁餐饮店\"},{\"hidden\":false,\"id\":130097,\"name\":\"个体餐饮店\"},{\"hidden\":true,\"id\":130100,\"name\":\"其它\"}],\"questionType\":2},{\"id\":7185,\"options\":[{\"hidden\":false,\"id\":130102,\"name\":\"不招学徒\"}],\"questionType\":2},{\"id\":7177,\"options\":[{\"hidden\":false,\"id\":130061,\"name\":\"有面点师经验\"}],\"questionType\":2},{\"id\":7179,\"options\":[{\"hidden\":false,\"id\":133018,\"name\":\"3到5年面点师经验\"},{\"hidden\":false,\"id\":133019,\"name\":\"5年以上面点师经验\"}],\"questionType\":2},{\"id\":7180,\"options\":[{\"hidden\":false,\"id\":131407,\"name\":\"面馆经验\"},{\"hidden\":false,\"id\":131408,\"name\":\"早餐店经验\"}],\"questionType\":2},{\"id\":7182,\"options\":[{\"hidden\":false,\"id\":130079,\"name\":\"包子经验\"},{\"hidden\":false,\"id\":130081,\"name\":\"饺子经验\"},{\"hidden\":false,\"id\":130082,\"name\":\"馒头/花卷经验\"},{\"hidden\":false,\"id\":130083,\"name\":\"面条经验\"}],\"questionType\":2},{\"id\":7183,\"options\":[{\"hidden\":true,\"id\":130095,\"name\":\"其它\"}],\"questionType\":2}],\"customizeSkills\":[]}","encTemplateId":null,"templateName":null,"encPreferredProjectId":null,"workType":0,"workArea":null,"hunterPublish":0,"encProjectId":null,"geekRequirement":null,"publishScene":0,"direct":false},"skillList":["面馆经验","3到5年面点师经验","不招学徒","5年以上面点师经验","其它","个体餐饮店","包子经验","早餐店经验","连锁餐饮店","有面点师经验","面条经验","饺子经验","馒头/花卷经验"],"jobPoi":{"address":"重庆两江新区渝兴广场B1栋19楼3号房","longitude":106.500733,"latitude":29.617668,"province":"重庆","city":"重庆","area":"两江新区","poiTitle":"渝兴广场","jobLocationInfo":"渝兴广场","jobRoomInfo":"B1栋19楼3号房","poiCode":"","district":null,"adCode":null,"businessName":null,"jobAreaShowType":0},"proxyRecruitData":{"comId":12491548,"fullCompanyName":"北京好还科技有限公司","brandId":23206247,"brandName":"北京好还","brandLogo":"https://img.bosszhipin.com/beijin/icon/894ce6fa7e58d64d57e7f22d2f3a9d18afa7fcceaa24b8ea28f56f1bb14732c0.png","brandIndustryName":"互联网","encComId":null,"encBrandId":null},"brandInfo":{"brandId":23206247,"name":"北京好还","industryName":"互联网"},"userExtra":{"resumeEmail":"","companyFullName":"重庆百融睿达科技有限公司","bossComId":0},"autoShowSuggest":false,"newAddressGray":true,"existJobLibrary":false,"jobLibraryType":0,"vipPhoneAssistant":{"hasVip4":0,"phoneAssistantStatus":0,"phone":null,"title":null,"summary":null},"hasSpreadCity":false,"editFlag":"8431b3f88f569969nGYghI_EREBax422VfKZTeChg-fCa0k-guRBkL7rIoayXg0KIeSXnedjIcfttEtsS4EYwG9ht5U~","editGroup":{"groupId12601":0,"groupId130431":1,"hitAIQuickPublishJob":false},"hitPositionPredictGray":true,"showUsageSpecification":false,"showUsageSpecificationIntro":true,"jobTypeList":[{"code":0,"name":"社招全职","title":"社招","expLimit":[101,103,104,105,106,107]},{"code":5,"name":"应届校园招聘","title":"校招","expLimit":[109]},{"code":4,"name":"实习生招聘","title":"实习","expLimit":[109]}],"jobTypeExpand":0,"schoolRecGuideGray":0,"allowSubmitWithoutChange":false,"goldfish":false,"overseasTendencyJobTypeList":[0,4,5,6],"overseasJobTypeSwitch":false,"overseasAddress":null,"cannotEdit":false,"cannotEditReason":null,"aiDisclaimer":"AI生成内容仅供参考，请您根据实际招聘需求发布职位","hiddenInputItem":false,"publishRcdJobTypes":null,"showJdTplEntrance":true,"showJdAiGenEntrance":true,"showJdAiGenEntranceV2":true,"publishRcdJobTypesV2":null,"showPrefillEntrance":true,"hitNewPublishFromSafeAddress":true,"hitNewPublishFromSafeForm":false,"publishRcdJobTypes121831":null,"publishRcdJobTypes130534":null,"publishRcdJobTypes130731":null,"jdAiGenAddInputText":2,"retainDialogGroup":0,"encAtsJobId":"","canCopyJob":1,"proxyHistoryJob":true,"recruitEndRequired":false}}
+        }
+      }
+    },
+    {
+      "jobKey": "健康顾问_B0047007",
+      "encryptJobId": "87ad5537fb5d102b0nVy0960FFtY",
+      "jobName": "健康顾问（B0047007）",
+      "city": "重庆",
+      "salary": "5-6K",
+      "status": "open",
+      "jdText": "岗位职责:  \n1. 为客户提供健康相关的专业咨询服务  \n2. 协助客户制定个性化健康管理方案  \n3. 收集并整理客户反馈，优化服务流程  \n\n任职要求：  \n1. 善于沟通、按时完成上级交给的工作  \n2. 拥有良好的团队合作精神，能迅速融入团队  \n3. 具备良好的学习能力，能够不断改进工作方法",
+      "metadata": {
+        "source": "boss_job_list_and_detail",
+        "brandName": "北京好还",
+        "companyName": "北京好还科技有限公司",
+        "positionName": "健康顾问",
+        "experience": "经验不限",
+        "education": "大专",
+        "jobType": "全职",
+        "jobStatusCode": 0,
+        "jobAuditStatus": 3,
+        "viewCount": 109,
+        "concatCount": 80,
+        "interestCount": 3,
+        "addressText": "重庆两江新区渝兴广场B1栋19楼3号房",
+        "detailRaw": "captured_in_browser_fetch"
+      }
+    },
+    {
+      "jobKey": "面点师傅_B0038007",
+      "encryptJobId": "f1794dc9d966f4f80nVy0960E1ZX",
+      "jobName": "面点师傅（B0038007）",
+      "city": "重庆",
+      "salary": "5-6K",
+      "status": "pending_open",
+      "jdText": "岗位职责:  \n1. 负责面点的制作与出品，确保口味与品质符合标准  \n2. 协助完成日常厨房相关工作，保持工作区域整洁有序  \n3. 根据需求灵活调整工作内容，保证出餐效率  \n\n任职要求：  \n1、善于沟通、按时完成上级交给的工作  \n2、拥有良好的团队合作精神，能迅速融入团队  \n3、具备良好的学习能力，能够不断改进工作方法",
+      "metadata": {
+        "source": "boss_job_list_and_detail",
+        "brandName": "百融睿达",
+        "companyName": "重庆百融睿达科技有限公司",
+        "positionName": "面点师",
+        "experience": "3-5年",
+        "education": "大专",
+        "jobType": "全职",
+        "jobStatusCode": 3,
+        "jobAuditStatus": 0,
+        "viewCount": 0,
+        "concatCount": 0,
+        "interestCount": 0,
+        "addressText": "重庆两江新区渝兴广场B1栋19楼3号房",
+        "detailRaw": "captured_in_browser_fetch"
+      }
+    },
+    {
+      "jobKey": "销售专员",
+      "encryptJobId": "0207b7bb2f6d36180nVy39-9F1FV",
+      "jobName": "销售专员",
+      "city": "重庆",
+      "salary": "10-12K",
+      "status": "closed",
+      "jdText": "岗位职责：\n1. 负责公司产品的销售及；\n2. 制定和执行市场营销策略与计划，并完成业绩指标；\n3. 开拓新市场，发展新客户；\n4. 建立和维护良好的客户关系，提高客户满意度\n4. 参与行业调研和分析,为公司决策提供建议性意见。\n任职要求：\n1. 只要有2年销售相关的工作经验；\n2. 有韧性、有较强的抗压能力；\n3. 善于与人沟通，可以抓住用户痛点，共情能力强。\n薪资待遇：\n1. 各种团建\n2. 定期团队培训\n3. 五险一金、法定节假日\n4. 销售额提成\n5. 月薪10000-12000万",
+      "metadata": {
+        "source": "boss_job_list_and_detail",
+        "brandName": "北京好还科技有限公司",
+        "companyName": "北京好还科技有限公司",
+        "positionName": "销售专员",
+        "experience": "1-3年",
+        "education": "本科",
+        "jobType": "全职",
+        "jobStatusCode": 1,
+        "jobAuditStatus": 3,
+        "viewCount": 6,
+        "concatCount": 3,
+        "interestCount": 0,
+        "addressText": "重庆两江新区渝兴广场B1栋19楼3号房",
+        "detailRaw": "captured_in_browser_fetch"
+      }
+    }
+  ]
+}

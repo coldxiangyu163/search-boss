@@ -81,6 +81,7 @@ const {
   createSyncModalProgress: createSyncModalProgressState,
   updateSyncModalProgress: updateSyncModalProgressState,
   resolveSyncTerminalStatus: resolveSyncTerminalStatusForEvent,
+  resolveSyncTerminalStatusFromRun: resolveSyncTerminalStatusFromRunSnapshot,
   buildSyncStages: buildSyncTimelineStages
 } = window.SyncModalProgress;
 
@@ -522,12 +523,27 @@ async function pollSyncEvents() {
   }
 
   try {
-    const result = await fetchJson(`/api/runs/${state.syncModal.runId}/events?afterId=${state.syncModal.lastEventId}`);
-    for (const event of result.items || []) {
-      state.syncModal.lastEventId = Math.max(state.syncModal.lastEventId, event.id || 0);
-      appendSyncEvent(event);
-      applySyncEventStatus(event);
+    const [eventsResult, runResult] = await Promise.allSettled([
+      fetchJson(`/api/runs/${state.syncModal.runId}/events?afterId=${state.syncModal.lastEventId}`),
+      fetchJson(`/api/runs/${state.syncModal.runId}`)
+    ]);
+
+    if (eventsResult.status === 'fulfilled') {
+      for (const event of eventsResult.value.items || []) {
+        state.syncModal.lastEventId = Math.max(state.syncModal.lastEventId, event.id || 0);
+        appendSyncEvent(event);
+        applySyncEventStatus(event);
+      }
     }
+
+    if (runResult.status === 'fulfilled') {
+      applySyncRunSnapshotStatus(runResult.value.item);
+    }
+
+    if (eventsResult.status === 'rejected' && runResult.status === 'rejected') {
+      throw eventsResult.reason || runResult.reason || new Error('sync_poll_failed');
+    }
+
     render();
   } catch (error) {
     state.syncModal.error = error.message;
@@ -540,6 +556,15 @@ async function pollSyncEvents() {
 function applySyncEventStatus(event) {
   const terminalStatus = resolveSyncTerminalStatusForEvent(event);
 
+  applySyncTerminalStatus(terminalStatus);
+}
+
+function applySyncRunSnapshotStatus(run) {
+  const terminalStatus = resolveSyncTerminalStatusFromRunSnapshot(run);
+  applySyncTerminalStatus(terminalStatus);
+}
+
+function applySyncTerminalStatus(terminalStatus) {
   if (terminalStatus?.status === 'completed') {
     state.syncModal.status = 'completed';
     stopSyncPolling();

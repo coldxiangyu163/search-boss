@@ -189,10 +189,12 @@ async function getLocal(path) {
 启动纪律：
 
 1. 只读取本 skill 与当前模式必需的 reference，禁止先扫项目目录或测试文件找契约。
+   引用路径固定后，禁止再用 `find`、`rg`、`python`、`rglob` 或其它递归扫描重新定位 `references/runtime-contract.md` / `references/browser-states.md`。
 2. 禁止执行 `agent-callback-cli.js --help`、裸命令探测、或通过源码/测试反推 payload。
 3. 先确保 `tmp/`、`sessions/`、`RESUME_DIR` 存在。
 4. 先执行 `dashboard-summary` 验证本地后台，再写 bootstrap event。
 5. 只有在当前 run 内完成后台探活、bootstrap 回写，并亲自尝试过 Chrome/MCP 读取后，才允许因浏览器阻塞 `run-fail`；禁止直接复用旧失败文件。
+6. `run-fail` / `run-complete` 也必须先写 JSON 文件，再用 `--file` 调用；禁止先试内联 `--message`。
 
 1. 确认 Chrome 已打开并连接到 `chrome-devtools`
 2. 确认 BOSS 招聘端已登录
@@ -536,6 +538,14 @@ await postLocal(`/api/agent/runs/${RUN_ID}/fail`, {
 | 准备索简历 | 先查 `followup-decision` | 直接发消息 |
 | 发现附件 | 先登记 attachment | 先下载后判断是否重复 |
 | 下载完成 | 写 attachment + `resume_downloaded` action | 只改 `resumeDownloaded=true` |
+| source 恢复岗位 | 先验证可见岗位标题与目标一致；若外层 URL 对了但页面仍显示其它岗位或 `jobid=null`，继续 recover 或显式失败 | 把外层 recommend URL 命中当成恢复成功 |
+
+source 写回字段最小集：
+
+- `run-candidate` 顶层必须至少有 `jobKey`、`bossEncryptGeekId`、`name`、`status`
+- `metadata` 才承载 `decision`、`priority`、`facts`、`reasoning`
+- `run-action(greet_sent)` 顶层必须至少有 `actionType`、`jobKey`、`bossEncryptGeekId`、`dedupeKey`
+- 禁止写 `candidate.displayName` 这类自定义嵌套结构替代后端识别字段
 
 ## Common Mistakes
 
