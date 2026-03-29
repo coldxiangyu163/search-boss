@@ -12,6 +12,7 @@ const { BossContextStore } = require('./services/boss-context-store');
 const { RunOrchestrator } = require('./services/run-orchestrator');
 const { DeterministicContextService } = require('./services/deterministic-context-service');
 const { SourceLoopService } = require('./services/source-loop-service');
+const { FollowupLoopService } = require('./services/followup-loop-service');
 const { LlmEvaluator } = require('./services/llm-evaluator');
 
 const nanobotRunner = new NanobotRunner({
@@ -34,20 +35,33 @@ agentService.deterministicContextService = new DeterministicContextService({
 });
 agentService.runOrchestrator = new RunOrchestrator({ agentService });
 
-const sourceLoopService = (config.sourceLoopEnabled && bossCliRunner && config.llmApiKey)
+const llmEvaluator = config.llmApiKey
+  ? new LlmEvaluator({
+    apiBase: config.llmApiBase,
+    apiKey: config.llmApiKey,
+    model: config.llmModel
+  })
+  : null;
+
+const sourceLoopService = (config.sourceLoopEnabled && bossCliRunner && llmEvaluator)
   ? new SourceLoopService({
     bossCliRunner,
     agentService,
-    llmEvaluator: new LlmEvaluator({
-      apiBase: config.llmApiBase,
-      apiKey: config.llmApiKey,
-      model: config.llmModel
-    }),
+    llmEvaluator,
     targetCount: config.sourceLoopTargetCount
   })
   : null;
 
-const schedulerService = new SchedulerService({ pool, agentService, sourceLoopService });
+const followupLoopService = (config.sourceLoopEnabled && bossCliRunner && llmEvaluator)
+  ? new FollowupLoopService({
+    bossCliRunner,
+    agentService,
+    llmEvaluator,
+    maxThreads: config.followupLoopMaxThreads
+  })
+  : null;
+
+const schedulerService = new SchedulerService({ pool, agentService, sourceLoopService, followupLoopService });
 const jobService = new JobService({ pool, agentService });
 agentService.jobService = jobService;
 

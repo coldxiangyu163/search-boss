@@ -163,11 +163,88 @@ class BossCliRunner {
     ]);
   }
 
+  async selectChatJobFilter({ runId, jobName }) {
+    return this.#run([
+      'chat-select-job',
+      '--run-id',
+      String(runId),
+      '--job-name',
+      String(jobName)
+    ]);
+  }
+
+  async selectChatUnreadFilter({ runId }) {
+    return this.#run([
+      'chat-select-unread',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
+  async inspectVisibleChatList({ runId, limit = 30 }) {
+    return this.#run([
+      'chat-visible-list',
+      '--run-id',
+      String(runId),
+      '--limit',
+      String(limit)
+    ]);
+  }
+
+  async clickChatRow({ runId, index, dataId }) {
+    const args = ['chat-click-row', '--run-id', String(runId)];
+    if (index !== undefined) {
+      args.push('--index', String(index));
+    }
+    if (dataId) {
+      args.push('--data-id', String(dataId));
+    }
+    return this.#run(args);
+  }
+
+  async navigateTo({ runId, url }) {
+    return this.#run([
+      'navigate',
+      '--run-id',
+      String(runId),
+      '--url',
+      String(url)
+    ]);
+  }
+
+  async sendChatMessage({ runId, text }) {
+    return this.#run([
+      'chat-send-message',
+      '--run-id',
+      String(runId),
+      '--text',
+      String(text)
+    ]);
+  }
+
+  async clickRequestResume({ runId }) {
+    return this.#run([
+      'chat-request-resume',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
   async inspectAttachmentState({ runId }) {
     return this.#run([
       'attachment-state',
       '--run-id',
       String(runId)
+    ]);
+  }
+
+  async resumeDownload({ runId, outputPath }) {
+    return this.#run([
+      'resume-download',
+      '--run-id',
+      String(runId),
+      '--output-path',
+      String(outputPath)
     ]);
   }
 

@@ -1056,10 +1056,357 @@ function buildRecommendGreetResultExpression() {
   })()`;
 }
 
+async function selectChatJobFilter({
+  cdpClient,
+  targetId,
+  urlPrefix,
+  jobName
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildSelectChatJobFilterExpression({ jobName })
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_chat_job_filter_failed');
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 1_000));
+  return result;
+}
+
+function buildSelectChatJobFilterExpression({ jobName }) {
+  return `(() => {
+    try {
+      const chatTopJob = document.querySelector('.chat-top-job');
+      if (!chatTopJob) {
+        return JSON.stringify({ ok: false, reason: 'boss_chat_job_dropdown_not_found' });
+      }
+
+      const label = chatTopJob.querySelector('.ui-dropmenu-label');
+      if (label) label.click();
+
+      const targetJobName = ${JSON.stringify(jobName || '')};
+      const items = Array.from(chatTopJob.querySelectorAll('.ui-dropmenu-list li'));
+      const match = items.find((li) => {
+        const text = (li.textContent || '').replace(/\\s+/g, ' ').trim();
+        return targetJobName && text.includes(targetJobName);
+      });
+
+      if (!match) {
+        return JSON.stringify({ ok: false, reason: 'boss_chat_job_not_in_filter', available: items.map(li => (li.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 60)) });
+      }
+
+      match.click();
+      return JSON.stringify({ ok: true, selected: (match.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 60) });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_chat_job_filter_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
+async function selectChatUnreadFilter({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildSelectChatUnreadFilterExpression()
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_chat_unread_filter_failed');
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  return result;
+}
+
+function buildSelectChatUnreadFilterExpression() {
+  return `(() => {
+    try {
+      const filterLeft = document.querySelector('.chat-message-filter-left');
+      if (!filterLeft) {
+        return JSON.stringify({ ok: false, reason: 'boss_chat_filter_area_not_found' });
+      }
+
+      const spans = Array.from(filterLeft.querySelectorAll('span'));
+      const unreadSpan = spans.find((s) => (s.textContent || '').trim() === '未读');
+      if (!unreadSpan) {
+        return JSON.stringify({ ok: false, reason: 'boss_chat_unread_tab_not_found' });
+      }
+
+      if (unreadSpan.classList.contains('active')) {
+        return JSON.stringify({ ok: true, alreadyActive: true });
+      }
+
+      unreadSpan.click();
+      return JSON.stringify({ ok: true, alreadyActive: false });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_chat_unread_filter_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
+async function inspectVisibleChatList({
+  cdpClient,
+  targetId,
+  urlPrefix,
+  limit = 30
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildInspectVisibleChatListExpression({ limit })
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_chat_visible_list_failed');
+  }
+
+  return result;
+}
+
+function buildInspectVisibleChatListExpression({ limit }) {
+  return `(() => {
+    try {
+      const rows = Array.from(document.querySelectorAll('.geek-item'));
+      const visible = rows.filter((r) => r.offsetHeight > 0).slice(0, ${limit});
+      const threads = visible.map((row, index) => {
+        const nameEl = row.querySelector('.geek-name, .name');
+        const jobEl = row.querySelector('.source-job, .job-name');
+        const timeEl = row.querySelector('.time, .time-shadow');
+        const msgEl = row.querySelector('.last-msg, .message, .msg');
+        const unreadEl = row.querySelector('.unread, .unread-count, [class*="unread"]');
+        const uid = row.getAttribute('data-uid') || row.getAttribute('data-encrypt-uid') || row.dataset?.uid || row.dataset?.encryptUid || '';
+        const dataId = row.getAttribute('data-id') || row.id || '';
+        return {
+          index,
+          dataId,
+          name: (nameEl?.textContent || '').trim(),
+          jobName: (jobEl?.textContent || '').trim(),
+          lastTime: (timeEl?.textContent || '').trim(),
+          lastMessage: (msgEl?.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80),
+          encryptUid: uid,
+          hasUnread: Boolean(unreadEl && unreadEl.offsetWidth > 0)
+        };
+      });
+      return JSON.stringify({ ok: true, threads, total: visible.length });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_chat_list_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
+async function clickChatRow({
+  cdpClient,
+  targetId,
+  urlPrefix,
+  index,
+  dataId
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildClickChatRowExpression({ index, dataId })
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_chat_row_click_failed');
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  return result;
+}
+
+function buildClickChatRowExpression({ index, dataId }) {
+  return `(() => {
+    try {
+      const rows = Array.from(document.querySelectorAll('.geek-item')).filter((r) => r.offsetHeight > 0);
+      let target = null;
+      const targetDataId = ${JSON.stringify(dataId || '')};
+      const targetIndex = ${Number.isFinite(index) ? index : -1};
+
+      if (targetDataId) {
+        target = rows.find((r) => (r.getAttribute('data-id') || r.id || '') === targetDataId);
+      }
+
+      if (!target && targetIndex >= 0 && targetIndex < rows.length) {
+        target = rows[targetIndex];
+      }
+
+      if (!target) {
+        return JSON.stringify({ ok: false, reason: 'boss_chat_row_not_found' });
+      }
+
+      target.click();
+
+      const nameEl = target.querySelector('.geek-name, .name');
+      return JSON.stringify({
+        ok: true,
+        clicked: true,
+        name: (nameEl?.textContent || '').trim(),
+        dataId: target.getAttribute('data-id') || ''
+      });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_chat_row_click_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
+async function navigateTo({
+  cdpClient,
+  targetId,
+  urlPrefix,
+  url
+} = {}) {
+  if (!url) {
+    throw new Error('boss_navigate_url_required');
+  }
+
+  await cdpClient.sendCommand({
+    targetId,
+    urlPrefix,
+    method: 'Page.navigate',
+    params: { url }
+  });
+
+  // Wait for page to stabilize
+  await new Promise((resolve) => setTimeout(resolve, 2_000));
+
+  const currentUrl = await getUrl({ cdpClient, targetId, urlPrefix });
+
+  return {
+    ok: true,
+    url: currentUrl
+  };
+}
+
+async function sendChatMessage({
+  cdpClient,
+  targetId,
+  urlPrefix,
+  text
+} = {}) {
+  if (!text || typeof text !== 'string') {
+    throw new Error('boss_chat_message_text_required');
+  }
+
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildSendChatMessageExpression({ text })
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_chat_send_message_failed');
+  }
+
+  return result;
+}
+
+function buildSendChatMessageExpression({ text }) {
+  return `(() => {
+    try {
+      const editor = document.querySelector('.boss-chat-editor-input[contenteditable="true"]');
+      if (!editor) {
+        return JSON.stringify({ ok: false, reason: 'boss_chat_editor_not_found' });
+      }
+
+      editor.focus();
+      editor.textContent = ${JSON.stringify(text)};
+      editor.dispatchEvent(new Event('input', { bubbles: true }));
+
+      const sendBtn = Array.from(document.querySelectorAll('button, a, span, div'))
+        .find((node) => {
+          const t = (node.textContent || '').replace(/\\s+/g, '').trim();
+          return t === '发送' && node.offsetWidth > 0 && node.offsetHeight > 0;
+        });
+
+      if (!sendBtn) {
+        return JSON.stringify({ ok: false, reason: 'boss_chat_send_button_not_found' });
+      }
+
+      sendBtn.click();
+
+      return JSON.stringify({ ok: true, sent: true, textLength: ${JSON.stringify(text)}.length });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_chat_send_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
+async function clickRequestResume({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildRequestResumeExpression()
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_chat_request_resume_failed');
+  }
+
+  return result;
+}
+
+function buildRequestResumeExpression() {
+  return `(() => {
+    try {
+      const threadPane = document.querySelector('.chat-conversation, .conversation-box, .chat-message-list, .conversation-message');
+      if (!threadPane) {
+        return JSON.stringify({ ok: false, reason: 'boss_chat_thread_pane_not_found' });
+      }
+
+      const actionBtns = Array.from(document.querySelectorAll('button, a, span, div'));
+      const resumeBtn = actionBtns.find((node) => {
+        const t = (node.textContent || '').replace(/\\s+/g, '').trim();
+        return t === '求简历' && node.offsetWidth > 0 && node.offsetHeight > 0;
+      });
+
+      if (!resumeBtn) {
+        return JSON.stringify({ ok: false, reason: 'boss_chat_request_resume_button_not_found' });
+      }
+
+      const disabled = resumeBtn.disabled
+        || resumeBtn.getAttribute('aria-disabled') === 'true'
+        || resumeBtn.classList.contains('disabled');
+
+      if (disabled) {
+        return JSON.stringify({ ok: false, reason: 'boss_chat_request_resume_button_disabled' });
+      }
+
+      resumeBtn.click();
+
+      return JSON.stringify({ ok: true, requested: true });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_chat_request_resume_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
 module.exports = {
   getUrl,
   evaluateJson,
   bossFetch,
+  selectChatJobFilter,
+  selectChatUnreadFilter,
+  inspectVisibleChatList,
+  clickChatRow,
+  navigateTo,
   clickRecommendPager,
   clickRecommendGreet,
   inspectRecommendState,
@@ -1070,4 +1417,6 @@ module.exports = {
   inspectAttachmentState,
   inspectResumePreviewMeta,
   downloadResumeAttachment,
+  sendChatMessage,
+  clickRequestResume,
 };

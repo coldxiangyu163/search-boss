@@ -1,8 +1,9 @@
 class SchedulerService {
-  constructor({ pool, agentService, sourceLoopService = null }) {
+  constructor({ pool, agentService, sourceLoopService = null, followupLoopService = null }) {
     this.pool = pool;
     this.agentService = agentService;
     this.sourceLoopService = sourceLoopService;
+    this.followupLoopService = followupLoopService;
   }
 
   async listSchedules() {
@@ -188,6 +189,12 @@ class SchedulerService {
     try {
       if (taskType === 'source' && this.sourceLoopService) {
         await this.sourceLoopService.run({ runId, jobKey });
+        await this.#finalizeScheduledRun({ schedule, scheduledRunId, scheduledJobId });
+        return;
+      }
+
+      if ((taskType === 'followup' || taskType === 'chat' || taskType === 'download') && this.followupLoopService) {
+        await this.followupLoopService.run({ runId, jobKey, mode: taskType });
         await this.#finalizeScheduledRun({ schedule, scheduledRunId, scheduledJobId });
         return;
       }

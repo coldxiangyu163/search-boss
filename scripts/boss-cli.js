@@ -431,6 +431,125 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
     };
   }
 
+  if (options.command === 'chat-select-job') {
+    const session = await sessionStore.loadSession(options.runId);
+    if (!options.jobName) {
+      throw new Error('Missing value for --job-name');
+    }
+
+    const result = await browserCommands.selectChatJobFilter({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      jobName: options.jobName
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
+  if (options.command === 'chat-select-unread') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.selectChatUnreadFilter({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
+  if (options.command === 'chat-visible-list') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.inspectVisibleChatList({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      limit: Number(options.limit || 30)
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
+  if (options.command === 'chat-click-row') {
+    const session = await sessionStore.loadSession(options.runId);
+    const index = options.index !== undefined ? Number(options.index) : undefined;
+    const dataId = options['data-id'] || undefined;
+
+    const result = await browserCommands.clickChatRow({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      index,
+      dataId
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
+  if (options.command === 'navigate') {
+    const session = await sessionStore.loadSession(options.runId);
+    if (!options.url) {
+      throw new Error('Missing value for --url');
+    }
+
+    const result = await browserCommands.navigateTo({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      url: options.url
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
+  if (options.command === 'chat-send-message') {
+    const session = await sessionStore.loadSession(options.runId);
+    if (!options.text) {
+      throw new Error('Missing value for --text');
+    }
+
+    const result = await browserCommands.sendChatMessage({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      text: options.text
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
+  if (options.command === 'chat-request-resume') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.clickRequestResume({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
   if (options.command === 'resume-panel') {
     const session = await sessionStore.loadSession(options.runId);
     const resume = await browserCommands.evaluateJson({
