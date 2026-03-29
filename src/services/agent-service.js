@@ -1438,7 +1438,8 @@ function buildNoRepoIntrospectionPrompt() {
 
 function buildBootstrapSequencePrompt(mode = '') {
   if (mode === 'source') {
-    return '固定启动顺序：先读 boss-sourcing SKILL 做路由；source 只继续读 boss-source-greet SKILL、boss-sourcing/references/runtime-contract.md、boss-source-greet/references/browser-states.md。不要再读 chat/followup 的页面 reference，也不要用 find、rg、python、rglob 重新定位这些固定路径。';
+    return '固定启动顺序：先读 boss-sourcing SKILL 做路由；source 只继续读 boss-source-greet SKILL、boss-sourcing/references/runtime-contract.md、boss-source-greet/references/browser-states.md。不要再读 chat/followup 的页面 reference，也不要用 find、rg、python、rglob 重新定位这些固定路径。' +
+      'Chrome 探活规则：bootstrap 完成后，先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 确认页面可用；禁止在 recommend-state 成功之前使用 take_snapshot 或 wait_for；如果 recommend-state 报错，等待 5 秒后重试一次，再失败才允许用 take_snapshot 做页面诊断。';
   }
 
   if (mode === 'chat' || mode === 'followup' || mode === 'download') {
