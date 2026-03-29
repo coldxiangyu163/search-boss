@@ -1,3 +1,59 @@
+function randomDelay(minMs, maxMs) {
+  const ms = minMs + Math.random() * (maxMs - minMs);
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function realClick({ cdpClient, targetId, urlPrefix, selector, selectorAll, index = 0 }) {
+  const findExpr = selectorAll
+    ? `(() => {
+        const els = Array.from(document.querySelectorAll(${JSON.stringify(selectorAll)}));
+        const el = els.filter(e => e.offsetWidth > 0 && e.offsetHeight > 0)[${index}];
+        if (!el) return JSON.stringify({ found: false });
+        const rect = el.getBoundingClientRect();
+        return JSON.stringify({ found: true, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+      })()`
+    : `(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el || el.offsetWidth === 0) return JSON.stringify({ found: false });
+        const rect = el.getBoundingClientRect();
+        return JSON.stringify({ found: true, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+      })()`;
+
+  const result = await evaluateJson({ cdpClient, targetId, urlPrefix, expression: findExpr });
+  if (!result?.found) {
+    throw new Error('boss_element_not_found_for_click');
+  }
+
+  await cdpClient.dispatchMouseClick({ targetId, urlPrefix, x: result.x, y: result.y });
+  return { clicked: true, x: result.x, y: result.y };
+}
+
+async function realClickByText({ cdpClient, targetId, urlPrefix, text, tag = '*', extraFilter = '' }) {
+  const expression = `(() => {
+    const els = Array.from(document.querySelectorAll(${JSON.stringify(tag)}));
+    const el = els.find(e => {
+      const t = (e.textContent || '').replace(/\\s+/g, '').trim();
+      return t === ${JSON.stringify(text)} && e.offsetWidth > 0 && e.offsetHeight > 0 ${extraFilter};
+    });
+    if (!el) return JSON.stringify({ found: false });
+    const rect = el.getBoundingClientRect();
+    return JSON.stringify({ found: true, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+  })()`;
+
+  const result = await evaluateJson({ cdpClient, targetId, urlPrefix, expression });
+  if (!result?.found) {
+    throw new Error(`boss_text_element_not_found:${text}`);
+  }
+
+  await cdpClient.dispatchMouseClick({ targetId, urlPrefix, x: result.x, y: result.y });
+  return { clicked: true, x: result.x, y: result.y };
+}
+
+async function bringToFront({ cdpClient, targetId, urlPrefix } = {}) {
+  await cdpClient.bringToFront({ targetId, urlPrefix });
+  return { ok: true };
+}
+
 async function getUrl({ cdpClient, targetId, urlPrefix } = {}) {
   const result = await cdpClient.evaluate({
     targetId,
@@ -710,7 +766,7 @@ function buildChatThreadStateExpression() {
       return JSON.stringify({
         ok: true,
         threadOpen: Boolean(active) && Boolean(threadPane),
-        activeUid: active?.getAttribute('data-uid') || active?.getAttribute('data-encrypt-uid') || active?.dataset?.uid || active?.dataset?.encryptUid || '',
+        activeUid: active?.getAttribute('data-uid') || active?.getAttribute('data-encrypt-uid') || active?.dataset?.uid || active?.dataset?.encryptUid || active?.getAttribute('data-id') || active?.id?.replace(/^_/, '') || '',
         activeThread: active ? {
           name: (active.querySelector('.geek-name, .name')?.textContent || '').trim(),
           jobName: (active.querySelector('.source-job, .job-name')?.textContent || '').trim(),
@@ -729,18 +785,35 @@ function buildAttachmentStateExpression() {
   return `(() => {
     try {
       const threadPane = document.querySelector('.chat-conversation, .conversation-box, .chat-message-list, .conversation-message');
-      const normalizeText = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
-      const attachmentButton = threadPane
-        ? Array.from(threadPane.querySelectorAll('button, a, span, div'))
-          .find((node) => /^(附件简历|查看附件简历|预览附件简历|附件|PDF)$/i.test(normalizeText(node.textContent)))
+
+      // 1. Look for the specific resume-btn-file element (most reliable)
+      const fileBtnByClass = threadPane
+        ? threadPane.querySelector('.resume-btn-file, a.resume-btn-file, div.resume-btn-file')
         : null;
+
+      // 2. Fallback: look for small leaf nodes with exact "附件简历" text
+      const normalizeText = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+      const leafAttBtn = !fileBtnByClass && threadPane
+        ? Array.from(threadPane.querySelectorAll('button, a, span, div'))
+          .find((node) => {
+            const t = normalizeText(node.textContent);
+            return /^(附件简历|查看附件简历|预览附件简历)$/.test(t)
+              && node.children.length <= 2
+              && node.offsetWidth > 0;
+          })
+        : null;
+
+      const attachmentButton = fileBtnByClass || leafAttBtn;
+
+      // 3. Check for PDF card in messages (attachment already sent by candidate)
       const attachmentCardText = threadPane
-        ? Array.from(threadPane.querySelectorAll('a, div, span'))
+        ? Array.from(threadPane.querySelectorAll('.message-card-wrap, .message-item a, .message-item div, .message-item span'))
           .map((node) => normalizeText(node.textContent))
           .find((text) => /[^\\s]+\\.pdf\\b/i.test(text) && text.length <= 160)
         : '';
       const fileNameMatch = String(attachmentCardText || '').match(/([^\\s]+\\.pdf)\\b/i);
       const fileName = fileNameMatch ? fileNameMatch[1] : '';
+
       const disabled = Boolean(
         attachmentButton
         && (
@@ -752,8 +825,9 @@ function buildAttachmentStateExpression() {
 
       return JSON.stringify({
         ok: true,
-        present: Boolean(attachmentCardText || attachmentButton),
+        present: Boolean(attachmentCardText) || (Boolean(attachmentButton) && !disabled),
         buttonEnabled: Boolean(attachmentButton) && !disabled,
+        buttonDisabled: Boolean(attachmentButton) && disabled,
         fileName
       });
     } catch (err) {
@@ -1073,7 +1147,7 @@ async function selectChatJobFilter({
     throw new Error(result?.reason || 'boss_chat_job_filter_failed');
   }
 
-  await new Promise((resolve) => setTimeout(resolve, 1_000));
+  await randomDelay(2_000, 3_000);
   return result;
 }
 
@@ -1123,7 +1197,7 @@ async function selectChatUnreadFilter({
     throw new Error(result?.reason || 'boss_chat_unread_filter_failed');
   }
 
-  await new Promise((resolve) => setTimeout(resolve, 800));
+  await randomDelay(1_500, 2_500);
   return result;
 }
 
@@ -1211,23 +1285,8 @@ async function clickChatRow({
   index,
   dataId
 } = {}) {
-  const result = await evaluateJson({
-    cdpClient,
-    targetId,
-    urlPrefix,
-    expression: buildClickChatRowExpression({ index, dataId })
-  });
-
-  if (!result?.ok) {
-    throw new Error(result?.reason || 'boss_chat_row_click_failed');
-  }
-
-  await new Promise((resolve) => setTimeout(resolve, 800));
-  return result;
-}
-
-function buildClickChatRowExpression({ index, dataId }) {
-  return `(() => {
+  // Step 1: Find the row element and get its coordinates
+  const locateExpr = `(() => {
     try {
       const rows = Array.from(document.querySelectorAll('.geek-item')).filter((r) => r.offsetHeight > 0);
       let target = null;
@@ -1237,21 +1296,19 @@ function buildClickChatRowExpression({ index, dataId }) {
       if (targetDataId) {
         target = rows.find((r) => (r.getAttribute('data-id') || r.id || '') === targetDataId);
       }
-
       if (!target && targetIndex >= 0 && targetIndex < rows.length) {
         target = rows[targetIndex];
       }
-
       if (!target) {
         return JSON.stringify({ ok: false, reason: 'boss_chat_row_not_found' });
       }
 
-      target.click();
-
+      const rect = target.getBoundingClientRect();
       const nameEl = target.querySelector('.geek-name, .name');
       return JSON.stringify({
         ok: true,
-        clicked: true,
+        x: rect.x + rect.width / 2,
+        y: rect.y + rect.height / 2,
         name: (nameEl?.textContent || '').trim(),
         dataId: target.getAttribute('data-id') || ''
       });
@@ -1259,6 +1316,18 @@ function buildClickChatRowExpression({ index, dataId }) {
       return JSON.stringify({ ok: false, reason: 'boss_chat_row_click_error:' + (err && err.message || String(err)) });
     }
   })()`;
+
+  const result = await evaluateJson({ cdpClient, targetId, urlPrefix, expression: locateExpr });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_chat_row_click_failed');
+  }
+
+  // Step 2: Real mouse click at the row's coordinates
+  await cdpClient.dispatchMouseClick({ targetId, urlPrefix, x: result.x, y: result.y });
+
+  await randomDelay(2_000, 3_000);
+  return { ok: true, clicked: true, name: result.name, dataId: result.dataId };
 }
 
 async function navigateTo({
@@ -1279,7 +1348,7 @@ async function navigateTo({
   });
 
   // Wait for page to stabilize
-  await new Promise((resolve) => setTimeout(resolve, 2_000));
+  await randomDelay(2_500, 3_500);
 
   const currentUrl = await getUrl({ cdpClient, targetId, urlPrefix });
 
@@ -1299,49 +1368,45 @@ async function sendChatMessage({
     throw new Error('boss_chat_message_text_required');
   }
 
-  const result = await evaluateJson({
-    cdpClient,
-    targetId,
-    urlPrefix,
-    expression: buildSendChatMessageExpression({ text })
+  // Step 1: Focus editor and insert text via execCommand
+  const inputResult = await evaluateJson({
+    cdpClient, targetId, urlPrefix,
+    expression: `(() => {
+      const selectors = [
+        '.boss-chat-editor-input[contenteditable="true"]',
+        '.boss-chat-editor-input',
+        '.chat-editor [contenteditable="true"]',
+        '[contenteditable="true"]',
+      ];
+      let editor = null;
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (el && el.offsetParent !== null) { editor = el; break; }
+      }
+      if (!editor) return JSON.stringify({ ok: false, reason: 'boss_chat_editor_not_found' });
+      editor.focus();
+      editor.textContent = '';
+      document.execCommand('insertText', false, ${JSON.stringify(text)});
+      editor.dispatchEvent(new Event('input', { bubbles: true }));
+      return JSON.stringify({ ok: true });
+    })()`
   });
 
-  if (!result?.ok) {
-    throw new Error(result?.reason || 'boss_chat_send_message_failed');
+  if (!inputResult?.ok) {
+    throw new Error(inputResult?.reason || 'boss_chat_editor_not_found');
   }
 
-  return result;
-}
+  await randomDelay(500, 1_000);
 
-function buildSendChatMessageExpression({ text }) {
-  return `(() => {
-    try {
-      const editor = document.querySelector('.boss-chat-editor-input[contenteditable="true"]');
-      if (!editor) {
-        return JSON.stringify({ ok: false, reason: 'boss_chat_editor_not_found' });
-      }
+  // Step 2: Real mouse click on send button
+  try {
+    await realClick({ cdpClient, targetId, urlPrefix, selector: '.conversation-editor .submit, .submit-content .submit' });
+  } catch (e) {
+    await realClickByText({ cdpClient, targetId, urlPrefix, text: '发送' });
+  }
 
-      editor.focus();
-      editor.textContent = ${JSON.stringify(text)};
-      editor.dispatchEvent(new Event('input', { bubbles: true }));
-
-      const sendBtn = Array.from(document.querySelectorAll('button, a, span, div'))
-        .find((node) => {
-          const t = (node.textContent || '').replace(/\\s+/g, '').trim();
-          return t === '发送' && node.offsetWidth > 0 && node.offsetHeight > 0;
-        });
-
-      if (!sendBtn) {
-        return JSON.stringify({ ok: false, reason: 'boss_chat_send_button_not_found' });
-      }
-
-      sendBtn.click();
-
-      return JSON.stringify({ ok: true, sent: true, textLength: ${JSON.stringify(text)}.length });
-    } catch (err) {
-      return JSON.stringify({ ok: false, reason: 'boss_chat_send_error:' + (err && err.message || String(err)) });
-    }
-  })()`;
+  await randomDelay(1_000, 2_000);
+  return { ok: true, sent: true, textLength: text.length };
 }
 
 async function clickRequestResume({
@@ -1349,51 +1414,122 @@ async function clickRequestResume({
   targetId,
   urlPrefix
 } = {}) {
+  // Phase 1: Wait for "求简历" button to become enabled (up to 8 seconds)
+  let waitedMs = 0;
+  for (let i = 0; i < 16; i++) {
+    const state = await evaluateJson({
+      cdpClient, targetId, urlPrefix,
+      expression: `(() => {
+        const btn = Array.from(document.querySelectorAll('button, a, span, div')).find(n => {
+          const t = (n.textContent || '').replace(/\\s+/g, '').trim();
+          return t === '求简历' && n.offsetWidth > 0;
+        });
+        if (!btn) return JSON.stringify({ found: false });
+        const disabled = btn.disabled || btn.getAttribute('aria-disabled') === 'true' || btn.classList.contains('disabled');
+        return JSON.stringify({ found: true, disabled });
+      })()`
+    });
+
+    if (state?.found && !state?.disabled) break;
+    if (!state?.found) {
+      throw new Error('boss_chat_request_resume_button_not_found');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    waitedMs += 500;
+  }
+
+  // Phase 2: Real mouse click on "求简历"
+  try {
+    await realClickByText({ cdpClient, targetId, urlPrefix, text: '求简历' });
+  } catch (error) {
+    throw new Error('boss_chat_request_resume_button_disabled');
+  }
+
+  // Phase 3: Wait for exchange-tooltip confirm dialog and real-click "确定" (up to 5 seconds)
+  let confirmed = false;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    const dialogState = await evaluateJson({
+      cdpClient, targetId, urlPrefix,
+      expression: `(() => {
+        // BOSS uses .exchange-tooltip for resume/phone/wechat confirm popups
+        const tooltip = document.querySelector('.exchange-tooltip');
+        if (!tooltip || tooltip.offsetWidth === 0) return JSON.stringify({ found: false });
+        const confirmBtn = tooltip.querySelector('.boss-btn-primary');
+        if (!confirmBtn || confirmBtn.offsetWidth === 0) return JSON.stringify({ found: false });
+        const rect = confirmBtn.getBoundingClientRect();
+        return JSON.stringify({ found: true, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+      })()`
+    });
+
+    if (dialogState?.found) {
+      await cdpClient.dispatchMouseClick({
+        targetId, urlPrefix,
+        x: dialogState.x, y: dialogState.y
+      });
+      confirmed = true;
+      break;
+    }
+  }
+
+  await randomDelay(1_500, 2_500);
+  return { ok: true, requested: true, confirmed, waitedMs };
+}
+
+async function readOpenThreadMessages({
+  cdpClient,
+  targetId,
+  urlPrefix,
+  limit = 20
+} = {}) {
   const result = await evaluateJson({
     cdpClient,
     targetId,
     urlPrefix,
-    expression: buildRequestResumeExpression()
+    expression: buildReadOpenThreadMessagesExpression({ limit })
   });
 
   if (!result?.ok) {
-    throw new Error(result?.reason || 'boss_chat_request_resume_failed');
+    throw new Error(result?.reason || 'boss_chat_read_messages_failed');
   }
 
   return result;
 }
 
-function buildRequestResumeExpression() {
+function buildReadOpenThreadMessagesExpression({ limit }) {
   return `(() => {
     try {
-      const threadPane = document.querySelector('.chat-conversation, .conversation-box, .chat-message-list, .conversation-message');
-      if (!threadPane) {
-        return JSON.stringify({ ok: false, reason: 'boss_chat_thread_pane_not_found' });
+      const msgList = document.querySelector('.chat-message-list, .conversation-message, .message-list');
+      if (!msgList) {
+        return JSON.stringify({ ok: false, reason: 'boss_chat_message_list_not_found' });
       }
 
-      const actionBtns = Array.from(document.querySelectorAll('button, a, span, div'));
-      const resumeBtn = actionBtns.find((node) => {
-        const t = (node.textContent || '').replace(/\\s+/g, '').trim();
-        return t === '求简历' && node.offsetWidth > 0 && node.offsetHeight > 0;
+      const items = Array.from(msgList.querySelectorAll('.item-myself, .item-friend'));
+      const messages = items.slice(-${limit}).map((item) => {
+        const isSelf = item.classList.contains('item-myself');
+        const textSpan = item.querySelector('.text span');
+        const textDiv = item.querySelector('.text');
+        const text = (textSpan?.textContent || '').replace(/\\s+/g, ' ').trim()
+          || (textDiv?.textContent || '').replace(/(送达|已读|未读)/g, '').replace(/\\s+/g, ' ').trim();
+        const parentItem = item.closest('.message-item') || item;
+        const timeEl = parentItem.querySelector('.message-time .time, .time');
+        const time = (timeEl?.textContent || '').trim();
+        return {
+          from: isSelf ? 'me' : 'other',
+          text,
+          time,
+          type: 'text'
+        };
+      }).filter((m) => m.text.length > 0);
+
+      return JSON.stringify({
+        ok: true,
+        messages,
+        total: messages.length
       });
-
-      if (!resumeBtn) {
-        return JSON.stringify({ ok: false, reason: 'boss_chat_request_resume_button_not_found' });
-      }
-
-      const disabled = resumeBtn.disabled
-        || resumeBtn.getAttribute('aria-disabled') === 'true'
-        || resumeBtn.classList.contains('disabled');
-
-      if (disabled) {
-        return JSON.stringify({ ok: false, reason: 'boss_chat_request_resume_button_disabled' });
-      }
-
-      resumeBtn.click();
-
-      return JSON.stringify({ ok: true, requested: true });
     } catch (err) {
-      return JSON.stringify({ ok: false, reason: 'boss_chat_request_resume_error:' + (err && err.message || String(err)) });
+      return JSON.stringify({ ok: false, reason: 'boss_chat_read_messages_error:' + (err && err.message || String(err)) });
     }
   })()`;
 }
@@ -1417,6 +1553,10 @@ module.exports = {
   inspectAttachmentState,
   inspectResumePreviewMeta,
   downloadResumeAttachment,
+  bringToFront,
+  realClick,
+  realClickByText,
   sendChatMessage,
   clickRequestResume,
+  readOpenThreadMessages,
 };

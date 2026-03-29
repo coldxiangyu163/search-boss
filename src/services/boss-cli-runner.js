@@ -191,6 +191,20 @@ class BossCliRunner {
     ]);
   }
 
+  async bringToFront({ runId }) {
+    return this.#run(['bring-to-front', '--run-id', String(runId)]);
+  }
+
+  async readOpenThreadMessages({ runId, limit = 20 }) {
+    return this.#run([
+      'chat-read-messages',
+      '--run-id',
+      String(runId),
+      '--limit',
+      String(limit)
+    ]);
+  }
+
   async clickChatRow({ runId, index, dataId }) {
     const args = ['chat-click-row', '--run-id', String(runId)];
     if (index !== undefined) {

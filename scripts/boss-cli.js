@@ -479,6 +479,31 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
     };
   }
 
+  if (options.command === 'bring-to-front') {
+    const session = await sessionStore.loadSession(options.runId);
+    await browserCommands.bringToFront({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+    return { ok: true };
+  }
+
+  if (options.command === 'chat-read-messages') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.readOpenThreadMessages({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      limit: Number(options.limit || 20)
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
   if (options.command === 'chat-click-row') {
     const session = await sessionStore.loadSession(options.runId);
     const index = options.index !== undefined ? Number(options.index) : undefined;

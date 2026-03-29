@@ -53,10 +53,14 @@ function createMockBossCliRunner({
     },
     async inspectAttachmentState(opts) {
       calls.push({ command: 'inspectAttachmentState', ...opts });
-      return attachmentStates[lastClickedDataId] || { ok: true, present: false, buttonEnabled: false };
+      return attachmentStates[lastClickedDataId] || { ok: true, present: false, buttonEnabled: false, buttonDisabled: true };
     },
     async listMessages(opts) {
       calls.push({ command: 'listMessages', ...opts });
+      return messageResults[lastClickedDataId] || { ok: true, messages: [] };
+    },
+    async readOpenThreadMessages(opts) {
+      calls.push({ command: 'readOpenThreadMessages', ...opts });
       return messageResults[lastClickedDataId] || { ok: true, messages: [] };
     },
     async sendChatMessage(opts) {
@@ -160,7 +164,8 @@ test('FollowupLoopService executes correct workflow: navigate, filter job, filte
   ]);
 
   const service = new FollowupLoopService({
-    bossCliRunner, agentService, llmEvaluator
+    bossCliRunner, agentService, llmEvaluator,
+    threadDelayMin: 0, threadDelayMax: 0
   });
 
   const result = await service.run({ runId: 300, jobKey: '面点师傅（B0038011）_8eca6cad' });
@@ -168,6 +173,7 @@ test('FollowupLoopService executes correct workflow: navigate, filter job, filte
   assert.equal(result.ok, true);
   assert.equal(result.stats.processed, 1);
   assert.equal(result.stats.replied, 1);
+  assert.equal(result.stats.resumeRequested, 1);
 
   const commandOrder = bossCliRunner.calls.map((c) => c.command);
   assert.equal(commandOrder[0], 'bindTarget');
@@ -178,7 +184,7 @@ test('FollowupLoopService executes correct workflow: navigate, filter job, filte
   assert.equal(commandOrder[5], 'clickChatRow');
   assert.equal(commandOrder[6], 'inspectChatThreadState');
   assert.equal(commandOrder[7], 'inspectAttachmentState');
-  assert.equal(commandOrder[8], 'listMessages');
+  assert.equal(commandOrder[8], 'readOpenThreadMessages');
 
   const jobFilterCall = bossCliRunner.calls.find((c) => c.command === 'selectChatJobFilter');
   assert.equal(jobFilterCall.jobName, '面点师傅');
@@ -196,7 +202,8 @@ test('FollowupLoopService navigates to chat page when not already there', async 
 
   const agentService = createMockAgentService();
   const service = new FollowupLoopService({
-    bossCliRunner, agentService, llmEvaluator: createMockLlmEvaluator()
+    bossCliRunner, agentService, llmEvaluator: createMockLlmEvaluator(),
+    threadDelayMin: 0, threadDelayMax: 0
   });
 
   await service.run({ runId: 301, jobKey: '面点师傅（B0038011）_8eca6cad' });
@@ -214,7 +221,8 @@ test('FollowupLoopService skips navigation when already on chat page', async () 
 
   const agentService = createMockAgentService();
   const service = new FollowupLoopService({
-    bossCliRunner, agentService, llmEvaluator: createMockLlmEvaluator()
+    bossCliRunner, agentService, llmEvaluator: createMockLlmEvaluator(),
+    threadDelayMin: 0, threadDelayMax: 0
   });
 
   await service.run({ runId: 302, jobKey: '面点师傅（B0038011）_8eca6cad' });
@@ -235,7 +243,8 @@ test('FollowupLoopService downloads resume when attachment present in followup m
 
   const agentService = createMockAgentService();
   const service = new FollowupLoopService({
-    bossCliRunner, agentService, llmEvaluator: createMockLlmEvaluator()
+    bossCliRunner, agentService, llmEvaluator: createMockLlmEvaluator(),
+    threadDelayMin: 0, threadDelayMax: 0
   });
 
   const result = await service.run({ runId: 303, jobKey: '面点师傅（B0038011）_8eca6cad', mode: 'followup' });
@@ -277,7 +286,8 @@ test('FollowupLoopService requests resume when LLM decides and followup-decision
   ]);
 
   const service = new FollowupLoopService({
-    bossCliRunner, agentService, llmEvaluator
+    bossCliRunner, agentService, llmEvaluator,
+    threadDelayMin: 0, threadDelayMax: 0
   });
 
   const result = await service.run({ runId: 304, jobKey: '面点师傅（B0038011）_8eca6cad' });
@@ -308,7 +318,8 @@ test('FollowupLoopService skips threads where last message is from self', async 
 
   const agentService = createMockAgentService();
   const service = new FollowupLoopService({
-    bossCliRunner, agentService, llmEvaluator: createMockLlmEvaluator()
+    bossCliRunner, agentService, llmEvaluator: createMockLlmEvaluator(),
+    threadDelayMin: 0, threadDelayMax: 0
   });
 
   const result = await service.run({ runId: 305, jobKey: '面点师傅（B0038011）_8eca6cad' });
@@ -322,7 +333,8 @@ test('FollowupLoopService completes when no unread threads visible', async () =>
   const agentService = createMockAgentService();
 
   const service = new FollowupLoopService({
-    bossCliRunner, agentService, llmEvaluator: createMockLlmEvaluator()
+    bossCliRunner, agentService, llmEvaluator: createMockLlmEvaluator(),
+    threadDelayMin: 0, threadDelayMax: 0
   });
 
   const result = await service.run({ runId: 306, jobKey: '面点师傅（B0038011）_8eca6cad' });
@@ -339,7 +351,8 @@ test('FollowupLoopService fails when browser bind fails', async () => {
 
   const agentService = createMockAgentService();
   const service = new FollowupLoopService({
-    bossCliRunner, agentService, llmEvaluator: createMockLlmEvaluator()
+    bossCliRunner, agentService, llmEvaluator: createMockLlmEvaluator(),
+    threadDelayMin: 0, threadDelayMax: 0
   });
 
   const result = await service.run({ runId: 307, jobKey: '面点师傅（B0038011）_8eca6cad' });
@@ -354,7 +367,8 @@ test('FollowupLoopService fails when job filter fails', async () => {
 
   const agentService = createMockAgentService();
   const service = new FollowupLoopService({
-    bossCliRunner, agentService, llmEvaluator: createMockLlmEvaluator()
+    bossCliRunner, agentService, llmEvaluator: createMockLlmEvaluator(),
+    threadDelayMin: 0, threadDelayMax: 0
   });
 
   const result = await service.run({ runId: 308, jobKey: '面点师傅（B0038011）_8eca6cad' });
@@ -386,7 +400,8 @@ test('FollowupLoopService continues on LLM failure with error count', async () =
   };
 
   const service = new FollowupLoopService({
-    bossCliRunner, agentService, llmEvaluator
+    bossCliRunner, agentService, llmEvaluator,
+    threadDelayMin: 0, threadDelayMax: 0
   });
 
   const result = await service.run({ runId: 309, jobKey: '面点师傅（B0038011）_8eca6cad' });
@@ -416,7 +431,8 @@ test('FollowupLoopService records checkpoint events per thread', async () => {
   ]);
 
   const service = new FollowupLoopService({
-    bossCliRunner, agentService, llmEvaluator
+    bossCliRunner, agentService, llmEvaluator,
+    threadDelayMin: 0, threadDelayMax: 0
   });
 
   await service.run({ runId: 310, jobKey: '面点师傅（B0038011）_8eca6cad' });
@@ -437,7 +453,8 @@ test('FollowupLoopService in chat mode notes attachments but does not download',
 
   const agentService = createMockAgentService();
   const service = new FollowupLoopService({
-    bossCliRunner, agentService, llmEvaluator: createMockLlmEvaluator()
+    bossCliRunner, agentService, llmEvaluator: createMockLlmEvaluator(),
+    threadDelayMin: 0, threadDelayMax: 0
   });
 
   const result = await service.run({ runId: 311, jobKey: '面点师傅（B0038011）_8eca6cad', mode: 'chat' });
@@ -468,7 +485,8 @@ test('FollowupLoopService calls upsertCandidate for each processed thread', asyn
   ]);
 
   const service = new FollowupLoopService({
-    bossCliRunner, agentService, llmEvaluator
+    bossCliRunner, agentService, llmEvaluator,
+    threadDelayMin: 0, threadDelayMax: 0
   });
 
   await service.run({ runId: 312, jobKey: '面点师傅（B0038011）_8eca6cad' });
@@ -498,7 +516,8 @@ test('FollowupLoopService falls back to findLatestCandidateByGeekId when upsert 
   ]);
 
   const service = new FollowupLoopService({
-    bossCliRunner, agentService, llmEvaluator
+    bossCliRunner, agentService, llmEvaluator,
+    threadDelayMin: 0, threadDelayMax: 0
   });
 
   const result = await service.run({ runId: 313, jobKey: '面点师傅（B0038011）_8eca6cad' });

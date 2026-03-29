@@ -48,7 +48,9 @@ const sourceLoopService = (config.sourceLoopEnabled && bossCliRunner && llmEvalu
     bossCliRunner,
     agentService,
     llmEvaluator,
-    targetCount: config.sourceLoopTargetCount
+    targetCount: config.sourceLoopTargetCount,
+    candidateDelayMin: config.loopDelayMin,
+    candidateDelayMax: config.loopDelayMax
   })
   : null;
 
@@ -57,7 +59,9 @@ const followupLoopService = (config.sourceLoopEnabled && bossCliRunner && llmEva
     bossCliRunner,
     agentService,
     llmEvaluator,
-    maxThreads: config.followupLoopMaxThreads
+    maxThreads: config.followupLoopMaxThreads,
+    threadDelayMin: config.loopDelayMin,
+    threadDelayMax: config.loopDelayMax
   })
   : null;
 

@@ -140,6 +140,15 @@ class BossCdpClient {
     throw lastError;
   }
 
+  async bringToFront({ targetId, urlPrefix } = {}) {
+    await this.sendCommand({
+      targetId,
+      urlPrefix,
+      method: 'Page.bringToFront',
+      params: {}
+    });
+  }
+
   async dispatchMouseClick({ targetId, x, y, urlPrefix } = {}) {
     const normalizedX = Number(x);
     const normalizedY = Number(y);

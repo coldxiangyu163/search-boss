@@ -4,13 +4,17 @@ class SourceLoopService {
     agentService,
     llmEvaluator,
     targetCount = 5,
-    maxSkips = 30
+    maxSkips = 30,
+    candidateDelayMin = 2_000,
+    candidateDelayMax = 5_000
   }) {
     this.bossCliRunner = bossCliRunner;
     this.agentService = agentService;
     this.llmEvaluator = llmEvaluator;
     this.targetCount = targetCount;
     this.maxSkips = maxSkips;
+    this.candidateDelayMin = candidateDelayMin;
+    this.candidateDelayMax = candidateDelayMax;
   }
 
   async run({ runId, jobKey }) {
@@ -59,6 +63,13 @@ class SourceLoopService {
       }
     });
 
+    // Phase 1b: Bring tab to front to prevent Chrome background throttling
+    try {
+      await this.bossCliRunner.bringToFront({ runId });
+    } catch (error) {
+      // Non-fatal
+    }
+
     // Phase 2: Verify recommend state
     let state;
     try {
@@ -73,8 +84,15 @@ class SourceLoopService {
       return { ok: false, stats, reason: 'recommend_detail_not_open' };
     }
 
-    // Phase 3: Main loop
+    // Phase 3: Main loop with anti-risk delays
+    let candidateIndex = 0;
     while (stats.greeted < this.targetCount && stats.skipped < this.maxSkips) {
+      if (candidateIndex > 0) {
+        const delayMs = this.candidateDelayMin + Math.random() * (this.candidateDelayMax - this.candidateDelayMin);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      candidateIndex += 1;
+
       const loopResult = await this.#processOneCandidate({
         runId,
         jobKey,

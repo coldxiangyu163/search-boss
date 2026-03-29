@@ -127,7 +127,9 @@ test('SourceLoopService completes successfully with 3 greets', async () => {
     bossCliRunner,
     agentService,
     llmEvaluator,
-    targetCount: 3
+    targetCount: 3,
+    candidateDelayMin: 0,
+    candidateDelayMax: 0
   });
 
   const result = await service.run({ runId: 100, jobKey: '测试岗位_abc' });
@@ -172,7 +174,9 @@ test('SourceLoopService skips candidates when LLM says skip', async () => {
     bossCliRunner,
     agentService,
     llmEvaluator,
-    targetCount: 5
+    targetCount: 5,
+    candidateDelayMin: 0,
+    candidateDelayMax: 0
   });
 
   const result = await service.run({ runId: 101, jobKey: '测试岗位_abc' });
@@ -198,7 +202,9 @@ test('SourceLoopService fails when browser bind fails', async () => {
     bossCliRunner,
     agentService,
     llmEvaluator,
-    targetCount: 5
+    targetCount: 5,
+    candidateDelayMin: 0,
+    candidateDelayMax: 0
   });
 
   const result = await service.run({ runId: 102, jobKey: '测试岗位_abc' });
@@ -223,7 +229,9 @@ test('SourceLoopService fails when recommend detail not open at start', async ()
     bossCliRunner,
     agentService,
     llmEvaluator,
-    targetCount: 5
+    targetCount: 5,
+    candidateDelayMin: 0,
+    candidateDelayMax: 0
   });
 
   const result = await service.run({ runId: 103, jobKey: '测试岗位_abc' });
@@ -262,7 +270,9 @@ test('SourceLoopService stops at maxSkips', async () => {
     agentService,
     llmEvaluator,
     targetCount: 5,
-    maxSkips: 10
+    maxSkips: 10,
+    candidateDelayMin: 0,
+    candidateDelayMax: 0
   });
 
   const result = await service.run({ runId: 104, jobKey: '测试岗位_abc' });
@@ -300,7 +310,9 @@ test('SourceLoopService handles already-chatting candidates', async () => {
     bossCliRunner,
     agentService,
     llmEvaluator,
-    targetCount: 2
+    targetCount: 2,
+    candidateDelayMin: 0,
+    candidateDelayMax: 0
   });
 
   const result = await service.run({ runId: 105, jobKey: '测试岗位_abc' });
@@ -331,7 +343,9 @@ test('SourceLoopService records checkpoint events', async () => {
     bossCliRunner,
     agentService,
     llmEvaluator,
-    targetCount: 1
+    targetCount: 1,
+    candidateDelayMin: 0,
+    candidateDelayMax: 0
   });
 
   await service.run({ runId: 106, jobKey: '测试岗位_abc' });
@@ -371,7 +385,9 @@ test('SourceLoopService continues on LLM failure with skip default', async () =>
     bossCliRunner,
     agentService,
     llmEvaluator,
-    targetCount: 1
+    targetCount: 1,
+    candidateDelayMin: 0,
+    candidateDelayMax: 0
   });
 
   const result = await service.run({ runId: 107, jobKey: '测试岗位_abc' });

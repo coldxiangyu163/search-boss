@@ -6,13 +6,17 @@ class FollowupLoopService {
     agentService,
     llmEvaluator,
     projectRoot = path.resolve(__dirname, '..', '..'),
-    maxThreads = 20
+    maxThreads = 20,
+    threadDelayMin = 2_000,
+    threadDelayMax = 5_000
   }) {
     this.bossCliRunner = bossCliRunner;
     this.agentService = agentService;
     this.llmEvaluator = llmEvaluator;
     this.projectRoot = projectRoot;
     this.maxThreads = maxThreads;
+    this.threadDelayMin = threadDelayMin;
+    this.threadDelayMax = threadDelayMax;
   }
 
   async run({ runId, jobKey, mode = 'followup' }) {
@@ -56,6 +60,13 @@ class FollowupLoopService {
       message: 'target bound for followup loop',
       payload: { phase: 'target_bound' }
     });
+
+    // Phase 1b: Bring tab to front to prevent Chrome background throttling
+    try {
+      await this.bossCliRunner.bringToFront({ runId });
+    } catch (error) {
+      // Non-fatal
+    }
 
     // Phase 2: Navigate to chat page if not already there
     try {
@@ -147,10 +158,17 @@ class FollowupLoopService {
       payload: { threadCount: threads.length, threads: threads.map((t) => ({ name: t.name, dataId: t.dataId, index: t.index })) }
     });
 
-    // Phase 6: Process each thread
-    for (const thread of threads) {
+    // Phase 6: Process each thread with anti-risk delays
+    for (let i = 0; i < threads.length; i++) {
+      const thread = threads[i];
       if (stats.processed >= this.maxThreads) {
         break;
+      }
+
+      // Random delay between threads to avoid detection
+      if (i > 0) {
+        const delayMs = this.threadDelayMin + Math.random() * (this.threadDelayMax - this.threadDelayMin);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
 
       await this.#processOneThread({
@@ -279,10 +297,10 @@ class FollowupLoopService {
       return;
     }
 
-    // Step 5: No attachment — read messages from the now-open thread
+    // Step 5: No attachment — read visible messages from the open right panel
     let messages;
     try {
-      const msgResult = await this.bossCliRunner.listMessages({ runId, uid: encryptUid });
+      const msgResult = await this.bossCliRunner.readOpenThreadMessages({ runId });
       messages = Array.isArray(msgResult?.messages) ? msgResult.messages : [];
     } catch (error) {
       stats.errors += 1;
@@ -330,7 +348,7 @@ class FollowupLoopService {
     let decision;
     try {
       const recentMessages = messages.slice(-10).map((m) =>
-        `${m.from === 'me' ? '我' : thread.name}：${m.text}`
+        `${m.from === 'me' ? '我' : thread.name || '对方'}：${m.text}`
       ).join('\n');
 
       decision = await this.#decideChatReply({
@@ -352,18 +370,7 @@ class FollowupLoopService {
     }
 
     // Step 10: Execute decision
-    if (decision.action === 'reply' && decision.replyText) {
-      await this.#executeSendMessage({
-        runId, jobKey, encryptUid,
-        candidateName: thread.name, candidateId,
-        text: decision.replyText, stats
-      });
-    } else if (decision.action === 'request_resume' && canRequestResume) {
-      await this.#executeResumeRequest({
-        runId, jobKey, encryptUid,
-        candidateName: thread.name, candidateId, stats
-      });
-    } else {
+    if (decision.action === 'skip') {
       stats.skipped += 1;
       await this.#recordEvent(runId, {
         eventId: `followup-loop-skip:${runId}:${threadId}`,
@@ -371,6 +378,24 @@ class FollowupLoopService {
         stage: 'followup_loop',
         message: `skipped: ${decision.reason}`,
         payload: { encryptUid, candidateName: thread.name, reason: decision.reason }
+      });
+      return;
+    }
+
+    // Step 10a: Send reply if LLM provided one
+    if (decision.replyText) {
+      await this.#executeSendMessage({
+        runId, jobKey, encryptUid,
+        candidateName: thread.name, candidateId,
+        text: decision.replyText, stats
+      });
+    }
+
+    // Step 10b: Always request resume after replying if not yet received
+    if (attachmentState.buttonDisabled) {
+      await this.#executeResumeRequest({
+        runId, jobKey, encryptUid,
+        candidateName: thread.name, candidateId, stats
       });
     }
   }
@@ -536,7 +561,8 @@ class FollowupLoopService {
 
   async #executeResumeRequest({ runId, jobKey, encryptUid, candidateName, candidateId, stats }) {
     try {
-      await this.bossCliRunner.clickRequestResume({ runId });
+      const resumeResult = await this.bossCliRunner.clickRequestResume({ runId });
+      const confirmed = resumeResult?.confirmed === true;
       stats.resumeRequested += 1;
 
       await this.agentService.recordAction({
@@ -548,15 +574,15 @@ class FollowupLoopService {
         dedupeKey: `resume-request:${runId}:${encryptUid}`,
         jobKey,
         bossEncryptGeekId: encryptUid,
-        payload: { candidateName, source: 'deterministic_loop' }
+        payload: { candidateName, confirmed, source: 'deterministic_loop' }
       });
 
       await this.#recordEvent(runId, {
         eventId: `followup-loop-resume-requested:${runId}:${encryptUid}`,
         eventType: 'resume_request_sent',
         stage: 'followup_loop',
-        message: `resume requested from ${candidateName}`,
-        payload: { encryptUid, candidateName }
+        message: `resume requested from ${candidateName} (confirmed=${confirmed})`,
+        payload: { encryptUid, candidateName, confirmed }
       });
     } catch (error) {
       stats.errors += 1;
