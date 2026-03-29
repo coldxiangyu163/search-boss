@@ -246,6 +246,20 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
     };
   }
 
+  if (options.command === 'recommend-greet') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.clickRecommendGreet({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
   if (options.command === 'context-snapshot') {
     const session = await sessionStore.loadSession(options.runId);
     const result = await browserCommands.inspectContextSnapshot({

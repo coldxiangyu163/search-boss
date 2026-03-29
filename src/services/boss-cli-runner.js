@@ -85,6 +85,14 @@ class BossCliRunner {
     ]);
   }
 
+  async clickRecommendGreet({ runId }) {
+    return this.#run([
+      'recommend-greet',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
   async getContextSnapshot({ runId, jobId = null }) {
     const args = [
       'context-snapshot',

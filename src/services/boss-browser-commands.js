@@ -909,11 +909,159 @@ function buildResumeDownloadExpression({ timeoutMs }) {
   })()`;
 }
 
+async function clickRecommendGreet({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const target = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildRecommendGreetTargetExpression()
+  });
+
+  if (!target?.ok) {
+    throw new Error(target?.reason || 'boss_recommend_greet_not_found');
+  }
+
+  await cdpClient.dispatchMouseClick({
+    targetId,
+    urlPrefix,
+    x: target.x,
+    y: target.y
+  });
+
+  const clickedAt = Date.now();
+  let settled = false;
+  while (!settled && Date.now() - clickedAt < 2_000) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    try {
+      const state = await evaluateJson({
+        cdpClient,
+        targetId,
+        urlPrefix,
+        expression: buildRecommendGreetResultExpression()
+      });
+      if (state?.ok) {
+        settled = true;
+        return {
+          ok: true,
+          greeted: true,
+          resultText: state.resultText || '',
+          alreadyChatting: state.alreadyChatting || false
+        };
+      }
+    } catch (_) {
+      // ignore transient errors during stabilization
+    }
+  }
+
+  return {
+    ok: true,
+    greeted: true,
+    resultText: '',
+    alreadyChatting: false
+  };
+}
+
+function buildRecommendGreetTargetExpression() {
+  return `(() => {
+    try {
+      const recFrame = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+      const recDoc = recFrame?.contentDocument;
+      if (!recFrame || !recDoc) {
+        return JSON.stringify({ ok: false, reason: 'boss_recommend_frame_unavailable' });
+      }
+
+      const detailWrap = recDoc.querySelector('.resume-detail-wrap');
+      if (!detailWrap) {
+        return JSON.stringify({ ok: false, reason: 'boss_recommend_detail_not_open' });
+      }
+
+      const buttons = Array.from(detailWrap.querySelectorAll('button, a, .btn, .btn-v2'));
+      const greetBtn = buttons.find((btn) => {
+        const text = (btn.textContent || '').replace(/\\s+/g, '').trim();
+        return text === '立即沟通' || text === '打招呼' || text === '继续沟通';
+      });
+
+      if (!greetBtn) {
+        return JSON.stringify({ ok: false, reason: 'boss_recommend_greet_button_not_found' });
+      }
+
+      const style = recDoc.defaultView.getComputedStyle(greetBtn);
+      const frameRect = recFrame.getBoundingClientRect();
+      const btnRect = greetBtn.getBoundingClientRect();
+      const visible = style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && Number(style.opacity || 1) !== 0
+        && btnRect.width > 0
+        && btnRect.height > 0;
+
+      if (!visible) {
+        return JSON.stringify({ ok: false, reason: 'boss_recommend_greet_button_not_visible' });
+      }
+
+      const disabled = greetBtn.disabled
+        || greetBtn.getAttribute('aria-disabled') === 'true'
+        || greetBtn.classList.contains('disabled');
+
+      if (disabled) {
+        return JSON.stringify({ ok: false, reason: 'boss_recommend_greet_button_disabled' });
+      }
+
+      const text = (greetBtn.textContent || '').replace(/\\s+/g, '').trim();
+
+      return JSON.stringify({
+        ok: true,
+        x: frameRect.left + btnRect.left + btnRect.width / 2,
+        y: frameRect.top + btnRect.top + btnRect.height / 2,
+        buttonText: text,
+        alreadyChatting: text === '继续沟通'
+      });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_recommend_greet_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
+function buildRecommendGreetResultExpression() {
+  return `(() => {
+    try {
+      const recFrame = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+      const recDoc = recFrame?.contentDocument;
+      if (!recFrame || !recDoc) {
+        return JSON.stringify({ ok: false, reason: 'boss_recommend_frame_unavailable' });
+      }
+
+      const detailWrap = recDoc.querySelector('.resume-detail-wrap');
+      if (!detailWrap) {
+        return JSON.stringify({ ok: true, resultText: 'detail_closed_after_greet', alreadyChatting: false });
+      }
+
+      const buttons = Array.from(detailWrap.querySelectorAll('button, a, .btn, .btn-v2'));
+      const postGreetBtn = buttons.find((btn) => {
+        const text = (btn.textContent || '').replace(/\\s+/g, '').trim();
+        return text === '继续沟通' || text === '已沟通';
+      });
+
+      if (postGreetBtn) {
+        return JSON.stringify({ ok: true, resultText: (postGreetBtn.textContent || '').trim(), alreadyChatting: true });
+      }
+
+      return JSON.stringify({ ok: false, reason: 'boss_recommend_greet_result_pending' });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_recommend_greet_result_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
 module.exports = {
   getUrl,
   evaluateJson,
   bossFetch,
   clickRecommendPager,
+  clickRecommendGreet,
   inspectRecommendState,
   inspectRecommendDetail,
   inspectContextSnapshot,

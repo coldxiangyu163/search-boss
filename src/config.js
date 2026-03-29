@@ -26,7 +26,12 @@ function buildConfig(env = process.env) {
     bossCdpTargetUrlPrefix:
       readOptionalEnv(env, 'BOSS_CDP_TARGET_URL_PREFIX') || 'https://www.zhipin.com/',
     bossCliSessionDir: readOptionalEnv(env, 'BOSS_CLI_SESSION_DIR') || DEFAULT_BOSS_CLI_SESSION_DIR,
-    bossCliEnabled: readBooleanEnv(env, 'BOSS_CLI_ENABLED', false)
+    bossCliEnabled: readBooleanEnv(env, 'BOSS_CLI_ENABLED', false),
+    sourceLoopEnabled: readBooleanEnv(env, 'SOURCE_LOOP_ENABLED', false),
+    sourceLoopTargetCount: Number(readOptionalEnv(env, 'SOURCE_LOOP_TARGET_COUNT') || 5),
+    llmApiBase: readOptionalEnv(env, 'LLM_API_BASE') || 'https://www.openclaudecode.cn/v1',
+    llmApiKey: readOptionalEnv(env, 'LLM_API_KEY'),
+    llmModel: readOptionalEnv(env, 'LLM_MODEL') || 'gpt-5.4'
   };
 }
 

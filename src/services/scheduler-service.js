@@ -1,7 +1,8 @@
 class SchedulerService {
-  constructor({ pool, agentService }) {
+  constructor({ pool, agentService, sourceLoopService = null }) {
     this.pool = pool;
     this.agentService = agentService;
+    this.sourceLoopService = sourceLoopService;
   }
 
   async listSchedules() {
@@ -185,6 +186,12 @@ class SchedulerService {
 
   async #executeJobTask({ runId, jobKey, taskType, scheduledJobId = null, scheduledRunId = null, schedule = null }) {
     try {
+      if (taskType === 'source' && this.sourceLoopService) {
+        await this.sourceLoopService.run({ runId, jobKey });
+        await this.#finalizeScheduledRun({ schedule, scheduledRunId, scheduledJobId });
+        return;
+      }
+
       await this.agentService.runNanobotForSchedule({
         runId,
         jobKey,
@@ -300,6 +307,32 @@ class SchedulerService {
         }
       });
     }
+  }
+
+  async #finalizeScheduledRun({ schedule, scheduledRunId }) {
+    if (!schedule) {
+      return;
+    }
+
+    await this.pool.query(
+      `
+        update scheduled_job_runs
+        set status = 'completed',
+            finished_at = now()
+        where id = $1
+      `,
+      [scheduledRunId]
+    );
+
+    await this.pool.query(
+      `
+        update scheduled_jobs
+        set last_run_at = now(),
+            updated_at = now()
+        where id = $1
+      `,
+      [schedule.id]
+    );
   }
 }
 
