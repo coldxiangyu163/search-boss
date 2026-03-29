@@ -9,6 +9,8 @@ const { SchedulerService } = require('./services/scheduler-service');
 const { NanobotRunner } = require('./services/nanobot-runner');
 const { BossCliRunner } = require('./services/boss-cli-runner');
 const { BossContextStore } = require('./services/boss-context-store');
+const { RunOrchestrator } = require('./services/run-orchestrator');
+const { DeterministicContextService } = require('./services/deterministic-context-service');
 
 const nanobotRunner = new NanobotRunner({
   configPath: config.nanobotConfigPath
@@ -22,6 +24,13 @@ const bossContextStore = config.bossCliEnabled
   : null;
 
 const agentService = new AgentService({ pool, nanobotRunner, bossCliRunner, bossContextStore });
+agentService.deterministicContextService = new DeterministicContextService({
+  bossCliRunner,
+  bossContextStore,
+  getJobContext: (jobKey) => agentService._getJobNanobotContext(jobKey),
+  recordRunEvent: (payload) => agentService.recordRunEvent(payload)
+});
+agentService.runOrchestrator = new RunOrchestrator({ agentService });
 const schedulerService = new SchedulerService({ pool, agentService });
 const jobService = new JobService({ pool, agentService });
 agentService.jobService = jobService;

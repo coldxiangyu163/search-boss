@@ -1929,6 +1929,168 @@ test('JobService triggerSync records stream events from nanobot output', async (
   assert.deepEqual(streamedMessages, ['Starting sync', 'Warning line']);
 });
 
+
+test('AgentService runNanobotForSchedule delegates deterministic context building and nanobot execution', async () => {
+  const { AgentService } = require('../src/services/agent-service');
+  const agentService = new AgentService({
+    pool: {
+      async query() {
+        return { rows: [], rowCount: 0 };
+      }
+    },
+    nanobotRunner: {
+      async run() {
+        return { ok: true, stdout: 'done' };
+      }
+    }
+  });
+
+  const originalBuild = agentService.__proto__.constructor.prototype.runNanobotForSchedule;
+  const orchestratorCalls = [];
+  agentService.runOrchestrator = {
+    async runSchedule(payload) {
+      orchestratorCalls.push({ type: 'schedule', payload });
+      return { ok: true, stdout: 'done' };
+    }
+  };
+
+  const result = await agentService.runNanobotForSchedule({
+    runId: 501,
+    jobKey: '健康顾问_B0047007',
+    mode: 'source'
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(orchestratorCalls, [
+    {
+      type: 'schedule',
+      payload: {
+        runId: 501,
+        jobKey: '健康顾问_B0047007',
+        mode: 'source'
+      }
+    }
+  ]);
+  assert.equal(typeof originalBuild, 'function');
+});
+
+test('AgentService runNanobotForJobSync delegates to run orchestrator', async () => {
+  const { AgentService } = require('../src/services/agent-service');
+  const calls = [];
+  const agentService = new AgentService({
+    pool: {
+      async query() {
+        return { rows: [], rowCount: 0 };
+      }
+    }
+  });
+
+  agentService.runOrchestrator = {
+    async runJobSync(payload) {
+      calls.push(payload);
+      return { ok: true, deterministic: false };
+    }
+  };
+
+  const result = await agentService.runNanobotForJobSync({ runId: 601 });
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls, [{ runId: 601 }]);
+});
+
+
+test('DeterministicContextService builds prompt from boss cli snapshot and persists context', async () => {
+  const { DeterministicContextService } = require('../src/services/deterministic-context-service');
+  const recordedEvents = [];
+  const savedContexts = [];
+  const service = new DeterministicContextService({
+    bossCliRunner: {
+      async bindTarget(payload) {
+        return {
+          ok: true,
+          session: {
+            runId: String(payload.runId),
+            targetId: 'boss-1',
+            tabUrl: 'https://www.zhipin.com/web/chat/index'
+          }
+        };
+      },
+      async getContextSnapshot() {
+        return {
+          ok: true,
+          page: { shell: 'chat', url: 'https://www.zhipin.com/web/chat/index', title: '沟通' },
+          job: { encryptJobId: 'enc-job-1', matchesRunJob: true },
+          candidate: { bossEncryptGeekId: 'geek-1', name: '张三' },
+          thread: { encryptUid: 'uid-1', isUnread: true },
+          attachment: { present: false, buttonEnabled: false }
+        };
+      }
+    },
+    bossContextStore: {
+      async saveContext(runId, context) {
+        savedContexts.push({ runId, context });
+        return { filePath: `/tmp/boss-context-${runId}.json` };
+      }
+    },
+    getJobContext: async () => ({ bossEncryptJobId: 'enc-job-1' }),
+    recordRunEvent: async (payload) => {
+      recordedEvents.push(payload);
+      return { ok: true };
+    }
+  });
+
+  const prompt = await service.buildPrompt({
+    runId: 701,
+    jobKey: '健康顾问_B0047007',
+    mode: 'chat'
+  });
+
+  assert.match(prompt, /Deterministic browser context/);
+  assert.match(prompt, /boss-context-701\.json/);
+  assert.equal(savedContexts.length, 1);
+  assert.equal(recordedEvents.some((event) => event.eventType === 'context_snapshot_captured'), true);
+});
+
+
+test('DeterministicJobSyncService syncs jobs through boss cli and upserts batch', async () => {
+  const { DeterministicJobSyncService } = require('../src/services/deterministic-job-sync-service');
+  const recordedEvents = [];
+  const syncedPayloads = [];
+  const service = new DeterministicJobSyncService({
+    bossCliRunner: {
+      async bindTarget() {
+        return { ok: true, session: { targetId: 'boss-1' } };
+      },
+      async listJobs() {
+        return {
+          jobs: [
+            { encryptJobId: 'enc-job-1', jobName: '健康顾问', city: '重庆', salary: '8-10K', status: 'online' }
+          ]
+        };
+      },
+      async getJobDetail() {
+        return {
+          job: { name: '健康顾问', city: '重庆', salary: '8-10K', description: '负责客户跟进' }
+        };
+      }
+    },
+    upsertJobsBatch: async (payload) => {
+      syncedPayloads.push(payload);
+      return { ok: true, syncedCount: payload.jobs.length };
+    },
+    recordRunEvent: async (payload) => {
+      recordedEvents.push(payload);
+      return { ok: true };
+    }
+  });
+
+  const result = await service.run({ runId: 801 });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.syncedCount, 1);
+  assert.equal(syncedPayloads.length, 1);
+  assert.equal(recordedEvents.some((event) => event.eventType === 'boss_cli_command_succeeded'), true);
+});
+
 test('AgentService runNanobotForJobSync uses deterministic boss cli sync when available', async () => {
   const events = [];
   const syncedPayloads = [];
@@ -2034,6 +2196,30 @@ test('AgentService runNanobotForJobSync uses deterministic boss cli sync when av
   assert.equal(result.syncedCount, 2);
   assert.equal(syncedPayloads.length, 2);
   assert.equal(events.some((event) => event.eventType === 'jobs_batch_synced'), true);
+});
+
+
+test('NanobotExecutionService streams sanitized stdout and stderr into run events', async () => {
+  const { NanobotExecutionService } = require('../src/services/nanobot-execution-service');
+  const events = [];
+  const service = new NanobotExecutionService({
+    nanobotRunner: {
+      async run({ onStdoutLine, onStderrLine }) {
+        onStdoutLine('stdout line');
+        onStderrLine('/Users/tester/secret sk-123 xoxb-456');
+        return { ok: true, stdout: 'done' };
+      }
+    },
+    recordRunEvent: async (payload) => {
+      events.push(payload);
+      return { ok: true };
+    }
+  });
+
+  const result = await service.run({ runId: 901, message: 'hello' });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(events.map((event) => event.message), ['stdout line', '[path] [redacted] [redacted]']);
 });
 
 test('AgentService runNanobotForSchedule records stream events from nanobot output', async () => {
