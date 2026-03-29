@@ -16,7 +16,37 @@ const COMMANDS = {
   'run-complete': { method: 'POST', path: ({ runId }) => `/api/agent/runs/${encodeURIComponent(runId)}/complete`, requiresRunId: true, requiresFile: true },
   'run-fail': { method: 'POST', path: ({ runId }) => `/api/agent/runs/${encodeURIComponent(runId)}/fail`, requiresRunId: true, requiresFile: true },
   'followup-decision': { method: 'GET', path: ({ candidateId }) => `/api/agent/candidates/${encodeURIComponent(candidateId)}/followup-decision`, requiresCandidateId: true },
-  'list-candidates': { method: 'GET', path: ({ jobKey }) => `/api/candidates?jobKey=${encodeURIComponent(jobKey)}`, requiresJobKey: true },
+  'list-candidates': {
+    method: 'GET',
+    path: ({ jobKey, page, pageSize, keyword, status, resumeState }) => {
+      const params = new URLSearchParams({
+        jobKey
+      });
+
+      if (page) {
+        params.set('page', page);
+      }
+
+      if (pageSize) {
+        params.set('pageSize', pageSize);
+      }
+
+      if (keyword) {
+        params.set('keyword', keyword);
+      }
+
+      if (status) {
+        params.set('status', status);
+      }
+
+      if (resumeState) {
+        params.set('resumeState', resumeState);
+      }
+
+      return `/api/candidates?${params.toString()}`;
+    },
+    requiresJobKey: true
+  },
   'dashboard-summary': { method: 'GET', path: () => '/api/dashboard/summary', includeToken: false },
   'run-events': { method: 'GET', path: ({ runId, afterId }) => `/api/runs/${encodeURIComponent(runId)}/events${afterId ? `?afterId=${encodeURIComponent(afterId)}` : ''}`, requiresRunId: true, includeToken: false }
 };
@@ -121,14 +151,45 @@ function mergePayload(command, options, body) {
     return undefined;
   }
 
-  if (options.runId && body && body.runId === undefined) {
+  const normalizedBody = normalizePayload(command, body, options);
+
+  if (options.runId && normalizedBody && normalizedBody.runId === undefined) {
     return {
-      ...body,
+      ...normalizedBody,
       runId: options.runId
     };
   }
 
-  return body;
+  return normalizedBody;
+}
+
+function normalizePayload(command, body, options) {
+  if (!body || typeof body !== 'object') {
+    return body;
+  }
+
+  if (options.command !== 'run-message') {
+    return body;
+  }
+
+  const occurredAt = body.occurredAt || body.sentAt;
+  const contentText = body.contentText || body.content;
+  const bossMessageId = body.bossMessageId
+    || `auto:${options.runId || body.runId || 'no-run'}:${body.direction || 'unknown'}:${occurredAt || new Date().toISOString()}`;
+
+  const normalized = {
+    ...body,
+    bossMessageId,
+    contentText
+  };
+
+  if (occurredAt && normalized.occurredAt === undefined) {
+    normalized.occurredAt = occurredAt;
+  }
+
+  delete normalized.content;
+  delete normalized.sentAt;
+  return normalized;
 }
 
 function buildUrl(command, options) {

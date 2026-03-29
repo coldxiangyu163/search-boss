@@ -11,8 +11,23 @@ class BossCliRunner {
     this.envFilePath = envFilePath;
   }
 
-  async bindTarget({ runId }) {
-    return this.#run(['target', 'bind', '--run-id', String(runId)]);
+  async bindTarget({ runId, mode = null, jobKey = null, jobId = null }) {
+    const args = ['target', 'bind', '--run-id', String(runId)];
+    if (mode && mode !== 'source' && mode !== 'sync') {
+      args.push('--prefer-chat');
+    }
+    const result = await this.#run(args);
+
+    if (jobKey || jobId) {
+      result.session = {
+        ...(result.session || {}),
+        jobKey: jobKey || result.session?.jobKey || null,
+        jobId: jobId || result.session?.jobId || null,
+        mode: mode || result.session?.mode || null
+      };
+    }
+
+    return result;
   }
 
   async inspectTarget({ runId }) {
@@ -37,6 +52,14 @@ class BossCliRunner {
     ]);
   }
 
+  async recommendNextCandidate({ runId }) {
+    return this.#run([
+      'recommend-next-candidate',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
   async inspectRecommendState({ runId }) {
     return this.#run([
       'recommend-state',
@@ -51,6 +74,20 @@ class BossCliRunner {
       '--run-id',
       String(runId)
     ]);
+  }
+
+  async getContextSnapshot({ runId, jobId = null }) {
+    const args = [
+      'context-snapshot',
+      '--run-id',
+      String(runId)
+    ];
+
+    if (jobId) {
+      args.push('--job-id', String(jobId));
+    }
+
+    return this.#run(args);
   }
 
   async getJobDetail({ runId, jobId }) {
@@ -81,6 +118,24 @@ class BossCliRunner {
     ]);
   }
 
+  async openChatThread({ runId, uid }) {
+    return this.#run([
+      'chat-open-thread',
+      '--run-id',
+      String(runId),
+      '--uid',
+      String(uid)
+    ]);
+  }
+
+  async inspectChatThreadState({ runId }) {
+    return this.#run([
+      'chat-thread-state',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
   async getResumePanel({ runId, uid }) {
     return this.#run([
       'resume-panel',
@@ -88,6 +143,22 @@ class BossCliRunner {
       String(runId),
       '--uid',
       String(uid)
+    ]);
+  }
+
+  async inspectAttachmentState({ runId }) {
+    return this.#run([
+      'attachment-state',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
+  async getResumePreviewMeta({ runId }) {
+    return this.#run([
+      'resume-preview-meta',
+      '--run-id',
+      String(runId)
     ]);
   }
 

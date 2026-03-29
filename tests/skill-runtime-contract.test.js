@@ -54,16 +54,32 @@ test('boss-source-greet references document direct-render detail anchors and for
   assert.match(bossSourceBrowserStates, /jobid=null.*weak negative evidence|weak negative evidence.*jobid=null/i);
   assert.match(bossSourceBrowserStates, /收藏.*分享.*共享|收藏\s*\/\s*分享\s*\/\s*共享/);
   assert.match(bossSourceBrowserStates, /不合适.*提交.*detail has closed|不合适.*提交.*详情已关闭/i);
+  assert.match(bossSourceBrowserStates, /recommend-next-candidate/);
 });
 
 test('boss-chat-followup skill documents attachment-state decisions', () => {
   assert.match(bossChatFollowupSkill, /grey\/disabled/);
   assert.match(bossChatFollowupSkill, /enabled attachment button or visible PDF card means resume already sent/i);
   assert.match(bossChatFollowupSkill, /boss-resume-ingest/);
+  assert.match(bossChatFollowupSkill, /chat-open-thread/);
+  assert.match(bossChatFollowupSkill, /chat-thread-state/);
+  assert.match(bossChatFollowupSkill, /attachment-state/);
+  assert.match(bossChatFollowupSkill, /attachment.*not.*run-fail|do not run-fail solely because.*attachment/i);
+});
+
+test('boss-chat-followup skill requires draining unread queue before completion', () => {
+  assert.match(bossChatFollowupSkill, /process unread rows in order/i);
+  assert.match(bossChatFollowupSkill, /continue until the current unread queue.*empty|current unread queue.*drained|drain the unread queue/i);
+  assert.match(bossChatFollowupSkill, /do not stop after one thread|do not finish after a single thread|single processed thread/i);
 });
 
 test('boss-resume-ingest skill documents runtime placeholders instead of machine-specific paths', () => {
   assert.doesNotMatch(bossResumeIngestSkill, /\/Users\/coldxiangyu/);
   assert.match(bossResumeIngestSkill, /NANOBOT_RUNTIME_FILE/);
   assert.match(bossResumeIngestSkill, /RESUME_LEDGER_FILE/);
+  assert.match(bossResumeIngestSkill, /candidateId.*missing/i);
+  assert.match(bossResumeIngestSkill, /list-candidates --job-key "\$JOB_KEY"/);
+  assert.match(bossResumeIngestSkill, /resume-preview-meta --run-id "\$RUN_ID"/);
+  assert.match(bossResumeIngestSkill, /disabled.*请求附件简历|尚未获得对方完整简历/i);
+  assert.match(bossResumeIngestSkill, /do not write attachment discovered.*disabled|disabled request-only state.*not.*attachment discovered/i);
 });

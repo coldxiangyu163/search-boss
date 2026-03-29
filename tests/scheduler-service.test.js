@@ -134,6 +134,12 @@ test('SchedulerService triggerJobTask fails manual task when nanobot exits witho
     async getRunStatus() {
       return 'running';
     },
+    async getLatestPhaseEvent() {
+      return null;
+    },
+    async runHasSubstantiveEvents() {
+      return false;
+    },
     async failReplacementRunsForRunId(payload) {
       replacementRunFailures.push(payload);
       return { ok: true, failedRunIds: [52] };
@@ -159,8 +165,83 @@ test('SchedulerService triggerJobTask fails manual task when nanobot exits witho
   await failRunDone;
 
   assert.equal(failedRuns.length, 1);
-  assert.equal(replacementRunFailures.length, 1);
-  assert.equal(replacementRunFailures[0].runId, 51);
+  const classificationEvent = recordedEvents.find((event) => event.eventType === 'agent_exit_classified');
+  assert.equal(classificationEvent.payload.classification, 'agent_exit_before_bootstrap');
   assert.equal(failedRuns[0].runId, 51);
+  assert.equal(failedRuns[0].message, 'run_not_terminal_after_nanobot_exit');
+});
+
+test('SchedulerService records classified agent exit before failing non-terminal run', async () => {
+  const recordedEvents = [];
+  const failedRuns = [];
+  let releaseNanobot = null;
+  let failRunResolve = null;
+  const failRunDone = new Promise((resolve) => {
+    failRunResolve = resolve;
+  });
+
+  const pool = {
+    async query(sql) {
+      if (sql.includes('from scheduled_jobs') && sql.includes('job_key = $1')) {
+        return { rows: [] };
+      }
+
+      if (sql.includes('update sourcing_runs')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+
+  const agentService = {
+    async createRun(payload) {
+      return { id: 61, runKey: payload.runKey, status: 'pending' };
+    },
+    async recordRunEvent(payload) {
+      recordedEvents.push(payload);
+      return { ok: true };
+    },
+    async runNanobotForSchedule() {
+      await new Promise((resolve) => {
+        releaseNanobot = resolve;
+      });
+      return { ok: true };
+    },
+    async getRunStatus() {
+      return 'running';
+    },
+    async getLatestPhaseEvent() {
+      return {
+        eventType: 'phase_changed',
+        payload: {
+          phase: 'target_bound'
+        }
+      };
+    },
+    async runHasSubstantiveEvents() {
+      return false;
+    },
+    async failReplacementRunsForRunId() {
+      return { ok: true, failedRunIds: [] };
+    },
+    async completeRun() {
+      throw new Error('completeRun should not be called');
+    },
+    async failRun(payload) {
+      failedRuns.push(payload);
+      failRunResolve();
+      return { ok: true, status: 'failed' };
+    }
+  };
+
+  const scheduler = new SchedulerService({ pool, agentService });
+  await scheduler.triggerJobTask('健康顾问_B0047007', 'followup');
+
+  releaseNanobot();
+  await failRunDone;
+
+  const classificationEvent = recordedEvents.find((event) => event.eventType === 'agent_exit_classified');
+  assert.equal(classificationEvent.payload.classification, 'agent_exit_after_target_bound');
   assert.equal(failedRuns[0].message, 'run_not_terminal_after_nanobot_exit');
 });

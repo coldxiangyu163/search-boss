@@ -129,6 +129,37 @@ test('agent callback cli dashboard-summary gets local dashboard summary endpoint
   assert.equal(calls[0].body, undefined);
 });
 
+test('agent callback cli list-candidates forwards paging and keyword query params', async () => {
+  const calls = [];
+
+  const result = await executeCli(
+    [
+      'list-candidates',
+      '--job-key', '面点师傅（B0038011）_8eca6cad',
+      '--page', '2',
+      '--page-size', '50',
+      '--keyword', '邱发明'
+    ],
+    {
+      requestImpl: async (request) => {
+        calls.push(request);
+        return {
+          status: 200,
+          json: async () => ({ items: [], pageInfo: { page: 2, pageSize: 50, total: 0 } })
+        };
+      }
+    }
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(
+    calls[0].url,
+    'http://127.0.0.1:3000/api/candidates?jobKey=%E9%9D%A2%E7%82%B9%E5%B8%88%E5%82%85%EF%BC%88B0038011%EF%BC%89_8eca6cad&page=2&pageSize=50&keyword=%E9%82%B1%E5%8F%91%E6%98%8E&token=search-boss-local-agent'
+  );
+  assert.equal(calls[0].method, 'GET');
+  assert.equal(calls[0].body, undefined);
+});
+
 test('agent callback cli fails fast on missing required args', async () => {
   const result = await executeCli(['run-complete'], {
     requestImpl: async () => {
@@ -206,6 +237,41 @@ test('agent callback cli reads api base and token from .env file when process en
     calls[0].url,
     'http://macos-local:3011/api/agent/runs/88/complete?token=macos-local-agent'
   );
+});
+
+test('agent callback cli run-message normalizes legacy message payload fields before posting', async () => {
+  const calls = [];
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-callback-cli-'));
+  const payloadFile = path.join(tempDir, 'message.json');
+
+  await fs.writeFile(payloadFile, JSON.stringify({
+    jobKey: '面点师傅（B0038011）_8eca6cad',
+    bossEncryptGeekId: 'geek-1',
+    candidateId: '214',
+    direction: 'inbound',
+    messageType: 'text',
+    content: '我对岗位感兴趣',
+    sentAt: '2026-03-29T11:09:00+08:00'
+  }));
+
+  const result = await executeCli(['run-message', '--run-id', '234', '--file', payloadFile], {
+    requestImpl: async (request) => {
+      calls.push(request);
+      return {
+        status: 200,
+        json: async () => ({ ok: true, messageId: '23', duplicated: false })
+      };
+    }
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.runId, '234');
+  assert.equal(calls[0].body.contentText, '我对岗位感兴趣');
+  assert.equal(calls[0].body.occurredAt, '2026-03-29T11:09:00+08:00');
+  assert.match(String(calls[0].body.bossMessageId), /^auto:234:inbound:2026-03-29T11:09:00\+08:00/);
+  assert.equal(calls[0].body.content, undefined);
+  assert.equal(calls[0].body.sentAt, undefined);
 });
 
 test('agent callback cli surfaces Local API error payload details', async () => {

@@ -151,6 +151,103 @@ async function inspectRecommendDetail({
   return detail;
 }
 
+async function inspectContextSnapshot({
+  cdpClient,
+  targetId,
+  urlPrefix,
+  jobId = null
+} = {}) {
+  const snapshot = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildContextSnapshotExpression({ jobId })
+  });
+
+  if (!snapshot?.ok) {
+    throw new Error(snapshot?.reason || 'boss_context_snapshot_unavailable');
+  }
+
+  return snapshot;
+}
+
+async function openChatThread({
+  cdpClient,
+  targetId,
+  urlPrefix,
+  uid
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildOpenChatThreadExpression({ uid })
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_chat_thread_open_failed');
+  }
+
+  return result;
+}
+
+async function inspectChatThreadState({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildChatThreadStateExpression()
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_chat_thread_state_unavailable');
+  }
+
+  return result;
+}
+
+async function inspectAttachmentState({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildAttachmentStateExpression()
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_attachment_state_unavailable');
+  }
+
+  return result;
+}
+
+async function inspectResumePreviewMeta({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildResumePreviewMetaExpression()
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_resume_preview_meta_unavailable');
+  }
+
+  return result;
+}
+
 function resolveBossBrowserErrorCode(payload) {
   if (payload?.error) {
     return payload.error;
@@ -443,11 +540,243 @@ function buildRecommendDetailExpression() {
   })()`;
 }
 
+function buildContextSnapshotExpression({ jobId = null } = {}) {
+  return `(() => {
+    try {
+      const currentUrl = window.location.href || '';
+      const title = document.title || '';
+      const shell = currentUrl.includes('/web/chat/recommend')
+        ? 'recommend'
+        : currentUrl.includes('/web/chat/index')
+          ? 'chat'
+          : 'other';
+      const expectedJobId = ${JSON.stringify(jobId || '')};
+      const jobIdMatch = currentUrl.match(/[?&]jobid=([^&#]+)/i);
+      const pageJobId = jobIdMatch ? decodeURIComponent(jobIdMatch[1]) : '';
+      const recommendFrame = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+      const recommendDoc = recommendFrame?.contentDocument || null;
+      const detailWrap = recommendDoc?.querySelector('.resume-detail-wrap') || null;
+      const detailText = (detailWrap?.innerText || '').replace(/\\s+/g, ' ').trim();
+      const geekIdNode = detailWrap?.querySelector('[encrypt-geek-id]') || null;
+      const nameNode = detailWrap?.querySelector('.resume-name, .geek-name, .base-name, h1, h2') || null;
+      const activeChatItem = document.querySelector('.user-item.active, .dialog-item.active, .chat-item.active');
+      const attachmentButton = Array.from(document.querySelectorAll('button, a, span, div'))
+        .find((node) => /附件简历|附件|PDF/i.test((node.textContent || '').trim()));
+      const attachmentCard = Array.from(document.querySelectorAll('a, div, span'))
+        .find((node) => /\\.pdf\\b/i.test((node.textContent || '').trim()));
+      const attachmentVisible = Boolean(attachmentCard || attachmentButton);
+      const attachmentDisabled = Boolean(
+        attachmentButton
+        && (
+          attachmentButton.disabled
+          || attachmentButton.getAttribute('aria-disabled') === 'true'
+          || attachmentButton.classList.contains('disabled')
+        )
+      );
+
+      return JSON.stringify({
+        ok: true,
+        page: {
+          url: currentUrl,
+          title,
+          shell
+        },
+        job: {
+          encryptJobId: pageJobId || '',
+          jobName: '',
+          matchesRunJob: expectedJobId ? pageJobId === expectedJobId : null
+        },
+        candidate: {
+          bossEncryptGeekId: geekIdNode?.getAttribute('encrypt-geek-id') || '',
+          name: (nameNode?.textContent || '').trim(),
+          inDetail: Boolean(detailWrap),
+          detailText
+        },
+        thread: {
+          encryptUid: activeChatItem?.getAttribute('data-uid') || activeChatItem?.getAttribute('data-encrypt-uid') || '',
+          isUnread: Boolean(activeChatItem?.querySelector('.unread, .unread-count, [class*="unread"]'))
+        },
+        attachment: {
+          present: attachmentVisible,
+          buttonEnabled: Boolean(attachmentButton) && !attachmentDisabled
+        }
+      });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_context_snapshot_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
+function buildOpenChatThreadExpression({ uid }) {
+  return `(() => {
+    try {
+      const targetUid = ${JSON.stringify(uid || '')};
+      const rows = Array.from(document.querySelectorAll('.geek-item, .user-item, .dialog-item, .chat-item'));
+      const row = rows.find((node) => {
+        const value = node.getAttribute('data-uid')
+          || node.getAttribute('data-encrypt-uid')
+          || node.dataset?.uid
+          || node.dataset?.encryptUid
+          || '';
+        return value === targetUid;
+      });
+
+      if (!row) {
+        return JSON.stringify({ ok: false, reason: 'boss_chat_thread_not_found' });
+      }
+
+      row.click();
+
+      return JSON.stringify({
+        ok: true,
+        uid: targetUid,
+        opened: true
+      });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_chat_thread_open_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
+function buildChatThreadStateExpression() {
+  return `(() => {
+    try {
+      const active = document.querySelector('.geek-item.selected, .geek-item.active, .user-item.active, .dialog-item.active, .chat-item.active');
+      const threadPane = document.querySelector('.chat-conversation, .conversation-box, .chat-message-list, .conversation-message');
+      const threadText = (threadPane?.innerText || '').replace(/\\s+/g, ' ').trim();
+      const attachmentButton = threadPane
+        ? Array.from(threadPane.querySelectorAll('button, a, span, div'))
+          .find((node) => /附件简历|附件|PDF/i.test((node.textContent || '').trim()))
+        : null;
+
+      return JSON.stringify({
+        ok: true,
+        threadOpen: Boolean(active) && Boolean(threadPane),
+        activeUid: active?.getAttribute('data-uid') || active?.getAttribute('data-encrypt-uid') || active?.dataset?.uid || active?.dataset?.encryptUid || '',
+        attachmentPresent: Boolean(attachmentButton),
+        threadText: threadText.slice(0, 500)
+      });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_chat_thread_state_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
+function buildAttachmentStateExpression() {
+  return `(() => {
+    try {
+      const threadPane = document.querySelector('.chat-conversation, .conversation-box, .chat-message-list, .conversation-message');
+      const attachmentButton = threadPane
+        ? Array.from(threadPane.querySelectorAll('button, a, span, div'))
+          .find((node) => /附件简历|附件|PDF/i.test((node.textContent || '').trim()))
+        : null;
+      const attachmentCard = threadPane
+        ? Array.from(threadPane.querySelectorAll('a, div, span'))
+          .find((node) => /\\.pdf\\b/i.test((node.textContent || '').trim()))
+        : null;
+      const fileName = (attachmentCard?.textContent || attachmentButton?.textContent || '').trim();
+      const disabled = Boolean(
+        attachmentButton
+        && (
+          attachmentButton.disabled
+          || attachmentButton.getAttribute('aria-disabled') === 'true'
+          || attachmentButton.classList.contains('disabled')
+        )
+      );
+
+      return JSON.stringify({
+        ok: true,
+        present: Boolean(attachmentCard || attachmentButton),
+        buttonEnabled: Boolean(attachmentButton) && !disabled,
+        fileName
+      });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_attachment_state_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
+function buildResumePreviewMetaExpression() {
+  return `(() => {
+    try {
+      const output = {
+        ok: true,
+        canPreview: false,
+        encryptGeekId: '',
+        encryptResumeId: '',
+        encryptAuthorityId: '',
+        previewType: null
+      };
+
+      const candidates = [];
+      const pushCandidate = (value) => {
+        if (!value || typeof value !== 'object') return;
+        candidates.push(value);
+      };
+
+      pushCandidate(window.__INITIAL_STATE__);
+      pushCandidate(window.__NEXT_DATA__);
+      pushCandidate(window.iBossRoot);
+      pushCandidate(window.Chat);
+      pushCandidate(window.chatInfo);
+      pushCandidate(window.geekCard);
+
+      const seen = new Set();
+      const queue = candidates.slice();
+      while (queue.length) {
+        const current = queue.shift();
+        if (!current || typeof current !== 'object' || seen.has(current)) {
+          continue;
+        }
+        seen.add(current);
+
+        if (!output.encryptAuthorityId && typeof current.encryptAuthorityId === 'string') {
+          output.encryptAuthorityId = current.encryptAuthorityId;
+        }
+        if (!output.encryptResumeId && typeof current.encryptResumeId === 'string') {
+          output.encryptResumeId = current.encryptResumeId;
+        }
+        if (!output.encryptGeekId && typeof current.encryptGeekId === 'string') {
+          output.encryptGeekId = current.encryptGeekId;
+        }
+        if (!output.encryptGeekId && typeof current.geekId === 'string') {
+          output.encryptGeekId = current.geekId;
+        }
+        if (output.previewType == null && Number.isFinite(Number(current.previewType))) {
+          output.previewType = Number(current.previewType);
+        }
+        if (!output.canPreview && current.isCanPreview === true) {
+          output.canPreview = true;
+        }
+
+        for (const value of Object.values(current)) {
+          if (value && typeof value === 'object' && !seen.has(value)) {
+            queue.push(value);
+          }
+        }
+      }
+
+      const attachmentButton = Array.from(document.querySelectorAll('button, a, span, div'))
+        .find((node) => (node.className || '').toString().includes('resume-btn-file') || /附件简历|附件|PDF/i.test((node.textContent || '').trim()));
+
+      output.buttonClassName = attachmentButton?.className || '';
+      return JSON.stringify(output);
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_resume_preview_meta_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
 module.exports = {
   getUrl,
   evaluateJson,
   bossFetch,
   clickRecommendPager,
   inspectRecommendState,
-  inspectRecommendDetail
+  inspectRecommendDetail,
+  inspectContextSnapshot,
+  openChatThread,
+  inspectChatThreadState,
+  inspectAttachmentState,
+  inspectResumePreviewMeta,
 };

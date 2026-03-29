@@ -57,6 +57,55 @@ test('target bind stores the current boss target in the session', async () => {
   assert.equal(stderr.output, '');
 });
 
+test('target bind persists optional run-scoped job metadata in the session', async () => {
+  const writes = [];
+
+  const result = await executeCli(
+    ['target', 'bind', '--run-id', '230', '--job-key', '面点师傅（B0038011）_8eca6cad', '--job-id', 'enc-job-1'],
+    {
+      stdout: createWritable(),
+      stderr: createWritable(),
+      env: {
+        DATABASE_URL: 'postgresql://example',
+        AGENT_TOKEN: 'token',
+        NANOBOT_CONFIG_PATH: '/tmp/nanobot.json'
+      },
+      dependencies: {
+        cdpClient: {
+          resolveBossTarget: async () => ({
+            id: 'boss-1',
+            url: 'https://www.zhipin.com/web/chat/index'
+          })
+        },
+        sessionStore: {
+          bindTarget: async (runId, payload) => {
+            writes.push({ runId, payload });
+            return {
+              runId,
+              ...payload,
+              epoch: 0,
+              lastOwner: 'boss-cli'
+            };
+          }
+        }
+      }
+    }
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(writes[0], {
+    runId: '230',
+    payload: {
+      targetId: 'boss-1',
+      tabUrl: 'https://www.zhipin.com/web/chat/index',
+      jobKey: '面点师傅（B0038011）_8eca6cad',
+      jobId: 'enc-job-1',
+      mode: null,
+      lastOwner: 'boss-cli'
+    }
+  });
+});
+
 test('target inspect returns the bound session plus the current url', async () => {
   const stdout = createWritable();
 
@@ -328,6 +377,226 @@ test('recommend-detail returns deterministic nested detail summary for the bound
   assert.equal(payload.hasExperienceSection, true);
 });
 
+test('context-snapshot returns normalized structured page facts for the bound target', async () => {
+  const stdout = createWritable();
+  const calls = [];
+
+  const result = await executeCli(['context-snapshot', '--run-id', '12', '--job-id', 'enc-job-1'], {
+    stdout,
+    env: {
+      DATABASE_URL: 'postgresql://example',
+      AGENT_TOKEN: 'token',
+      NANOBOT_CONFIG_PATH: '/tmp/nanobot.json'
+    },
+    dependencies: {
+      sessionStore: {
+        loadSession: async () => ({
+          runId: '12',
+          targetId: 'boss-1',
+          epoch: 0
+        })
+      },
+      browserCommands: {
+        inspectContextSnapshot: async (payload) => {
+          calls.push(payload);
+          return {
+            ok: true,
+            page: {
+              url: 'https://www.zhipin.com/web/chat/recommend?jobid=enc-job-1',
+              title: '推荐牛人',
+              shell: 'recommend'
+            },
+            job: {
+              encryptJobId: 'enc-job-1',
+              jobName: '健康顾问',
+              matchesRunJob: true
+            },
+            candidate: {
+              bossEncryptGeekId: 'geek-1',
+              name: '王庭',
+              inDetail: true
+            },
+            thread: {
+              encryptUid: 'uid-1',
+              isUnread: false
+            },
+            attachment: {
+              present: false,
+              buttonEnabled: false
+            }
+          };
+        }
+      }
+    }
+  });
+
+  const payload = JSON.parse(stdout.output);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(calls[0].targetId, 'boss-1');
+  assert.equal(calls[0].jobId, 'enc-job-1');
+  assert.equal(payload.page.shell, 'recommend');
+  assert.equal(payload.job.matchesRunJob, true);
+  assert.equal(payload.candidate.name, '王庭');
+});
+
+test('recommend-next-candidate reuses the pager helper and returns the resulting direction', async () => {
+  const stdout = createWritable();
+  const calls = [];
+
+  const result = await executeCli(['recommend-next-candidate', '--run-id', '14'], {
+    stdout,
+    env: {
+      DATABASE_URL: 'postgresql://example',
+      AGENT_TOKEN: 'token',
+      NANOBOT_CONFIG_PATH: '/tmp/nanobot.json'
+    },
+    dependencies: {
+      sessionStore: {
+        loadSession: async () => ({
+          runId: '14',
+          targetId: 'boss-1',
+          epoch: 0
+        })
+      },
+      browserCommands: {
+        clickRecommendPager: async (payload) => {
+          calls.push(payload);
+          return {
+            ok: true,
+            direction: 'next',
+            x: 88,
+            y: 99
+          };
+        }
+      }
+    }
+  });
+
+  const payload = JSON.parse(stdout.output);
+  assert.equal(result.exitCode, 0);
+  assert.equal(calls[0].direction, 'next');
+  assert.equal(payload.direction, 'next');
+});
+
+test('chat-open-thread opens a chat row for the bound target', async () => {
+  const stdout = createWritable();
+  const calls = [];
+
+  const result = await executeCli(['chat-open-thread', '--run-id', '15', '--uid', 'enc-uid-9'], {
+    stdout,
+    env: {
+      DATABASE_URL: 'postgresql://example',
+      AGENT_TOKEN: 'token',
+      NANOBOT_CONFIG_PATH: '/tmp/nanobot.json'
+    },
+    dependencies: {
+      sessionStore: {
+        loadSession: async () => ({
+          runId: '15',
+          targetId: 'boss-1',
+          epoch: 0
+        })
+      },
+      browserCommands: {
+        openChatThread: async (payload) => {
+          calls.push(payload);
+          return {
+            ok: true,
+            uid: 'enc-uid-9',
+            opened: true
+          };
+        }
+      }
+    }
+  });
+
+  const payload = JSON.parse(stdout.output);
+  assert.equal(result.exitCode, 0);
+  assert.equal(calls[0].uid, 'enc-uid-9');
+  assert.equal(payload.opened, true);
+});
+
+test('chat-thread-state returns normalized thread facts for the bound target', async () => {
+  const stdout = createWritable();
+  const calls = [];
+
+  const result = await executeCli(['chat-thread-state', '--run-id', '16'], {
+    stdout,
+    env: {
+      DATABASE_URL: 'postgresql://example',
+      AGENT_TOKEN: 'token',
+      NANOBOT_CONFIG_PATH: '/tmp/nanobot.json'
+    },
+    dependencies: {
+      sessionStore: {
+        loadSession: async () => ({
+          runId: '16',
+          targetId: 'boss-1',
+          epoch: 0
+        })
+      },
+      browserCommands: {
+        inspectChatThreadState: async (payload) => {
+          calls.push(payload);
+          return {
+            ok: true,
+            threadOpen: true,
+            activeUid: 'enc-uid-3',
+            attachmentPresent: true
+          };
+        }
+      }
+    }
+  });
+
+  const payload = JSON.parse(stdout.output);
+  assert.equal(result.exitCode, 0);
+  assert.equal(calls[0].targetId, 'boss-1');
+  assert.equal(payload.threadOpen, true);
+  assert.equal(payload.attachmentPresent, true);
+});
+
+test('attachment-state returns attachment facts for the bound target', async () => {
+  const stdout = createWritable();
+  const calls = [];
+
+  const result = await executeCli(['attachment-state', '--run-id', '17'], {
+    stdout,
+    env: {
+      DATABASE_URL: 'postgresql://example',
+      AGENT_TOKEN: 'token',
+      NANOBOT_CONFIG_PATH: '/tmp/nanobot.json'
+    },
+    dependencies: {
+      sessionStore: {
+        loadSession: async () => ({
+          runId: '17',
+          targetId: 'boss-1',
+          epoch: 0
+        })
+      },
+      browserCommands: {
+        inspectAttachmentState: async (payload) => {
+          calls.push(payload);
+          return {
+            ok: true,
+            present: true,
+            buttonEnabled: true,
+            fileName: 'resume.pdf'
+          };
+        }
+      }
+    }
+  });
+
+  const payload = JSON.parse(stdout.output);
+  assert.equal(result.exitCode, 0);
+  assert.equal(calls[0].targetId, 'boss-1');
+  assert.equal(payload.present, true);
+  assert.equal(payload.fileName, 'resume.pdf');
+});
+
 test('chatlist reads the friend list for the bound target', async () => {
   const stdout = createWritable();
   const calls = [];
@@ -569,6 +838,49 @@ test('resume-panel scrapes the currently opened right panel from the bound targe
   assert.equal(payload.resume.name, '谢东林');
   assert.equal(payload.resume.jobChatting, '健康顾问');
   assert.equal(payload.resume.expect, '重庆 8-10K');
+});
+
+test('resume-preview-meta returns preview identifiers from the bound target', async () => {
+  const stdout = createWritable();
+  const calls = [];
+
+  const result = await executeCli(['resume-preview-meta', '--run-id', '55'], {
+    stdout,
+    env: {
+      DATABASE_URL: 'postgresql://example',
+      AGENT_TOKEN: 'token',
+      NANOBOT_CONFIG_PATH: '/tmp/nanobot.json'
+    },
+    dependencies: {
+      sessionStore: {
+        loadSession: async () => ({
+          runId: '55',
+          targetId: 'boss-1',
+          epoch: 0
+        })
+      },
+      browserCommands: {
+        inspectResumePreviewMeta: async (payload) => {
+          calls.push(payload);
+          return {
+            ok: true,
+            canPreview: true,
+            encryptGeekId: 'geek-1',
+            encryptResumeId: 'resume-1',
+            encryptAuthorityId: 'authority-1',
+            previewType: 1
+          };
+        }
+      }
+    }
+  });
+
+  const payload = JSON.parse(stdout.output);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(calls[0].targetId, 'boss-1');
+  assert.equal(payload.canPreview, true);
+  assert.equal(payload.encryptAuthorityId, 'authority-1');
 });
 
 function createWritable() {

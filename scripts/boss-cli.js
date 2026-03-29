@@ -66,6 +66,12 @@ function parseOptions(args, initialOptions) {
       throw new Error(`Unexpected argument: ${key}`);
     }
 
+    const booleanFlags = ['--prefer-chat'];
+    if (booleanFlags.includes(key)) {
+      options[toCamelCase(key.slice(2))] = true;
+      continue;
+    }
+
     if (value === undefined || value.startsWith('--')) {
       throw new Error(`Missing value for ${key}`);
     }
@@ -95,11 +101,15 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
   if (options.command === 'target' && options.subcommand === 'bind') {
     const target = await cdpClient.resolveBossTarget({
       targetId: options.targetId || null,
-      urlPrefix: config.bossCdpTargetUrlPrefix
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      preferUrl: options.preferChat ? '/web/chat/index' : null
     });
     const session = await sessionStore.bindTarget(options.runId, {
       targetId: target.id,
       tabUrl: target.url,
+      jobKey: options.jobKey || null,
+      jobId: options.jobId || null,
+      mode: options.mode || null,
       lastOwner: 'boss-cli'
     });
 
@@ -190,6 +200,21 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
     };
   }
 
+  if (options.command === 'recommend-next-candidate') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.clickRecommendPager({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      direction: 'next'
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
   if (options.command === 'recommend-state') {
     const session = await sessionStore.loadSession(options.runId);
     const result = await browserCommands.inspectRecommendState({
@@ -210,6 +235,21 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
       cdpClient,
       targetId: session.targetId,
       urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
+  if (options.command === 'context-snapshot') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.inspectContextSnapshot({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      jobId: options.jobId || null
     });
 
     return {
@@ -298,6 +338,35 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
     };
   }
 
+  if (options.command === 'chat-open-thread') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.openChatThread({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      uid: options.uid
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
+  if (options.command === 'chat-thread-state') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.inspectChatThreadState({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
   if (options.command === 'resume-panel') {
     const session = await sessionStore.loadSession(options.runId);
     const resume = await browserCommands.evaluateJson({
@@ -310,6 +379,34 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
     return {
       ok: true,
       resume
+    };
+  }
+
+  if (options.command === 'attachment-state') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.inspectAttachmentState({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
+  if (options.command === 'resume-preview-meta') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.inspectResumePreviewMeta({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+
+    return {
+      ok: true,
+      ...result
     };
   }
 

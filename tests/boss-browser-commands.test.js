@@ -7,7 +7,11 @@ const {
   bossFetch,
   clickRecommendPager,
   inspectRecommendState,
-  inspectRecommendDetail
+  inspectRecommendDetail,
+  openChatThread,
+  inspectChatThreadState,
+  inspectAttachmentState,
+  inspectResumePreviewMeta
 } = require('../src/services/boss-browser-commands');
 
 test('getUrl reads the current URL from the bound target', async () => {
@@ -305,4 +309,116 @@ test('inspectRecommendDetail fails when the detail iframe payload is structurall
     }),
     /boss_recommend_detail_empty/
   );
+});
+
+test('openChatThread uses a stable chat row selector instead of generic data-uid nodes', async () => {
+  const calls = [];
+  const cdpClient = {
+    evaluate: async (payload) => {
+      calls.push(payload);
+      return {
+        type: 'string',
+        value: JSON.stringify({ ok: true, uid: 'enc-uid-1', opened: true })
+      };
+    }
+  };
+
+  const result = await openChatThread({
+    cdpClient,
+    targetId: 'target-1',
+    uid: 'enc-uid-1'
+  });
+
+  assert.equal(result.opened, true);
+  assert.match(calls[0].expression, /\.geek-item/);
+  assert.doesNotMatch(calls[0].expression, /document\\.querySelectorAll\\('\\[data-uid\\], \\[data-encrypt-uid\\]'\\)/);
+});
+
+test('inspectChatThreadState reads active thread state from chat shell anchors', async () => {
+  const calls = [];
+  const cdpClient = {
+    evaluate: async (payload) => {
+      calls.push(payload);
+      return {
+        type: 'string',
+        value: JSON.stringify({
+          ok: true,
+          threadOpen: true,
+          activeUid: 'enc-uid-2',
+          attachmentPresent: false
+        })
+      };
+    }
+  };
+
+  const result = await inspectChatThreadState({
+    cdpClient,
+    targetId: 'target-1'
+  });
+
+  assert.equal(result.threadOpen, true);
+  assert.equal(result.activeUid, 'enc-uid-2');
+  assert.match(calls[0].expression, /\.geek-item\.selected/);
+  assert.match(calls[0].expression, /chat-conversation|conversation-box/);
+});
+
+test('inspectAttachmentState scopes attachment detection to the active right pane', async () => {
+  const calls = [];
+  const cdpClient = {
+    evaluate: async (payload) => {
+      calls.push(payload);
+      return {
+        type: 'string',
+        value: JSON.stringify({
+          ok: true,
+          present: true,
+          buttonEnabled: true,
+          fileName: '曾艳简历.pdf'
+        })
+      };
+    }
+  };
+
+  const result = await inspectAttachmentState({
+    cdpClient,
+    targetId: 'target-1'
+  });
+
+  assert.equal(result.present, true);
+  assert.equal(result.fileName, '曾艳简历.pdf');
+  assert.match(calls[0].expression, /chat-conversation|conversation-box/);
+  assert.match(calls[0].expression, /threadPane\.querySelectorAll/);
+});
+
+test('inspectResumePreviewMeta returns preview identifiers from live runtime state', async () => {
+  const calls = [];
+  const cdpClient = {
+    evaluate: async (payload) => {
+      calls.push(payload);
+      return {
+        type: 'string',
+        value: JSON.stringify({
+          ok: true,
+          canPreview: true,
+          encryptGeekId: 'geek-1',
+          encryptResumeId: 'resume-1',
+          encryptAuthorityId: 'authority-1',
+          previewType: 1
+        })
+      };
+    }
+  };
+
+  const result = await inspectResumePreviewMeta({
+    cdpClient,
+    targetId: 'target-1'
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.encryptGeekId, 'geek-1');
+  assert.equal(result.encryptResumeId, 'resume-1');
+  assert.equal(result.encryptAuthorityId, 'authority-1');
+  assert.equal(result.previewType, 1);
+  assert.match(calls[0].expression, /encryptAuthorityId/);
+  assert.match(calls[0].expression, /resume-btn-file/);
 });

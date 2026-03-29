@@ -547,6 +547,9 @@ class AgentService {
       throw new Error('candidate_not_found');
     }
 
+    const resolvedBossMessageId = bossMessageId
+      || `auto:${runId || 'no-run'}:${direction || 'unknown'}:${occurredAt || new Date().toISOString()}:${candidate.id}`;
+
     const result = await this.pool.query(
       `
         insert into candidate_messages (
@@ -564,7 +567,7 @@ class AgentService {
       `,
       [
         candidate.id,
-        bossMessageId,
+        resolvedBossMessageId,
         direction,
         messageType || 'text',
         contentText || null,
@@ -596,7 +599,7 @@ class AgentService {
       sequence,
       eventType: 'message_recorded',
       payload: {
-        bossMessageId,
+        bossMessageId: resolvedBossMessageId,
         direction
       },
       occurredAt
@@ -648,7 +651,7 @@ class AgentService {
           status,
           downloaded_at
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, case when $8 = 'downloaded' then $9 else null end)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, case when $8 = 'downloaded' then $9::timestamptz else null end)
         on conflict do nothing
         returning id
       `,
@@ -903,6 +906,24 @@ class AgentService {
     }
   }
 
+  async runHasSubstantiveEvents(runId) {
+    const substantiveTypes = [
+      'greet_sent', 'resume_downloaded', 'resume_request_sent',
+      'run_message', 'run_action', 'attachment_recorded'
+    ];
+    const result = await this.pool.query(
+      `
+        select 1
+        from sourcing_run_events
+        where run_id = $1
+          and event_type = any($2)
+        limit 1
+      `,
+      [runId, substantiveTypes]
+    );
+    return result.rows.length > 0;
+  }
+
   async getRunStatus(runId) {
     const result = await this.pool.query(
       `
@@ -980,6 +1001,26 @@ class AgentService {
       ok: true,
       failedRunIds
     };
+  }
+
+  async getLatestPhaseEvent(runId) {
+    const result = await this.pool.query(
+      `
+        select
+          id,
+          event_type as "eventType",
+          payload,
+          occurred_at as "occurredAt"
+        from sourcing_run_events
+        where run_id = $1
+          and event_type in ('phase_changed', 'context_snapshot_captured')
+        order by id desc
+        limit 1
+      `,
+      [runId]
+    );
+
+    return result.rows[0] || null;
   }
 
   async insertRunEvent({ runId, attemptId, eventId, sequence, eventType, payload, occurredAt }) {
@@ -1067,7 +1108,8 @@ class AgentService {
         buildRunContractPrompt(runId),
         buildNoRepoIntrospectionPrompt(),
         buildBootstrapSequencePrompt(mode),
-        buildCliUsagePrompt(),
+        buildCliUsagePrompt(mode),
+        buildChatQueueGoalPrompt(mode),
         buildAttachmentHandoffPrompt(runId),
         buildFailureEvidencePrompt(),
         buildCompletionPrompt()
@@ -1082,7 +1124,8 @@ class AgentService {
         buildRunContractPrompt(runId),
         buildNoRepoIntrospectionPrompt(),
         buildBootstrapSequencePrompt(mode),
-        buildCliUsagePrompt(),
+        buildCliUsagePrompt(mode),
+        buildChatQueueGoalPrompt(mode),
         buildAttachmentHandoffPrompt(runId),
         buildFailureEvidencePrompt(),
         buildCompletionPrompt()
@@ -1097,7 +1140,7 @@ class AgentService {
         buildRunContractPrompt(runId),
         buildNoRepoIntrospectionPrompt(),
         buildBootstrapSequencePrompt(mode),
-        buildCliUsagePrompt(),
+        buildCliUsagePrompt(mode),
         buildAttachmentHandoffPrompt(runId),
         buildFailureEvidencePrompt(),
         buildCompletionPrompt()
@@ -1110,7 +1153,7 @@ class AgentService {
         buildRunContractPrompt(runId),
         buildNoRepoIntrospectionPrompt(),
         buildBootstrapSequencePrompt(mode),
-        buildCliUsagePrompt(),
+        buildCliUsagePrompt(mode),
         buildFailureEvidencePrompt(),
         buildCompletionPrompt()
       ].join('\n');
@@ -1126,7 +1169,7 @@ class AgentService {
         buildRunContractPrompt(runId),
         buildNoRepoIntrospectionPrompt(),
         buildBootstrapSequencePrompt(mode),
-        buildCliUsagePrompt(),
+        buildCliUsagePrompt(mode),
         buildFailureEvidencePrompt(),
         buildCompletionPrompt(),
         buildSourceRecoveryPrompt(jobContext),
@@ -1344,8 +1387,32 @@ class AgentService {
       return '';
     }
 
+    const needsJobContext = mode === 'source' || mode === 'followup' || mode === 'chat' || mode === 'download';
+    const jobContext = needsJobContext
+      ? await this.#getJobNanobotContext(jobKey)
+      : null;
+    let bindResult = null;
     try {
-      await this.bossCliRunner.bindTarget({ runId });
+      bindResult = await this.bossCliRunner.bindTarget({
+        runId,
+        mode,
+        jobKey,
+        jobId: jobContext?.bossEncryptJobId || null
+      });
+      await this.recordRunEvent({
+        runId,
+        eventId: `phase:${runId}:target_bound`,
+        occurredAt: new Date().toISOString(),
+        eventType: 'phase_changed',
+        stage: 'deterministic_bootstrap',
+        message: 'target bound',
+        payload: {
+          phase: 'target_bound',
+          mode,
+          jobKey,
+          targetId: bindResult?.session?.targetId || null
+        }
+      });
     } catch (error) {
       await this.recordRunEvent({
         runId,
@@ -1355,6 +1422,88 @@ class AgentService {
         stage: 'deterministic_bootstrap',
         message: error.message,
         payload: { mode, jobKey, command: 'target bind' }
+      });
+    }
+
+    let contextFilePath = null;
+    let contextSnapshot = null;
+
+    if (bindResult && this.bossCliRunner.getContextSnapshot) {
+      try {
+        contextSnapshot = await this.bossCliRunner.getContextSnapshot({
+          runId,
+          jobId: jobContext?.bossEncryptJobId || null
+        });
+
+        if (this.bossContextStore) {
+          const saved = await this.bossContextStore.saveContext(runId, {
+            mode,
+            jobKey,
+            targetId: bindResult?.session?.targetId || null,
+            pageState: contextSnapshot?.page?.shell || 'unknown',
+            page: contextSnapshot?.page || {},
+            job: contextSnapshot?.job || {},
+            candidate: contextSnapshot?.candidate || {},
+            thread: contextSnapshot?.thread || {},
+            attachment: contextSnapshot?.attachment || {},
+            suggestedCommands: buildSuggestedCommands(mode),
+            checkpoints: {
+              targetBound: true,
+              contextSnapshotCaptured: true
+            }
+          });
+          contextFilePath = saved.filePath;
+        }
+
+        await this.recordRunEvent({
+          runId,
+          eventId: `context-snapshot:${runId}:${mode}`,
+          occurredAt: new Date().toISOString(),
+          eventType: 'context_snapshot_captured',
+          stage: 'deterministic_bootstrap',
+          message: 'context snapshot captured',
+          payload: {
+            phase: contextSnapshot?.page?.shell || 'unknown',
+            mode,
+            jobKey,
+            contextFilePath,
+            snapshot: contextSnapshot
+          }
+        });
+      } catch (error) {
+        await this.recordRunEvent({
+          runId,
+          eventId: `boss-cli-context-snapshot-failed:${runId}:${mode}`,
+          occurredAt: new Date().toISOString(),
+          eventType: 'boss_cli_command_failed',
+          stage: 'deterministic_bootstrap',
+          message: error.message,
+          payload: { mode, jobKey, command: 'context-snapshot' }
+        });
+      }
+    }
+
+    if (contextSnapshot) {
+      await this.recordRunEvent({
+        runId,
+        eventId: `boss-cli-context-ready:${runId}:${mode}`,
+        occurredAt: new Date().toISOString(),
+        eventType: 'boss_cli_command_succeeded',
+        stage: 'deterministic_bootstrap',
+        message: 'boss cli deterministic context ready',
+        payload: {
+          mode,
+          jobKey,
+          command: 'context-snapshot',
+          targetId: bindResult?.session?.targetId || null
+        }
+      });
+
+      return buildDeterministicContextPrompt({
+        mode,
+        bindResult,
+        contextSnapshot,
+        contextFilePath
       });
     }
 
@@ -1438,8 +1587,7 @@ function buildNoRepoIntrospectionPrompt() {
 
 function buildBootstrapSequencePrompt(mode = '') {
   if (mode === 'source') {
-    return '固定启动顺序：先读 boss-sourcing SKILL 做路由；source 只继续读 boss-source-greet SKILL、boss-sourcing/references/runtime-contract.md、boss-source-greet/references/browser-states.md。不要再读 chat/followup 的页面 reference，也不要用 find、rg、python、rglob 重新定位这些固定路径。' +
-      'Chrome 探活规则：bootstrap 完成后，先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 确认页面可用；禁止在 recommend-state 成功之前使用 take_snapshot 或 wait_for；如果 recommend-state 报错，等待 5 秒后重试一次，再失败才允许用 take_snapshot 做页面诊断。';
+    return '固定启动顺序：先读 boss-sourcing SKILL 做路由；source 只继续读 boss-source-greet SKILL、boss-sourcing/references/runtime-contract.md、boss-source-greet/references/browser-states.md。不要再读 chat/followup 的页面 reference，也不要用 find、rg、python、rglob 重新定位这些固定路径。';
   }
 
   if (mode === 'chat' || mode === 'followup' || mode === 'download') {
@@ -1449,8 +1597,24 @@ function buildBootstrapSequencePrompt(mode = '') {
   return '固定启动顺序：先读 boss-sourcing SKILL；run-scoped 流程只额外读取 boss-sourcing/references/runtime-contract.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。';
 }
 
-function buildCliUsagePrompt() {
-  return 'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进可先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"。若推荐详情里的 next/prev 在视觉上存在但快照没有可点击 uid，可使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-pager --run-id "$RUN_ID" --direction next|prev；它会发送真实鼠标事件，不是 DOM click。';
+function buildCliUsagePrompt(mode = '') {
+  if (mode === 'chat' || mode === 'followup') {
+    return 'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。聊天模式只允许使用 chat 相关 CLI：必要时用 node "$PROJECT_ROOT/scripts/boss-cli.js" chatlist --run-id "$RUN_ID" 读取当前职位聊天列表，用 chat-open-thread --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 打开指定线程，用 chat-thread-state --run-id "$RUN_ID" 验证当前线程状态，用 chatmsg --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 读取当前线程消息，用 attachment-state --run-id "$RUN_ID" 或 resume-panel --run-id "$RUN_ID" 读取附件按钮/附件卡片状态；需要恢复附件预览参数时，使用 resume-preview-meta --run-id "$RUN_ID"；禁止调用 recommend-state、recommend-detail、recommend-pager，禁止把推荐页锚点用于沟通线程判断。';
+  }
+
+  if (mode === 'download') {
+    return 'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。下载/补扫模式只允许使用 chat 相关 CLI：必要时用 node "$PROJECT_ROOT/scripts/boss-cli.js" chatlist --run-id "$RUN_ID" 读取当前职位聊天列表，用 chat-open-thread --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 打开指定线程，用 chat-thread-state --run-id "$RUN_ID" 验证当前线程状态，用 chatmsg --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 读取当前线程消息，用 attachment-state --run-id "$RUN_ID" 或 resume-panel --run-id "$RUN_ID" 读取附件按钮/附件卡片状态；需要恢复附件预览参数时，使用 resume-preview-meta --run-id "$RUN_ID"；禁止调用 recommend-state、recommend-detail、recommend-pager，禁止把推荐页锚点用于沟通线程判断。';
+  }
+
+  return 'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进优先使用确定性 CLI：先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"；进入下一位候选人时优先使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-next-candidate --run-id "$RUN_ID"。仅当必须显式翻上一页或回退时，才使用 recommend-pager --direction next|prev；它会发送真实鼠标事件，不是 DOM click。';
+}
+
+function buildChatQueueGoalPrompt(mode = '') {
+  if (mode !== 'chat' && mode !== 'followup') {
+    return '';
+  }
+
+  return '执行目标：当前 run 必须持续处理 JOB_KEY 对应职位下的未读线程，直到当前未读队列被清空，或页面证据证明出现不可恢复阻塞。处理完单个线程后的回复、求简历、附件 handoff 都不构成完成条件；只要未读里还有下一条，就必须回到未读列表继续，不得打一条就 run-complete。';
 }
 
 function buildFailureEvidencePrompt() {
@@ -1478,7 +1642,7 @@ function buildSourceQuotaPrompt() {
 }
 
 function buildSourceStateGuardPrompt() {
-  return '执行寻源打招呼时，只允许真实可见 UI 交互推进页面；禁止 Page.navigate、mcp_chrome-devtools_navigate_page 的 url/reload、evaluate_script(...click())、以及脚本改 iframe/location/history/class。只有看到工作经历/教育经历等详情区块，才算进入候选人详情；直渲染的 `.resume-detail-wrap` 加详情区块也算 detail open，不要求一定有嵌套 iframe。只有确认详情区块消失且推荐列表重新可见，才算回到列表态；点击“不合适/提交”不等于详情已关闭。greet_sent 后或列表/详情发生重排后，旧 uid 一律作废，下一次点击前必须 fresh snapshot。低于 quota 时，若页面出现相似牛人/推荐区，不得直接把它当 blocker；必须先用 recommend-state 重新确认 detailOpen 与 nextVisible。翻页后优先用 recommend-detail 轻量确认新候选人的姓名/履历摘要，不要默认依赖 verbose snapshot 或 reload。只要详情里的 next 仍可见，下一位候选人的唯一主路径就是先点 next；若快照没有可点击 uid，就立刻用 recommend-pager。若新候选人的详情未被重新证明，禁止退化成列表按钮直接打招呼。错误岗位恢复时，禁止把收藏、分享、共享、举报等无关图标当作返回入口。未达到 targetCount=5 时，不得仅因“当前页偏慢/候选人偏少”而 run-complete；summary 必须从本轮 events.jsonl 实算。';
+  return '执行寻源打招呼时，只允许真实可见 UI 交互推进页面；禁止 Page.navigate、mcp_chrome-devtools_navigate_page 的 url/reload、evaluate_script(...click())、以及脚本改 iframe/location/history/class。只有看到工作经历/教育经历等详情区块，才算进入候选人详情；直渲染的 `.resume-detail-wrap` 加详情区块也算 detail open，不要求一定有嵌套 iframe。只有确认详情区块消失且推荐列表重新可见，才算回到列表态；点击“不合适/提交”不等于详情已关闭。greet_sent 后或列表/详情发生重排后，旧 uid 一律作废，下一次点击前必须 fresh snapshot。低于 quota 时，若页面出现相似牛人/推荐区，不得直接把它当 blocker；必须先用 recommend-state 重新确认 detailOpen 与 nextVisible。翻到下一位候选人时优先用 recommend-next-candidate，不要默认依赖 verbose snapshot 或 reload；翻页后再用 recommend-detail 轻量确认新候选人的姓名/履历摘要。若新候选人的详情未被重新证明，禁止退化成列表按钮直接打招呼。错误岗位恢复时，禁止把收藏、分享、共享、举报等无关图标当作返回入口。未达到 targetCount=5 时，不得仅因“当前页偏慢/候选人偏少”而 run-complete；summary 必须从本轮 events.jsonl 实算。';
 }
 
 function buildChatWriteContractPrompt() {
@@ -1490,12 +1654,46 @@ function buildDownloadWriteContractPrompt() {
 }
 
 function buildAttachmentHandoffPrompt(runId) {
-  return `附件 handoff 模板：若当前线程已确认存在附件或预览，调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "${runId}"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-${runId}.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。`;
+  return `附件 handoff 模板：若当前线程已确认存在附件或预览，必须立即切换到 boss-resume-ingest，这本身不是 run-fail 理由。调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "${runId}"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-${runId}.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。若 candidateId 缺失，先用 list-candidates --job-key "$JOB_KEY" 解析身份，再进入 ingest；只有 ingest handoff 自身出现不可恢复证据时，才允许 run-fail。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。`;
+}
+
+function buildSuggestedCommands(mode = '') {
+  if (mode === 'source') {
+    return [
+      'recommend-state',
+      'recommend-detail',
+      'recommend-next-candidate'
+    ];
+  }
+
+  if (mode === 'chat' || mode === 'followup') {
+    return [
+      'chatlist',
+      'chat-open-thread',
+      'chat-thread-state',
+      'chatmsg',
+      'attachment-state',
+      'resume-preview-meta'
+    ];
+  }
+
+  if (mode === 'download') {
+    return [
+      'chatlist',
+      'chat-open-thread',
+      'chat-thread-state',
+      'attachment-state',
+      'resume-panel'
+    ];
+  }
+
+  return [];
 }
 
 function buildDeterministicContextPrompt({
   mode,
   bindResult,
+  contextSnapshot,
   jobDetailResult,
   commandResult,
   threadResult,
@@ -1509,6 +1707,23 @@ function buildDeterministicContextPrompt({
   if (contextFilePath) {
     lines.push(`Deterministic context file: ${contextFilePath}`);
     lines.push('Read this context file before deciding whether the current UI matches the expected queue, job, or thread.');
+  }
+
+  if (contextSnapshot) {
+    lines.push(
+      `Context snapshot: shell=${contextSnapshot.page?.shell || 'unknown'} title=${contextSnapshot.page?.title || ''} url=${contextSnapshot.page?.url || ''}`
+    );
+    lines.push(
+      `Context snapshot facts: jobId=${contextSnapshot.job?.encryptJobId || ''} match=${String(contextSnapshot.job?.matchesRunJob)} candidate=${contextSnapshot.candidate?.name || ''} geekId=${contextSnapshot.candidate?.bossEncryptGeekId || ''} attachmentPresent=${String(contextSnapshot.attachment?.present)}`
+    );
+  }
+
+  const suggestedCommands = buildSuggestedCommands(mode);
+  if (suggestedCommands.length > 0) {
+    lines.push('Suggested command order:');
+    for (const [index, command] of suggestedCommands.entries()) {
+      lines.push(`${index + 1}. ${command}`);
+    }
   }
 
   if (mode === 'source') {

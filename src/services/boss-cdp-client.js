@@ -21,7 +21,7 @@ class BossCdpClient {
     return Array.isArray(targets) ? targets : [];
   }
 
-  async resolveBossTarget({ targetId = null, urlPrefix = 'https://www.zhipin.com/' } = {}) {
+  async resolveBossTarget({ targetId = null, urlPrefix = 'https://www.zhipin.com/', preferUrl = null } = {}) {
     const targets = await this.listTargets();
 
     if (targetId) {
@@ -34,10 +34,16 @@ class BossCdpClient {
       // targetId is stale (tab closed/refreshed) — fall through to URL-based discovery
     }
 
-    const target = targets
-      .filter((candidate) => isBossPageTarget(candidate, urlPrefix))
-      .sort(compareBossTargets)
-      .at(0);
+    const bossTabs = targets.filter((candidate) => isBossPageTarget(candidate, urlPrefix));
+
+    if (preferUrl) {
+      const preferred = bossTabs.find((t) => t.url && t.url.includes(preferUrl));
+      if (preferred) {
+        return preferred;
+      }
+    }
+
+    const target = bossTabs.sort(compareBossTargets).at(0);
 
     if (!target) {
       throw new Error('boss_target_not_found');

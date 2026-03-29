@@ -210,7 +210,38 @@ class SchedulerService {
       }
 
       if (runStatus !== 'completed') {
-        throw new Error('run_not_terminal_after_nanobot_exit');
+        // Nanobot exited without writing terminal state.
+        // Auto-complete if substantive work was done, otherwise auto-fail.
+        const latestPhaseEvent = typeof this.agentService.getLatestPhaseEvent === 'function'
+          ? await this.agentService.getLatestPhaseEvent(runId)
+          : null;
+        const hasSubstantiveWork = typeof this.agentService.runHasSubstantiveEvents === 'function'
+          ? await this.agentService.runHasSubstantiveEvents(runId)
+          : false;
+
+        await this.agentService.recordRunEvent({
+          runId,
+          eventId: `agent-exit-classified:${runId}`,
+          occurredAt: new Date().toISOString(),
+          eventType: 'agent_exit_classified',
+          stage: 'scheduler',
+          message: 'agent exit classified after non-terminal nanobot exit',
+          payload: {
+            classification: classifyAgentExit(latestPhaseEvent),
+            hasSubstantiveWork,
+            latestPhaseEvent
+          }
+        });
+
+        if (hasSubstantiveWork) {
+          await this.agentService.completeRun({ runId });
+        } else {
+          await this.agentService.failRun({
+            runId,
+            message: 'run_not_terminal_after_nanobot_exit'
+          });
+        }
+        return;
       }
 
       if (schedule) {
@@ -266,6 +297,24 @@ class SchedulerService {
       });
     }
   }
+}
+
+function classifyAgentExit(latestPhaseEvent) {
+  const phase = latestPhaseEvent?.payload?.phase || latestPhaseEvent?.eventType || '';
+
+  if (!phase) {
+    return 'agent_exit_before_bootstrap';
+  }
+
+  if (phase === 'target_bound') {
+    return 'agent_exit_after_target_bound';
+  }
+
+  if (phase === 'context_snapshot_captured' || latestPhaseEvent?.eventType === 'context_snapshot_captured') {
+    return 'agent_exit_after_context_snapshot';
+  }
+
+  return `agent_exit_after_${String(phase)}`;
 }
 
 module.exports = {

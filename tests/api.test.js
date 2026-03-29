@@ -1349,7 +1349,7 @@ test('JobService triggerSync creates sync run and calls nanobot', async () => {
       '运行契约：必须复用调用方提供的 RUN_ID=33；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "33"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
       '固定启动顺序：先读 boss-sourcing SKILL；run-scoped 流程只额外读取 boss-sourcing/references/runtime-contract.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
-      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进可先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"。若推荐详情里的 next/prev 在视觉上存在但快照没有可点击 uid，可使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-pager --run-id "$RUN_ID" --direction next|prev；它会发送真实鼠标事件，不是 DOM click。',
+      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进优先使用确定性 CLI：先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"；进入下一位候选人时优先使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-next-candidate --run-id "$RUN_ID"。仅当必须显式翻上一页或回退时，才使用 recommend-pager --direction next|prev；它会发送真实鼠标事件，不是 DOM click。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
     ].join('\n')
@@ -2130,15 +2130,302 @@ test('AgentService runNanobotForSchedule sends source workflow guardrails in mes
       '运行契约：必须复用调用方提供的 RUN_ID=88；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "88"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
       '固定启动顺序：先读 boss-sourcing SKILL 做路由；source 只继续读 boss-source-greet SKILL、boss-sourcing/references/runtime-contract.md、boss-source-greet/references/browser-states.md。不要再读 chat/followup 的页面 reference，也不要用 find、rg、python、rglob 重新定位这些固定路径。',
-      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进可先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"。若推荐详情里的 next/prev 在视觉上存在但快照没有可点击 uid，可使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-pager --run-id "$RUN_ID" --direction next|prev；它会发送真实鼠标事件，不是 DOM click。',
+      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进优先使用确定性 CLI：先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"；进入下一位候选人时优先使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-next-candidate --run-id "$RUN_ID"。仅当必须显式翻上一页或回退时，才使用 recommend-pager --direction next|prev；它会发送真实鼠标事件，不是 DOM click。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。',
       '岗位恢复规则：如果当前不在推荐牛人壳层，先通过页面可见导航进入推荐牛人；进入推荐牛人后，只允许通过页面可见的岗位切换 UI 切回目标岗位并确认标题回到“健康顾问（B0047007）”。若外层 recommend URL 已是目标岗位，但页面标题或可见岗位名仍指向其他岗位，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。如果 iframe src 暂时还是 jobid=null，但可见岗位条、当前详情和候选人信息都已稳定指向目标岗位，这只是弱负信号，不能单独作为 run-fail 依据；只有当 jobid=null 与可见岗位漂移/缺失同时成立时，才算未恢复成功。禁止使用 Page.navigate、evaluate_script(...click())、或注入脚本直接修改 iframe.src、history、location、class 等页面状态来强行纠偏。如果当前落在错误岗位的候选人详情里，先安全退出详情：只能使用页面上明确可见的返回/关闭控件，或在 fresh snapshot 证明详情仍开着时尝试一次 Escape；点击“不合适/提交”不等于详情已关闭。只有确认工作经历/教育经历等详情区块已经消失，且推荐列表重新可见后，才允许切换岗位或进入下一个候选人。恢复过程中禁止点击收藏、分享、共享、举报等无关工具图标，也不要把无文案小图标猜成返回入口。',
       'run-fail 规则：run-fail 一律先写 tmp/run-fail.json 再执行 --file；禁止尝试内联 --message。只有在当前页面证据连续证明目标岗位无法恢复后，才允许终止 source run。',
       '执行目标：单次 source run 默认目标是成功打招呼 5 人。已沟通/继续沟通的不计入新增完成数；不要因为刚完成 1 人或当前一屏候选人偏弱就提前 run-complete，而是继续滚动、翻页、换批次筛选，直到本轮新增 greet_sent 达到 5 人，或已被当前页面证据证明暂无更多合格候选人，或出现明确阻塞。若最终少于 5 人就结束，run-complete summary 必须显式写出 targetCount=5、achievedCount 和不足原因。',
-      '执行寻源打招呼时，只允许真实可见 UI 交互推进页面；禁止 Page.navigate、mcp_chrome-devtools_navigate_page 的 url/reload、evaluate_script(...click())、以及脚本改 iframe/location/history/class。只有看到工作经历/教育经历等详情区块，才算进入候选人详情；直渲染的 `.resume-detail-wrap` 加详情区块也算 detail open，不要求一定有嵌套 iframe。只有确认详情区块消失且推荐列表重新可见，才算回到列表态；点击“不合适/提交”不等于详情已关闭。greet_sent 后或列表/详情发生重排后，旧 uid 一律作废，下一次点击前必须 fresh snapshot。低于 quota 时，若页面出现相似牛人/推荐区，不得直接把它当 blocker；必须先用 recommend-state 重新确认 detailOpen 与 nextVisible。翻页后优先用 recommend-detail 轻量确认新候选人的姓名/履历摘要，不要默认依赖 verbose snapshot 或 reload。只要详情里的 next 仍可见，下一位候选人的唯一主路径就是先点 next；若快照没有可点击 uid，就立刻用 recommend-pager。若新候选人的详情未被重新证明，禁止退化成列表按钮直接打招呼。错误岗位恢复时，禁止把收藏、分享、共享、举报等无关图标当作返回入口。未达到 targetCount=5 时，不得仅因“当前页偏慢/候选人偏少”而 run-complete；summary 必须从本轮 events.jsonl 实算。'
+      '执行寻源打招呼时，只允许真实可见 UI 交互推进页面；禁止 Page.navigate、mcp_chrome-devtools_navigate_page 的 url/reload、evaluate_script(...click())、以及脚本改 iframe/location/history/class。只有看到工作经历/教育经历等详情区块，才算进入候选人详情；直渲染的 `.resume-detail-wrap` 加详情区块也算 detail open，不要求一定有嵌套 iframe。只有确认详情区块消失且推荐列表重新可见，才算回到列表态；点击“不合适/提交”不等于详情已关闭。greet_sent 后或列表/详情发生重排后，旧 uid 一律作废，下一次点击前必须 fresh snapshot。低于 quota 时，若页面出现相似牛人/推荐区，不得直接把它当 blocker；必须先用 recommend-state 重新确认 detailOpen 与 nextVisible。翻到下一位候选人时优先用 recommend-next-candidate，不要默认依赖 verbose snapshot 或 reload；翻页后再用 recommend-detail 轻量确认新候选人的姓名/履历摘要。若新候选人的详情未被重新证明，禁止退化成列表按钮直接打招呼。错误岗位恢复时，禁止把收藏、分享、共享、举报等无关图标当作返回入口。未达到 targetCount=5 时，不得仅因“当前页偏慢/候选人偏少”而 run-complete；summary 必须从本轮 events.jsonl 实算。'
     ].join('\n')
   );
+});
+
+test('AgentService runNanobotForSchedule injects context snapshot into prompt when boss cli snapshot is available', async () => {
+  const { AgentService } = require('../src/services/agent-service');
+  let capturedMessage = null;
+  const recordedEvents = [];
+  const savedContexts = [];
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql) {
+        if (sql.includes('from jobs') && sql.includes('custom_requirement')) {
+          return {
+            rows: [{
+              custom_requirement: null,
+              job_name: '健康顾问（B0047007）',
+              boss_encrypt_job_id: 'enc-job-1'
+            }],
+            rowCount: 1
+          };
+        }
+
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    },
+    bossCliRunner: {
+      async bindTarget() {
+        return {
+          session: {
+            targetId: 'boss-1',
+            tabUrl: 'https://www.zhipin.com/web/chat/recommend?jobid=enc-job-1'
+          }
+        };
+      },
+      async getContextSnapshot() {
+        return {
+          ok: true,
+          page: {
+            shell: 'recommend',
+            url: 'https://www.zhipin.com/web/chat/recommend?jobid=enc-job-1',
+            title: '推荐牛人'
+          },
+          job: {
+            encryptJobId: 'enc-job-1',
+            jobName: '健康顾问（B0047007）',
+            matchesRunJob: true
+          },
+          candidate: {
+            bossEncryptGeekId: 'geek-1',
+            name: '王庭',
+            inDetail: true
+          },
+          thread: {
+            encryptUid: '',
+            isUnread: false
+          },
+          attachment: {
+            present: false,
+            buttonEnabled: false
+          }
+        };
+      },
+      async listRecommendations() {
+        return { candidates: [] };
+      },
+      async getJobDetail() {
+        return { job: null };
+      }
+    },
+    bossContextStore: {
+      async saveContext(runId, context) {
+        savedContexts.push({ runId, context });
+        return {
+          filePath: `/tmp/boss-context-${runId}.json`,
+          context
+        };
+      }
+    },
+    nanobotRunner: {
+      async run({ message }) {
+        capturedMessage = message;
+        return { ok: true, stdout: 'done' };
+      }
+    }
+  });
+
+  agentService.recordRunEvent = async (payload) => {
+    recordedEvents.push(payload);
+    return { ok: true };
+  };
+
+  await agentService.runNanobotForSchedule({
+    runId: 188,
+    jobKey: '健康顾问_B0047007',
+    mode: 'source'
+  });
+
+  assert.match(capturedMessage, /Context snapshot:/);
+  assert.match(capturedMessage, /shell=recommend/);
+  assert.match(capturedMessage, /candidate=王庭/);
+  assert.equal(savedContexts.length, 1);
+  assert.equal(savedContexts[0].context.pageState, 'recommend');
+  assert.equal(recordedEvents.some((event) => event.eventType === 'context_snapshot_captured'), true);
+});
+
+test('AgentService runNanobotForSchedule writes suggested command sequence into deterministic context', async () => {
+  const { AgentService } = require('../src/services/agent-service');
+  const savedContexts = [];
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql) {
+        if (sql.includes('from jobs') && sql.includes('custom_requirement')) {
+          return {
+            rows: [{
+              custom_requirement: null,
+              job_name: '健康顾问（B0047007）',
+              boss_encrypt_job_id: 'enc-job-1'
+            }],
+            rowCount: 1
+          };
+        }
+
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    },
+    bossCliRunner: {
+      async bindTarget() {
+        return {
+          session: {
+            targetId: 'boss-1',
+            tabUrl: 'https://www.zhipin.com/web/chat/index'
+          }
+        };
+      },
+      async getContextSnapshot() {
+        return {
+          ok: true,
+          page: {
+            shell: 'chat',
+            url: 'https://www.zhipin.com/web/chat/index',
+            title: '沟通'
+          },
+          job: {
+            encryptJobId: 'enc-job-1',
+            jobName: '健康顾问（B0047007）',
+            matchesRunJob: true
+          },
+          candidate: {
+            bossEncryptGeekId: 'geek-1',
+            name: '王庭',
+            inDetail: false
+          },
+          thread: {
+            encryptUid: 'enc-uid-1',
+            isUnread: true
+          },
+          attachment: {
+            present: true,
+            buttonEnabled: true
+          }
+        };
+      }
+    },
+    bossContextStore: {
+      async saveContext(runId, context) {
+        savedContexts.push({ runId, context });
+        return {
+          filePath: `/tmp/boss-context-${runId}.json`,
+          context
+        };
+      }
+    },
+    nanobotRunner: {
+      async run() {
+        return { ok: true, stdout: 'done' };
+      }
+    }
+  });
+
+  agentService.recordRunEvent = async () => ({ ok: true });
+
+  await agentService.runNanobotForSchedule({
+    runId: 201,
+    jobKey: '健康顾问_B0047007',
+    mode: 'followup'
+  });
+
+  assert.equal(savedContexts.length, 1);
+  assert.deepEqual(savedContexts[0].context.suggestedCommands, [
+    'chatlist',
+    'chat-open-thread',
+    'chat-thread-state',
+    'chatmsg',
+    'attachment-state',
+    'resume-preview-meta'
+  ]);
+});
+
+test('AgentService runNanobotForSchedule expands suggested commands into deterministic prompt guidance', async () => {
+  const { AgentService } = require('../src/services/agent-service');
+  let capturedMessage = null;
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql) {
+        if (sql.includes('from jobs') && sql.includes('custom_requirement')) {
+          return {
+            rows: [{
+              custom_requirement: null,
+              job_name: '健康顾问（B0047007）',
+              boss_encrypt_job_id: 'enc-job-1'
+            }],
+            rowCount: 1
+          };
+        }
+
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    },
+    bossCliRunner: {
+      async bindTarget() {
+        return {
+          session: {
+            targetId: 'boss-1',
+            tabUrl: 'https://www.zhipin.com/web/chat/index'
+          }
+        };
+      },
+      async getContextSnapshot() {
+        return {
+          ok: true,
+          page: {
+            shell: 'chat',
+            url: 'https://www.zhipin.com/web/chat/index',
+            title: '沟通'
+          },
+          job: {
+            encryptJobId: 'enc-job-1',
+            jobName: '健康顾问（B0047007）',
+            matchesRunJob: true
+          },
+          candidate: {
+            bossEncryptGeekId: 'geek-1',
+            name: '王庭',
+            inDetail: false
+          },
+          thread: {
+            encryptUid: 'enc-uid-1',
+            isUnread: true
+          },
+          attachment: {
+            present: true,
+            buttonEnabled: true
+          }
+        };
+      }
+    },
+    bossContextStore: {
+      async saveContext(runId, context) {
+        return {
+          filePath: `/tmp/boss-context-${runId}.json`,
+          context
+        };
+      }
+    },
+    nanobotRunner: {
+      async run({ message }) {
+        capturedMessage = message;
+        return { ok: true, stdout: 'done' };
+      }
+    }
+  });
+
+  agentService.recordRunEvent = async () => ({ ok: true });
+
+  await agentService.runNanobotForSchedule({
+    runId: 202,
+    jobKey: '健康顾问_B0047007',
+    mode: 'followup'
+  });
+
+  assert.match(capturedMessage, /Suggested command order:/);
+  assert.match(capturedMessage, /1\. chatlist/);
+  assert.match(capturedMessage, /2\. chat-open-thread/);
+  assert.match(capturedMessage, /5\. attachment-state/);
+  assert.match(capturedMessage, /6\. resume-preview-meta/);
 });
 
 test('AgentService runNanobotForSchedule includes run id for followup mode', async () => {
@@ -2186,8 +2473,9 @@ test('AgentService runNanobotForSchedule includes run id for followup mode', asy
       '运行契约：必须复用调用方提供的 RUN_ID=91；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "91"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
       '固定启动顺序：先读 boss-sourcing SKILL 做路由；chat/followup/download 只继续读 boss-chat-followup SKILL、boss-sourcing/references/runtime-contract.md、boss-chat-followup/references/browser-states.md。不要再读 source 的页面 reference，也不要用 find、rg、python、rglob 重新定位这些固定路径。',
-      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进可先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"。若推荐详情里的 next/prev 在视觉上存在但快照没有可点击 uid，可使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-pager --run-id "$RUN_ID" --direction next|prev；它会发送真实鼠标事件，不是 DOM click。',
-      '附件 handoff 模板：若当前线程已确认存在附件或预览，调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "91"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-91.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。',
+      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。聊天模式只允许使用 chat 相关 CLI：必要时用 node "$PROJECT_ROOT/scripts/boss-cli.js" chatlist --run-id "$RUN_ID" 读取当前职位聊天列表，用 chat-open-thread --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 打开指定线程，用 chat-thread-state --run-id "$RUN_ID" 验证当前线程状态，用 chatmsg --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 读取当前线程消息，用 attachment-state --run-id "$RUN_ID" 或 resume-panel --run-id "$RUN_ID" 读取附件按钮/附件卡片状态；需要恢复附件预览参数时，使用 resume-preview-meta --run-id "$RUN_ID"；禁止调用 recommend-state、recommend-detail、recommend-pager，禁止把推荐页锚点用于沟通线程判断。',
+      '执行目标：当前 run 必须持续处理 JOB_KEY 对应职位下的未读线程，直到当前未读队列被清空，或页面证据证明出现不可恢复阻塞。处理完单个线程后的回复、求简历、附件 handoff 都不构成完成条件；只要未读里还有下一条，就必须回到未读列表继续，不得打一条就 run-complete。',
+      '附件 handoff 模板：若当前线程已确认存在附件或预览，必须立即切换到 boss-resume-ingest，这本身不是 run-fail 理由。调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "91"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-91.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。若 candidateId 缺失，先用 list-candidates --job-key "$JOB_KEY" 解析身份，再进入 ingest；只有 ingest handoff 自身出现不可恢复证据时，才允许 run-fail。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
     ].join('\n')
@@ -2239,8 +2527,9 @@ test('AgentService runNanobotForSchedule maps chat mode to chat workflow message
       '运行契约：必须复用调用方提供的 RUN_ID=92；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "92"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
       '固定启动顺序：先读 boss-sourcing SKILL 做路由；chat/followup/download 只继续读 boss-chat-followup SKILL、boss-sourcing/references/runtime-contract.md、boss-chat-followup/references/browser-states.md。不要再读 source 的页面 reference，也不要用 find、rg、python、rglob 重新定位这些固定路径。',
-      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进可先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"。若推荐详情里的 next/prev 在视觉上存在但快照没有可点击 uid，可使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-pager --run-id "$RUN_ID" --direction next|prev；它会发送真实鼠标事件，不是 DOM click。',
-      '附件 handoff 模板：若当前线程已确认存在附件或预览，调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "92"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-92.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。',
+      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。聊天模式只允许使用 chat 相关 CLI：必要时用 node "$PROJECT_ROOT/scripts/boss-cli.js" chatlist --run-id "$RUN_ID" 读取当前职位聊天列表，用 chat-open-thread --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 打开指定线程，用 chat-thread-state --run-id "$RUN_ID" 验证当前线程状态，用 chatmsg --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 读取当前线程消息，用 attachment-state --run-id "$RUN_ID" 或 resume-panel --run-id "$RUN_ID" 读取附件按钮/附件卡片状态；需要恢复附件预览参数时，使用 resume-preview-meta --run-id "$RUN_ID"；禁止调用 recommend-state、recommend-detail、recommend-pager，禁止把推荐页锚点用于沟通线程判断。',
+      '执行目标：当前 run 必须持续处理 JOB_KEY 对应职位下的未读线程，直到当前未读队列被清空，或页面证据证明出现不可恢复阻塞。处理完单个线程后的回复、求简历、附件 handoff 都不构成完成条件；只要未读里还有下一条，就必须回到未读列表继续，不得打一条就 run-complete。',
+      '附件 handoff 模板：若当前线程已确认存在附件或预览，必须立即切换到 boss-resume-ingest，这本身不是 run-fail 理由。调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "92"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-92.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。若 candidateId 缺失，先用 list-candidates --job-key "$JOB_KEY" 解析身份，再进入 ingest；只有 ingest handoff 自身出现不可恢复证据时，才允许 run-fail。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
     ].join('\n')
@@ -2285,8 +2574,8 @@ test('AgentService runNanobotForSchedule maps download mode to download workflow
       '运行契约：必须复用调用方提供的 RUN_ID=93；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "93"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
       '固定启动顺序：先读 boss-sourcing SKILL 做路由；chat/followup/download 只继续读 boss-chat-followup SKILL、boss-sourcing/references/runtime-contract.md、boss-chat-followup/references/browser-states.md。不要再读 source 的页面 reference，也不要用 find、rg、python、rglob 重新定位这些固定路径。',
-      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进可先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"。若推荐详情里的 next/prev 在视觉上存在但快照没有可点击 uid，可使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-pager --run-id "$RUN_ID" --direction next|prev；它会发送真实鼠标事件，不是 DOM click。',
-      '附件 handoff 模板：若当前线程已确认存在附件或预览，调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "93"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-93.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。',
+      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。下载/补扫模式只允许使用 chat 相关 CLI：必要时用 node "$PROJECT_ROOT/scripts/boss-cli.js" chatlist --run-id "$RUN_ID" 读取当前职位聊天列表，用 chat-open-thread --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 打开指定线程，用 chat-thread-state --run-id "$RUN_ID" 验证当前线程状态，用 chatmsg --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 读取当前线程消息，用 attachment-state --run-id "$RUN_ID" 或 resume-panel --run-id "$RUN_ID" 读取附件按钮/附件卡片状态；需要恢复附件预览参数时，使用 resume-preview-meta --run-id "$RUN_ID"；禁止调用 recommend-state、recommend-detail、recommend-pager，禁止把推荐页锚点用于沟通线程判断。',
+      '附件 handoff 模板：若当前线程已确认存在附件或预览，必须立即切换到 boss-resume-ingest，这本身不是 run-fail 理由。调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "93"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-93.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。若 candidateId 缺失，先用 list-candidates --job-key "$JOB_KEY" 解析身份，再进入 ingest；只有 ingest handoff 自身出现不可恢复证据时，才允许 run-fail。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
     ].join('\n')
@@ -2330,7 +2619,7 @@ test('AgentService runNanobotForSchedule maps status mode to status workflow mes
       '运行契约：必须复用调用方提供的 RUN_ID=94；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "94"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
       '固定启动顺序：先读 boss-sourcing SKILL；run-scoped 流程只额外读取 boss-sourcing/references/runtime-contract.md。引用路径已固定时，禁止再用 find、rg、python、rglob 或其它目录扫描去重新定位这些 reference。',
-      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进可先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"。若推荐详情里的 next/prev 在视觉上存在但快照没有可点击 uid，可使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-pager --run-id "$RUN_ID" --direction next|prev；它会发送真实鼠标事件，不是 DOM click。',
+      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进优先使用确定性 CLI：先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"；进入下一位候选人时优先使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-next-candidate --run-id "$RUN_ID"。仅当必须显式翻上一页或回退时，才使用 recommend-pager --direction next|prev；它会发送真实鼠标事件，不是 DOM click。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
     ].join('\n')
@@ -2384,13 +2673,13 @@ test('AgentService runNanobotForSchedule includes custom requirement in source m
       '运行契约：必须复用调用方提供的 RUN_ID=99；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "99"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
       '固定启动顺序：先读 boss-sourcing SKILL 做路由；source 只继续读 boss-source-greet SKILL、boss-sourcing/references/runtime-contract.md、boss-source-greet/references/browser-states.md。不要再读 chat/followup 的页面 reference，也不要用 find、rg、python、rglob 重新定位这些固定路径。',
-      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进可先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"。若推荐详情里的 next/prev 在视觉上存在但快照没有可点击 uid，可使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-pager --run-id "$RUN_ID" --direction next|prev；它会发送真实鼠标事件，不是 DOM click。',
+      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。推荐详情推进优先使用确定性 CLI：先用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-state --run-id "$RUN_ID" 读取 detailOpen/nextVisible/similarCandidatesVisible；若需要轻量读取当前详情候选人的姓名/履历摘要，使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-detail --run-id "$RUN_ID"；进入下一位候选人时优先使用 node "$PROJECT_ROOT/scripts/boss-cli.js" recommend-next-candidate --run-id "$RUN_ID"。仅当必须显式翻上一页或回退时，才使用 recommend-pager --direction next|prev；它会发送真实鼠标事件，不是 DOM click。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。',
       '岗位恢复规则：如果当前不在推荐牛人壳层，先通过页面可见导航进入推荐牛人；进入推荐牛人后，只允许通过页面可见的岗位切换 UI 切回目标岗位并确认标题回到“健康顾问（B0047007）”。若外层 recommend URL 已是目标岗位，但页面标题或可见岗位名仍指向其他岗位，只能视为未恢复成功，必须继续 wait_for / snapshot / job-list recover，再做一次最终复核。如果 iframe src 暂时还是 jobid=null，但可见岗位条、当前详情和候选人信息都已稳定指向目标岗位，这只是弱负信号，不能单独作为 run-fail 依据；只有当 jobid=null 与可见岗位漂移/缺失同时成立时，才算未恢复成功。禁止使用 Page.navigate、evaluate_script(...click())、或注入脚本直接修改 iframe.src、history、location、class 等页面状态来强行纠偏。如果当前落在错误岗位的候选人详情里，先安全退出详情：只能使用页面上明确可见的返回/关闭控件，或在 fresh snapshot 证明详情仍开着时尝试一次 Escape；点击“不合适/提交”不等于详情已关闭。只有确认工作经历/教育经历等详情区块已经消失，且推荐列表重新可见后，才允许切换岗位或进入下一个候选人。恢复过程中禁止点击收藏、分享、共享、举报等无关工具图标，也不要把无文案小图标猜成返回入口。',
       'run-fail 规则：run-fail 一律先写 tmp/run-fail.json 再执行 --file；禁止尝试内联 --message。只有在当前页面证据连续证明目标岗位无法恢复后，才允许终止 source run。',
       '执行目标：单次 source run 默认目标是成功打招呼 5 人。已沟通/继续沟通的不计入新增完成数；不要因为刚完成 1 人或当前一屏候选人偏弱就提前 run-complete，而是继续滚动、翻页、换批次筛选，直到本轮新增 greet_sent 达到 5 人，或已被当前页面证据证明暂无更多合格候选人，或出现明确阻塞。若最终少于 5 人就结束，run-complete summary 必须显式写出 targetCount=5、achievedCount 和不足原因。',
-      '执行寻源打招呼时，只允许真实可见 UI 交互推进页面；禁止 Page.navigate、mcp_chrome-devtools_navigate_page 的 url/reload、evaluate_script(...click())、以及脚本改 iframe/location/history/class。只有看到工作经历/教育经历等详情区块，才算进入候选人详情；直渲染的 `.resume-detail-wrap` 加详情区块也算 detail open，不要求一定有嵌套 iframe。只有确认详情区块消失且推荐列表重新可见，才算回到列表态；点击“不合适/提交”不等于详情已关闭。greet_sent 后或列表/详情发生重排后，旧 uid 一律作废，下一次点击前必须 fresh snapshot。低于 quota 时，若页面出现相似牛人/推荐区，不得直接把它当 blocker；必须先用 recommend-state 重新确认 detailOpen 与 nextVisible。翻页后优先用 recommend-detail 轻量确认新候选人的姓名/履历摘要，不要默认依赖 verbose snapshot 或 reload。只要详情里的 next 仍可见，下一位候选人的唯一主路径就是先点 next；若快照没有可点击 uid，就立刻用 recommend-pager。若新候选人的详情未被重新证明，禁止退化成列表按钮直接打招呼。错误岗位恢复时，禁止把收藏、分享、共享、举报等无关图标当作返回入口。未达到 targetCount=5 时，不得仅因“当前页偏慢/候选人偏少”而 run-complete；summary 必须从本轮 events.jsonl 实算。'
+      '执行寻源打招呼时，只允许真实可见 UI 交互推进页面；禁止 Page.navigate、mcp_chrome-devtools_navigate_page 的 url/reload、evaluate_script(...click())、以及脚本改 iframe/location/history/class。只有看到工作经历/教育经历等详情区块，才算进入候选人详情；直渲染的 `.resume-detail-wrap` 加详情区块也算 detail open，不要求一定有嵌套 iframe。只有确认详情区块消失且推荐列表重新可见，才算回到列表态；点击“不合适/提交”不等于详情已关闭。greet_sent 后或列表/详情发生重排后，旧 uid 一律作废，下一次点击前必须 fresh snapshot。低于 quota 时，若页面出现相似牛人/推荐区，不得直接把它当 blocker；必须先用 recommend-state 重新确认 detailOpen 与 nextVisible。翻到下一位候选人时优先用 recommend-next-candidate，不要默认依赖 verbose snapshot 或 reload；翻页后再用 recommend-detail 轻量确认新候选人的姓名/履历摘要。若新候选人的详情未被重新证明，禁止退化成列表按钮直接打招呼。错误岗位恢复时，禁止把收藏、分享、共享、举报等无关图标当作返回入口。未达到 targetCount=5 时，不得仅因“当前页偏慢/候选人偏少”而 run-complete；summary 必须从本轮 events.jsonl 实算。'
     ].join('\n')
   );
 });
@@ -2450,38 +2739,33 @@ test('AgentService runNanobotForSchedule prepends deterministic source context w
           }
         };
       },
-      async getJobDetail(payload) {
-        bossCliCalls.push({ command: 'getJobDetail', payload });
+      async getContextSnapshot(payload) {
+        bossCliCalls.push({ command: 'getContextSnapshot', payload });
         return {
           ok: true,
+          page: {
+            shell: 'recommend',
+            url: 'https://www.zhipin.com/web/chat/recommend?jobid=target-job-encrypt-id',
+            title: '推荐牛人'
+          },
           job: {
-            name: '健康顾问',
-            salary: '8-10K',
-            city: '重庆',
-            experience: '3-5年',
-            degree: '本科',
-            description: '负责客户跟进'
+            encryptJobId: 'target-job-encrypt-id',
+            jobName: '健康顾问',
+            matchesRunJob: true
+          },
+          candidate: {
+            bossEncryptGeekId: 'geek-1',
+            name: '张三',
+            inDetail: true
+          },
+          thread: {
+            encryptUid: '',
+            isUnread: false
+          },
+          attachment: {
+            present: false,
+            buttonEnabled: false
           }
-        };
-      },
-      async listRecommendations(payload) {
-        bossCliCalls.push({ command: 'listRecommendations', payload });
-        return {
-          ok: true,
-          candidates: [
-            {
-              name: '张三',
-              jobName: '健康顾问',
-              labels: '活跃',
-              encryptUid: 'enc-uid-1'
-            },
-            {
-              name: '李四',
-              jobName: '健康顾问',
-              labels: '继续沟通',
-              encryptUid: 'enc-uid-2'
-            }
-          ]
         };
       }
     }
@@ -2499,16 +2783,13 @@ test('AgentService runNanobotForSchedule prepends deterministic source context w
     mode: 'source'
   });
 
-  assert.equal(bossCliCalls.length, 3);
+  assert.equal(bossCliCalls.length, 2);
   assert.equal(bossCliCalls[0].command, 'bindTarget');
-  assert.equal(bossCliCalls[1].command, 'getJobDetail');
-  assert.equal(bossCliCalls[2].command, 'listRecommendations');
+  assert.equal(bossCliCalls[1].command, 'getContextSnapshot');
   assert.equal(contextWrites.length, 1);
   assert.match(capturedMessage, /Deterministic browser context: current BOSS tab already bound/);
   assert.match(capturedMessage, /Deterministic context file: \/tmp\/boss-context-108\.json/);
-  assert.match(capturedMessage, /Pre-read job detail:/);
-  assert.match(capturedMessage, /健康顾问 \| 8-10K \| 重庆 \| 3-5年 \| 本科/);
-  assert.match(capturedMessage, /张三/);
+  assert.match(capturedMessage, /Context snapshot:/);
   assert.equal(
     recordedEvents.some((event) => event.eventType === 'boss_cli_command_succeeded'),
     true
@@ -2568,7 +2849,7 @@ test('AgentService runNanobotForSchedule falls back to nanobot guardrails when b
 
   assert.doesNotMatch(capturedMessage, /Deterministic browser context:/);
   assert.equal(
-    recordedEvents.some((event) => event.eventType === 'boss_cli_fallback_to_nanobot'),
+    recordedEvents.some((event) => event.eventType === 'boss_cli_command_failed'),
     true
   );
 });
@@ -2627,28 +2908,33 @@ test('AgentService runNanobotForSchedule prepends deterministic chat context whe
           }
         };
       },
-      async listChats(payload) {
-        bossCliCalls.push({ command: 'listChats', payload });
+      async getContextSnapshot(payload) {
+        bossCliCalls.push({ command: 'getContextSnapshot', payload });
         return {
           ok: true,
-          chats: [
-            {
-              name: '王五',
-              jobName: '健康顾问',
-              lastMessage: '您好，可以发我简历吗',
-              encryptUid: 'enc-uid-3'
-            }
-          ]
-        };
-      },
-      async listMessages(payload) {
-        bossCliCalls.push({ command: 'listMessages', payload });
-        return {
-          ok: true,
-          messages: [
-            { from: '王五', type: 'text', text: '您好，可以发我简历吗', time: '10:00' },
-            { from: 'me', type: 'text', text: '可以，稍后发您', time: '10:01' }
-          ]
+          page: {
+            shell: 'chat',
+            url: 'https://www.zhipin.com/web/chat/index',
+            title: '沟通'
+          },
+          job: {
+            encryptJobId: 'target-job-encrypt-id',
+            jobName: '健康顾问',
+            matchesRunJob: true
+          },
+          candidate: {
+            bossEncryptGeekId: 'geek-chat-1',
+            name: '王五',
+            inDetail: false
+          },
+          thread: {
+            encryptUid: 'enc-uid-3',
+            isUnread: true
+          },
+          attachment: {
+            present: false,
+            buttonEnabled: false
+          }
         };
       }
     }
@@ -2660,16 +2946,93 @@ test('AgentService runNanobotForSchedule prepends deterministic chat context whe
     mode: 'chat'
   });
 
-  assert.equal(bossCliCalls.length, 3);
+  assert.equal(bossCliCalls.length, 2);
   assert.equal(bossCliCalls[0].command, 'bindTarget');
-  assert.equal(bossCliCalls[1].command, 'listChats');
-  assert.equal(bossCliCalls[2].command, 'listMessages');
+  assert.equal(bossCliCalls[1].command, 'getContextSnapshot');
   assert.equal(contextWrites.length, 1);
   assert.match(capturedMessage, /Deterministic context file: \/tmp\/boss-context-110\.json/);
-  assert.match(capturedMessage, /Pre-read chat queue:/);
-  assert.match(capturedMessage, /王五 \| 健康顾问 \| 您好，可以发我简历吗/);
-  assert.match(capturedMessage, /Pre-read latest thread:/);
-  assert.match(capturedMessage, /\[10:00\] 王五: 您好，可以发我简历吗/);
+  assert.match(capturedMessage, /Context snapshot:/);
+});
+
+test('AgentService runNanobotForSchedule seeds run-scoped boss session metadata for chat helpers', async () => {
+  const { AgentService } = require('../src/services/agent-service');
+  const bindPayloads = [];
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql) {
+        if (sql.includes('from jobs') && sql.includes('custom_requirement')) {
+          return {
+            rows: [{
+              custom_requirement: null,
+              job_name: '面点师傅（B0038011）',
+              boss_encrypt_job_id: 'enc-job-chat-1'
+            }],
+            rowCount: 1
+          };
+        }
+
+        if (sql.includes('insert into sourcing_run_events')) {
+          return { rows: [], rowCount: 1 };
+        }
+
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    },
+    nanobotRunner: {
+      async run() {
+        return { ok: true, stdout: 'done' };
+      }
+    },
+    bossCliRunner: {
+      async bindTarget(payload) {
+        bindPayloads.push(payload);
+        return {
+          ok: true,
+          session: {
+            runId: String(payload.runId),
+            targetId: 'boss-1',
+            tabUrl: 'https://www.zhipin.com/web/chat/index',
+            mode: payload.mode,
+            jobKey: payload.jobKey,
+            jobId: payload.jobId
+          }
+        };
+      },
+      async getContextSnapshot() {
+        return {
+          ok: true,
+          page: {
+            shell: 'chat',
+            url: 'https://www.zhipin.com/web/chat/index',
+            title: '沟通'
+          },
+          job: {
+            encryptJobId: 'enc-job-chat-1',
+            jobName: '面点师傅（B0038011）',
+            matchesRunJob: true
+          },
+          candidate: {},
+          thread: {},
+          attachment: {}
+        };
+      }
+    }
+  });
+
+  await agentService.runNanobotForSchedule({
+    runId: 229,
+    jobKey: '面点师傅（B0038011）_8eca6cad',
+    mode: 'followup'
+  });
+
+  assert.equal(bindPayloads.length, 1);
+  assert.deepEqual(bindPayloads[0], {
+    runId: 229,
+    mode: 'followup',
+    jobKey: '面点师傅（B0038011）_8eca6cad',
+    jobId: 'enc-job-chat-1'
+  });
 });
 
 test('AgentService runNanobotForSchedule prepends deterministic download context when boss cli is enabled', async () => {
@@ -2726,28 +3089,33 @@ test('AgentService runNanobotForSchedule prepends deterministic download context
           }
         };
       },
-      async listChats(payload) {
-        bossCliCalls.push({ command: 'listChats', payload });
+      async getContextSnapshot(payload) {
+        bossCliCalls.push({ command: 'getContextSnapshot', payload });
         return {
           ok: true,
-          chats: [
-            {
-              name: '赵六',
-              jobName: '健康顾问',
-              lastMessage: '我这边已上传附件简历',
-              encryptUid: 'enc-uid-4'
-            }
-          ]
-        };
-      },
-      async listMessages(payload) {
-        bossCliCalls.push({ command: 'listMessages', payload });
-        return {
-          ok: true,
-          messages: [
-            { from: '赵六', type: 'text', text: '我这边已上传附件简历', time: '11:00' },
-            { from: 'system', type: 'attachment', text: '附件简历', time: '11:01' }
-          ]
+          page: {
+            shell: 'chat',
+            url: 'https://www.zhipin.com/web/chat/index',
+            title: '沟通'
+          },
+          job: {
+            encryptJobId: 'target-job-encrypt-id',
+            jobName: '健康顾问',
+            matchesRunJob: true
+          },
+          candidate: {
+            bossEncryptGeekId: 'geek-download-1',
+            name: '赵六',
+            inDetail: false
+          },
+          thread: {
+            encryptUid: 'enc-uid-4',
+            isUnread: false
+          },
+          attachment: {
+            present: true,
+            buttonEnabled: true
+          }
         };
       }
     }
@@ -2759,16 +3127,12 @@ test('AgentService runNanobotForSchedule prepends deterministic download context
     mode: 'download'
   });
 
-  assert.equal(bossCliCalls.length, 3);
+  assert.equal(bossCliCalls.length, 2);
   assert.equal(bossCliCalls[0].command, 'bindTarget');
-  assert.equal(bossCliCalls[1].command, 'listChats');
-  assert.equal(bossCliCalls[2].command, 'listMessages');
+  assert.equal(bossCliCalls[1].command, 'getContextSnapshot');
   assert.equal(contextWrites.length, 1);
   assert.match(capturedMessage, /Deterministic context file: \/tmp\/boss-context-111\.json/);
-  assert.match(capturedMessage, /Pre-read chat queue:/);
-  assert.match(capturedMessage, /赵六 \| 健康顾问 \| 我这边已上传附件简历/);
-  assert.match(capturedMessage, /Pre-read latest thread:/);
-  assert.match(capturedMessage, /\[11:01\] system: 附件简历/);
+  assert.match(capturedMessage, /Context snapshot:/);
 });
 
 test('AgentService recordAction scopes candidate lookup by jobKey when candidateId is absent', async () => {
@@ -2948,6 +3312,59 @@ test('AgentService recordMessage uses explicit candidateId when provided', async
   assert.equal(result.ok, true);
   const insertQuery = queryCalls.find(({ sql }) => sql.includes('insert into candidate_messages'));
   assert.equal(insertQuery.params[0], 88);
+});
+
+test('AgentService recordMessage generates a fallback bossMessageId when omitted', async () => {
+  const queryCalls = [];
+  const { AgentService } = require('../src/services/agent-service');
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql, params = []) {
+        queryCalls.push({ sql, params });
+
+        if (sql.includes('from job_candidates') && sql.includes('where id = $1')) {
+          return {
+            rows: [{
+              id: 88,
+              resume_state: 'not_requested',
+              last_resume_requested_at: null,
+              resume_request_count: 0
+            }],
+            rowCount: 1
+          };
+        }
+
+        if (sql.includes('insert into candidate_messages')) {
+          return { rows: [{ id: 6 }], rowCount: 1 };
+        }
+
+        if (sql.includes('update job_candidates')) {
+          return { rows: [], rowCount: 1 };
+        }
+
+        if (sql.includes('insert into sourcing_run_events')) {
+          return { rows: [], rowCount: 1 };
+        }
+
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    }
+  });
+
+  await agentService.recordMessage({
+    runId: 12,
+    candidateId: 88,
+    eventId: 'message:auto-id',
+    occurredAt: '2026-03-25T08:05:00.000Z',
+    bossEncryptGeekId: 'geek-1',
+    direction: 'inbound',
+    messageType: 'text',
+    contentText: '我对岗位感兴趣'
+  });
+
+  const insertQuery = queryCalls.find(({ sql }) => sql.includes('insert into candidate_messages'));
+  assert.match(String(insertQuery.params[1]), /^auto:12:inbound:2026-03-25T08:05:00\.000Z/);
 });
 
 test('AgentService recordMessage requires jobKey when candidateId is absent', async () => {
@@ -3467,3 +3884,4 @@ test('AgentService failRun generates terminal event when eventId is omitted', as
   assert.equal(recordedPayload.message, 'browser blocked');
   assert.equal(recordedPayload.eventId, 'run-fail:159:2026-03-27T15:00:00.000Z');
 });
+

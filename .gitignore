@@ -22,3 +22,7 @@ Thumbs.db
 
 .idea/
 .vscode/
+.factory/settings.json
+.gitignore
+.nanobot-boss/workspace/memory/HISTORY.md
+.nanobot-boss/workspace/memory/MEMORY.md
