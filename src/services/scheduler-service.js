@@ -218,6 +218,9 @@ class SchedulerService {
         const hasSubstantiveWork = typeof this.agentService.runHasSubstantiveEvents === 'function'
           ? await this.agentService.runHasSubstantiveEvents(runId)
           : false;
+        const hasResumeIngestHandoff = typeof this.agentService.runHasResumeIngestHandoff === 'function'
+          ? await this.agentService.runHasResumeIngestHandoff(runId)
+          : false;
 
         await this.agentService.recordRunEvent({
           runId,
@@ -229,11 +232,12 @@ class SchedulerService {
           payload: {
             classification: classifyAgentExit(latestPhaseEvent),
             hasSubstantiveWork,
+            hasResumeIngestHandoff,
             latestPhaseEvent
           }
         });
 
-        if (hasSubstantiveWork) {
+        if (hasSubstantiveWork || hasResumeIngestHandoff) {
           await this.agentService.completeRun({ runId });
         } else {
           await this.agentService.failRun({

@@ -71,6 +71,8 @@ test('boss-chat-followup skill requires draining unread queue before completion'
   assert.match(bossChatFollowupSkill, /process unread rows in order/i);
   assert.match(bossChatFollowupSkill, /continue until the current unread queue.*empty|current unread queue.*drained|drain the unread queue/i);
   assert.match(bossChatFollowupSkill, /do not stop after one thread|do not finish after a single thread|single processed thread/i);
+  assert.match(bossChatFollowupSkill, /cannot stop after judgment|do not stop after mere judgment|must not exit after mere judgment|判定后不能直接退出/i);
+  assert.match(bossChatFollowupSkill, /resume-download --run-id|同一父 run 内直接完成下载|download evidence/i);
 });
 
 test('boss-resume-ingest skill documents runtime placeholders instead of machine-specific paths', () => {
@@ -80,6 +82,14 @@ test('boss-resume-ingest skill documents runtime placeholders instead of machine
   assert.match(bossResumeIngestSkill, /candidateId.*missing/i);
   assert.match(bossResumeIngestSkill, /list-candidates --job-key "\$JOB_KEY"/);
   assert.match(bossResumeIngestSkill, /resume-preview-meta --run-id "\$RUN_ID"/);
+  assert.match(bossResumeIngestSkill, /resume-download --run-id "\$RUN_ID" --output-path/);
   assert.match(bossResumeIngestSkill, /disabled.*请求附件简历|尚未获得对方完整简历/i);
   assert.match(bossResumeIngestSkill, /do not write attachment discovered.*disabled|disabled request-only state.*not.*attachment discovered/i);
+});
+
+test('boss-resume-ingest skill forbids startup rediscovery scans when handoff context exists', () => {
+  assert.match(bossResumeIngestSkill, /do not ignore `BOSS_CONTEXT_FILE`/i);
+  assert.match(bossResumeIngestSkill, /do not .*list_dir.*project root|do not .*list_dir.*resumes/i);
+  assert.match(bossResumeIngestSkill, /do not .*find.*resumes|do not .*rg.*resumes|do not .*rglob.*resumes/i);
+  assert.match(bossResumeIngestSkill, /do not switch to another visible thread/i);
 });

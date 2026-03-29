@@ -2473,10 +2473,11 @@ test('AgentService runNanobotForSchedule includes run id for followup mode', asy
       '运行契约：必须复用调用方提供的 RUN_ID=91；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "91"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
       '固定启动顺序：先读 boss-sourcing SKILL 做路由；chat/followup/download 只继续读 boss-chat-followup SKILL、boss-sourcing/references/runtime-contract.md、boss-chat-followup/references/browser-states.md。不要再读 source 的页面 reference，也不要用 find、rg、python、rglob 重新定位这些固定路径。',
-      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。聊天模式只允许使用 chat 相关 CLI：必要时用 node "$PROJECT_ROOT/scripts/boss-cli.js" chatlist --run-id "$RUN_ID" 读取当前职位聊天列表，用 chat-open-thread --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 打开指定线程，用 chat-thread-state --run-id "$RUN_ID" 验证当前线程状态，用 chatmsg --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 读取当前线程消息，用 attachment-state --run-id "$RUN_ID" 或 resume-panel --run-id "$RUN_ID" 读取附件按钮/附件卡片状态；需要恢复附件预览参数时，使用 resume-preview-meta --run-id "$RUN_ID"；禁止调用 recommend-state、recommend-detail、recommend-pager，禁止把推荐页锚点用于沟通线程判断。',
+      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。聊天模式只允许使用 chat 相关 CLI：必要时用 node "$PROJECT_ROOT/scripts/boss-cli.js" chatlist --run-id "$RUN_ID" 读取当前职位聊天列表，用 chat-open-thread --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 打开指定线程，用 chat-thread-state --run-id "$RUN_ID" 验证当前线程状态，用 chatmsg --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 读取当前线程消息，用 attachment-state --run-id "$RUN_ID" 或 resume-panel --run-id "$RUN_ID" 读取附件按钮/附件卡片状态；需要恢复附件预览参数时，使用 resume-preview-meta --run-id "$RUN_ID"；只有在 chat-thread-state 明确返回 threadOpen=true 且 activeUid 非空之后，才允许发送跟进、索要简历、下载或进入附件 handoff；若 activeUid 为空，必须先回到 chatlist / chat-open-thread 恢复线程身份，禁止盲发。禁止调用 recommend-state、recommend-detail、recommend-pager，禁止把推荐页锚点用于沟通线程判断。',
       '执行目标：当前 run 必须持续处理 JOB_KEY 对应职位下的未读线程，直到当前未读队列被清空，或页面证据证明出现不可恢复阻塞。处理完单个线程后的回复、求简历、附件 handoff 都不构成完成条件；只要未读里还有下一条，就必须回到未读列表继续，不得打一条就 run-complete。',
-      '附件 handoff 模板：若当前线程已确认存在附件或预览，必须立即切换到 boss-resume-ingest，这本身不是 run-fail 理由。调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "91"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-91.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。若 candidateId 缺失，先用 list-candidates --job-key "$JOB_KEY" 解析身份，再进入 ingest；只有 ingest handoff 自身出现不可恢复证据时，才允许 run-fail。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。',
+      '附件 handoff 模板：若当前线程已确认存在附件或预览，followup 模式才允许切换到 boss-resume-ingest，这本身不是 run-fail 理由。调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "91"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-91.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。若 candidateId 缺失，先用 list-candidates --job-key "$JOB_KEY" 解析身份，再进入 ingest；只有 ingest handoff 自身出现不可恢复证据时，才允许 run-fail。download 模式不要把 boss-resume-ingest 当成成功路径，而应在同一父 run 内直接完成下载并写回 downloaded 证据。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
+      '对于 --followup：完成 thread/attachment 判定后不能直接停在“已完成判定/已切换路由”这类总结；必须在同一 run 内继续执行三选一：已确认附件 => 先 run-attachment，再真正启动 boss-resume-ingest（需有 spawned subagent、同 RUN_ID handoff 证据或 attachment_recorded 回写之后，才允许父 run terminal）；确认无附件且无需继续 => run-complete；存在不可恢复证据 => run-fail。仅仅写出“已路由到 ingest context/后续会进入 ingest”而没有真实 handoff 证据，不构成 run-complete 条件。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
     ].join('\n')
   );
@@ -2527,9 +2528,9 @@ test('AgentService runNanobotForSchedule maps chat mode to chat workflow message
       '运行契约：必须复用调用方提供的 RUN_ID=92；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "92"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
       '固定启动顺序：先读 boss-sourcing SKILL 做路由；chat/followup/download 只继续读 boss-chat-followup SKILL、boss-sourcing/references/runtime-contract.md、boss-chat-followup/references/browser-states.md。不要再读 source 的页面 reference，也不要用 find、rg、python、rglob 重新定位这些固定路径。',
-      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。聊天模式只允许使用 chat 相关 CLI：必要时用 node "$PROJECT_ROOT/scripts/boss-cli.js" chatlist --run-id "$RUN_ID" 读取当前职位聊天列表，用 chat-open-thread --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 打开指定线程，用 chat-thread-state --run-id "$RUN_ID" 验证当前线程状态，用 chatmsg --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 读取当前线程消息，用 attachment-state --run-id "$RUN_ID" 或 resume-panel --run-id "$RUN_ID" 读取附件按钮/附件卡片状态；需要恢复附件预览参数时，使用 resume-preview-meta --run-id "$RUN_ID"；禁止调用 recommend-state、recommend-detail、recommend-pager，禁止把推荐页锚点用于沟通线程判断。',
+      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。聊天模式只允许使用 chat 相关 CLI：必要时用 node "$PROJECT_ROOT/scripts/boss-cli.js" chatlist --run-id "$RUN_ID" 读取当前职位聊天列表，用 chat-open-thread --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 打开指定线程，用 chat-thread-state --run-id "$RUN_ID" 验证当前线程状态，用 chatmsg --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 读取当前线程消息，用 attachment-state --run-id "$RUN_ID" 或 resume-panel --run-id "$RUN_ID" 读取附件按钮/附件卡片状态；需要恢复附件预览参数时，使用 resume-preview-meta --run-id "$RUN_ID"；只有在 chat-thread-state 明确返回 threadOpen=true 且 activeUid 非空之后，才允许发送跟进、索要简历、下载或进入附件 handoff；若 activeUid 为空，必须先回到 chatlist / chat-open-thread 恢复线程身份，禁止盲发。禁止调用 recommend-state、recommend-detail、recommend-pager，禁止把推荐页锚点用于沟通线程判断。',
       '执行目标：当前 run 必须持续处理 JOB_KEY 对应职位下的未读线程，直到当前未读队列被清空，或页面证据证明出现不可恢复阻塞。处理完单个线程后的回复、求简历、附件 handoff 都不构成完成条件；只要未读里还有下一条，就必须回到未读列表继续，不得打一条就 run-complete。',
-      '附件 handoff 模板：若当前线程已确认存在附件或预览，必须立即切换到 boss-resume-ingest，这本身不是 run-fail 理由。调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "92"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-92.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。若 candidateId 缺失，先用 list-candidates --job-key "$JOB_KEY" 解析身份，再进入 ingest；只有 ingest handoff 自身出现不可恢复证据时，才允许 run-fail。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。',
+      '附件 handoff 模板：若当前线程已确认存在附件或预览，followup 模式才允许切换到 boss-resume-ingest，这本身不是 run-fail 理由。调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "92"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-92.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。若 candidateId 缺失，先用 list-candidates --job-key "$JOB_KEY" 解析身份，再进入 ingest；只有 ingest handoff 自身出现不可恢复证据时，才允许 run-fail。download 模式不要把 boss-resume-ingest 当成成功路径，而应在同一父 run 内直接完成下载并写回 downloaded 证据。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
     ].join('\n')
@@ -2574,9 +2575,9 @@ test('AgentService runNanobotForSchedule maps download mode to download workflow
       '运行契约：必须复用调用方提供的 RUN_ID=93；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "93"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
       '固定启动顺序：先读 boss-sourcing SKILL 做路由；chat/followup/download 只继续读 boss-chat-followup SKILL、boss-sourcing/references/runtime-contract.md、boss-chat-followup/references/browser-states.md。不要再读 source 的页面 reference，也不要用 find、rg、python、rglob 重新定位这些固定路径。',
-      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。下载/补扫模式只允许使用 chat 相关 CLI：必要时用 node "$PROJECT_ROOT/scripts/boss-cli.js" chatlist --run-id "$RUN_ID" 读取当前职位聊天列表，用 chat-open-thread --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 打开指定线程，用 chat-thread-state --run-id "$RUN_ID" 验证当前线程状态，用 chatmsg --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 读取当前线程消息，用 attachment-state --run-id "$RUN_ID" 或 resume-panel --run-id "$RUN_ID" 读取附件按钮/附件卡片状态；需要恢复附件预览参数时，使用 resume-preview-meta --run-id "$RUN_ID"；禁止调用 recommend-state、recommend-detail、recommend-pager，禁止把推荐页锚点用于沟通线程判断。',
-      '附件 handoff 模板：若当前线程已确认存在附件或预览，必须立即切换到 boss-resume-ingest，这本身不是 run-fail 理由。调用 boss-resume-ingest 时必须复用同一个 RUN_ID、JOB_KEY 和 BOSS_CONTEXT_FILE。模板固定为：/boss-resume-ingest --run-id "93"；JOB_KEY="$JOB_KEY"；BOSS_CONTEXT_FILE="$PROJECT_ROOT/tmp/boss-context-93.json"；bossEncryptGeekId="$BOSS_ENCRYPT_GEEK_ID"；candidateId="$CANDIDATE_ID"；candidateName="$CANDIDATE_NAME"；并明确说明当前线程里的附件是已可见、已预览还是仅由 deterministic context 提示。若 candidateId 缺失，先用 list-candidates --job-key "$JOB_KEY" 解析身份，再进入 ingest；只有 ingest handoff 自身出现不可恢复证据时，才允许 run-fail。禁止创建 replacement run，禁止让 sub-skill 在已有 context file 时重新猜岗位、线程或候选人。',
+      'CLI 规则：回写只使用 node "$PROJECT_ROOT/scripts/agent-callback-cli.js" 的既有命令；禁止执行 --help、裸命令探测，或通过源码/测试反推参数。先 mkdir -p tmp sessions，再执行 dashboard-summary 验证后台。bootstrap 回写必须使用 run-event --file，禁止调用不存在的 bootstrap 子命令。下载/补扫模式只允许使用 chat 相关 CLI：必要时用 node "$PROJECT_ROOT/scripts/boss-cli.js" chatlist --run-id "$RUN_ID" 读取当前职位聊天列表，用 chat-open-thread --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 打开指定线程，用 chat-thread-state --run-id "$RUN_ID" 验证当前线程状态，用 chatmsg --run-id "$RUN_ID" --uid "$BOSS_ENCRYPT_UID" 读取当前线程消息，用 attachment-state --run-id "$RUN_ID" 或 resume-panel --run-id "$RUN_ID" 读取附件按钮/附件卡片状态；需要恢复附件预览参数时，使用 resume-preview-meta --run-id "$RUN_ID"；只有在 chat-thread-state 明确返回 threadOpen=true 且 activeUid 非空之后，才允许发送跟进、索要简历、下载或进入附件 handoff；若 activeUid 为空，必须先回到 chatlist / chat-open-thread 恢复线程身份，禁止盲发。禁止调用 recommend-state、recommend-detail、recommend-pager，禁止把推荐页锚点用于沟通线程判断。',
       '失败判定：只有在本次 run 内完成后台探活、bootstrap 回写，并亲自尝试 Chrome/MCP 读取（至少 list_pages，必要时再 new_page）之后，才允许 run-fail；禁止复用旧失败文件或历史结论直接终止。',
+      '对于 --download：完成 thread/attachment 判定后不能直接停在“已完成判定/已切换路由”这类总结。必须在同一父 run 内继续到真实下载证据：先 run-attachment(discovered)，再用 node "$PROJECT_ROOT/scripts/boss-cli.js" resume-download --run-id "$RUN_ID" --output-path "$PROJECT_ROOT/resumes/$JOB_KEY/$FILE_NAME" 下载 PDF；随后写 run-attachment(status=downloaded, storedPath, sha256) 与 run-action(resume_downloaded)，只有这些真实下载证据落地之后，才允许 run-complete。仅仅写出“已路由到 ingest context/后续会进入 ingest”不构成 run-complete 条件。',
       '结束前必须显式调用 run-complete 或 run-fail；不要输出“如果你继续”之类等待确认的阶段性总结。遇到阻塞时先继续 recover，确实无法完成再 run-fail。'
     ].join('\n')
   );
@@ -3885,3 +3886,83 @@ test('AgentService failRun generates terminal event when eventId is omitted', as
   assert.equal(recordedPayload.eventId, 'run-fail:159:2026-03-27T15:00:00.000Z');
 });
 
+test('AgentService recordAttachment upgrades discovered attachment rows to downloaded state', async () => {
+  const queryCalls = [];
+  const { AgentService } = require('../src/services/agent-service');
+
+  const service = new AgentService({
+    pool: {
+      async query(sql, params = []) {
+        queryCalls.push({ sql, params });
+        if (sql.includes('insert into candidate_attachments')) {
+          return { rows: [{ id: 23 }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 1 };
+      }
+    }
+  });
+
+  service.resolveJobCandidateForWrite = async () => ({ id: 199 });
+  service.insertRunEvent = async () => ({ ok: true });
+
+  const result = await service.recordAttachment({
+    runId: 250,
+    candidateId: 199,
+    eventId: 'attachment-downloaded:a1',
+    occurredAt: '2026-03-29T08:06:06.454Z',
+    bossAttachmentId: 'a1',
+    fileName: '曾艳简历.pdf',
+    sha256: 'abc123',
+    storedPath: 'resumes/面点师傅（B0038011）_8eca6cad/曾艳_2cabb232e6ceee791XV73Nm_GVRT.pdf',
+    status: 'downloaded'
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.attachmentId, 23);
+  assert.match(queryCalls[0].sql, /on conflict/i);
+  assert.match(queryCalls[0].sql, /do update/i);
+  assert.match(queryCalls[0].sql, /stored_path/i);
+  assert.match(queryCalls[0].sql, /downloaded_at/i);
+});
+
+test('AgentService runHasResumeIngestHandoff matches same-run handoff stream text', async () => {
+  const queryCalls = [];
+  const { AgentService } = require('../src/services/agent-service');
+
+  const service = new AgentService({
+    pool: {
+      async query(sql, params = []) {
+        queryCalls.push({ sql, params });
+        return { rows: [{ exists: 1 }], rowCount: 1 };
+      }
+    }
+  });
+
+  const result = await service.runHasResumeIngestHandoff(243);
+
+  assert.equal(result, true);
+  assert.match(queryCalls[0].sql, /boss-resume-ingest/);
+  assert.match(queryCalls[0].sql, /RUN_ID=/);
+  assert.equal(queryCalls[0].params[0], 243);
+});
+
+test('AgentService runHasResumeIngestHandoff matches resume-ingest subagent spawn text', async () => {
+  const queryCalls = [];
+  const { AgentService } = require('../src/services/agent-service');
+
+  const service = new AgentService({
+    pool: {
+      async query(sql, params = []) {
+        queryCalls.push({ sql, params });
+        return { rows: [{ exists: 1 }], rowCount: 1 };
+      }
+    }
+  });
+
+  const result = await service.runHasResumeIngestHandoff(245);
+
+  assert.equal(result, true);
+  assert.match(queryCalls[0].sql, /Spawned subagent/);
+  assert.match(queryCalls[0].sql, /boss-resume-ingest-/);
+  assert.equal(queryCalls[0].params[0], 245);
+});

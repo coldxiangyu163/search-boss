@@ -34,6 +34,49 @@ test('BossCliRunner bindTarget returns parsed JSON payload from executeCli', asy
   assert.equal(payload.session.targetId, 'boss-1');
 });
 
+test('BossCliRunner bindTarget forwards run-scoped metadata to the CLI', async () => {
+  const calls = [];
+  const runner = new BossCliRunner({
+    executeCliImpl: async (argv) => {
+      calls.push(argv);
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          ok: true,
+          session: {
+            runId: '42',
+            targetId: 'boss-1',
+            jobKey: '面点师傅（B0038011）_8eca6cad',
+            jobId: 'enc-job-1',
+            mode: 'download'
+          }
+        })
+      };
+    }
+  });
+
+  await runner.bindTarget({
+    runId: 42,
+    mode: 'download',
+    jobKey: '面点师傅（B0038011）_8eca6cad',
+    jobId: 'enc-job-1'
+  });
+
+  assert.deepEqual(calls[0], [
+    'target',
+    'bind',
+    '--run-id',
+    '42',
+    '--prefer-chat',
+    '--mode',
+    'download',
+    '--job-key',
+    '面点师傅（B0038011）_8eca6cad',
+    '--job-id',
+    'enc-job-1'
+  ]);
+});
+
 test('BossCliRunner listRecommendations forwards limit and parses result', async () => {
   const calls = [];
   const runner = new BossCliRunner({

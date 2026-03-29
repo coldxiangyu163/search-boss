@@ -1,5 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const { executeCli, parseArgs } = require('../scripts/boss-cli');
 
@@ -517,6 +520,62 @@ test('chat-open-thread opens a chat row for the bound target', async () => {
   assert.equal(payload.opened, true);
 });
 
+test('chat-open-thread persists selected uid after a successful open', async () => {
+  const writes = [];
+  const stdout = createWritable();
+
+  const result = await executeCli(['chat-open-thread', '--run-id', '15', '--uid', 'enc-uid-9'], {
+    stdout,
+    env: {
+      DATABASE_URL: 'postgresql://example',
+      AGENT_TOKEN: 'token',
+      NANOBOT_CONFIG_PATH: '/tmp/nanobot.json'
+    },
+    dependencies: {
+      sessionStore: {
+        loadSession: async () => ({
+          runId: '15',
+          targetId: 'boss-1',
+          epoch: 0,
+          selectedUid: null,
+          lastOwner: 'boss-cli'
+        }),
+        saveSession: async (runId, session) => {
+          writes.push({ runId, session });
+          return session;
+        }
+      },
+      browserCommands: {
+        bossFetch: async () => ({
+          zpData: {
+            friendList: [
+              {
+                encryptUid: 'enc-uid-9',
+                name: '谢小洪',
+                jobName: '面点师傅（B0038011）',
+                lastTime: '13:50',
+                lastMessageInfo: { text: '你好' }
+              }
+            ]
+          }
+        }),
+        openChatThread: async () => ({
+          ok: true,
+          uid: 'enc-uid-9',
+          opened: true
+        })
+      }
+    }
+  });
+
+  const payload = JSON.parse(stdout.output);
+  assert.equal(result.exitCode, 0);
+  assert.equal(payload.opened, true);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].runId, '15');
+  assert.equal(writes[0].session.selectedUid, 'enc-uid-9');
+});
+
 test('chat-thread-state returns normalized thread facts for the bound target', async () => {
   const stdout = createWritable();
   const calls = [];
@@ -555,6 +614,144 @@ test('chat-thread-state returns normalized thread facts for the bound target', a
   assert.equal(calls[0].targetId, 'boss-1');
   assert.equal(payload.threadOpen, true);
   assert.equal(payload.attachmentPresent, true);
+});
+
+test('chat-thread-state falls back to the session selected uid when the DOM omits activeUid', async () => {
+  const stdout = createWritable();
+
+  const result = await executeCli(['chat-thread-state', '--run-id', '16'], {
+    stdout,
+    env: {
+      DATABASE_URL: 'postgresql://example',
+      AGENT_TOKEN: 'token',
+      NANOBOT_CONFIG_PATH: '/tmp/nanobot.json'
+    },
+    dependencies: {
+      sessionStore: {
+        loadSession: async () => ({
+          runId: '16',
+          targetId: 'boss-1',
+          epoch: 0,
+          selectedUid: 'enc-uid-3'
+        })
+      },
+      browserCommands: {
+        inspectChatThreadState: async () => ({
+          ok: true,
+          threadOpen: true,
+          activeUid: '',
+          attachmentPresent: true
+        })
+      }
+    }
+  });
+
+  const payload = JSON.parse(stdout.output);
+  assert.equal(result.exitCode, 0);
+  assert.equal(payload.threadOpen, true);
+  assert.equal(payload.activeUid, 'enc-uid-3');
+});
+
+test('chat-thread-state infers active uid from visible thread metadata when selected uid is missing', async () => {
+  const stdout = createWritable();
+
+  const result = await executeCli(['chat-thread-state', '--run-id', '16'], {
+    stdout,
+    env: {
+      DATABASE_URL: 'postgresql://example',
+      AGENT_TOKEN: 'token',
+      NANOBOT_CONFIG_PATH: '/tmp/nanobot.json'
+    },
+    dependencies: {
+      sessionStore: {
+        loadSession: async () => ({
+          runId: '16',
+          targetId: 'boss-1',
+          epoch: 0,
+          selectedUid: null,
+          jobId: 'enc-job-1'
+        })
+      },
+      browserCommands: {
+        inspectChatThreadState: async () => ({
+          ok: true,
+          threadOpen: true,
+          activeUid: '',
+          attachmentPresent: false,
+          activeThread: {
+            name: '谢小洪',
+            jobName: '面点师傅（B0038011）',
+            lastTime: '13:50'
+          }
+        }),
+        bossFetch: async () => ({
+          zpData: {
+            friendList: [
+              {
+                encryptUid: 'f987eab72b3a61211nZ-2du5F1pW',
+                name: '谢小洪',
+                jobName: '面点师傅（B0038011）',
+                lastTime: '13:50',
+                securityId: 'sec-1'
+              }
+            ]
+          }
+        })
+      }
+    }
+  });
+
+  const payload = JSON.parse(stdout.output);
+  assert.equal(result.exitCode, 0);
+  assert.equal(payload.activeUid, 'f987eab72b3a61211nZ-2du5F1pW');
+});
+
+test('chat-thread-state fails fast when the active thread remains unresolved', async () => {
+  const stdout = createWritable();
+  const stderr = createWritable();
+
+  const result = await executeCli(['chat-thread-state', '--run-id', '16'], {
+    stdout,
+    stderr,
+    env: {
+      DATABASE_URL: 'postgresql://example',
+      AGENT_TOKEN: 'token',
+      NANOBOT_CONFIG_PATH: '/tmp/nanobot.json'
+    },
+    dependencies: {
+      sessionStore: {
+        loadSession: async () => ({
+          runId: '16',
+          targetId: 'boss-1',
+          epoch: 0,
+          selectedUid: null,
+          jobId: 'enc-job-1'
+        })
+      },
+      browserCommands: {
+        inspectChatThreadState: async () => ({
+          ok: true,
+          threadOpen: true,
+          activeUid: '',
+          attachmentPresent: false,
+          activeThread: {
+            name: '谢小洪',
+            jobName: '面点师傅（B0038011）',
+            lastTime: '13:50'
+          }
+        }),
+        bossFetch: async () => ({
+          zpData: {
+            friendList: []
+          }
+        })
+      }
+    }
+  });
+
+  assert.equal(result.exitCode, 1);
+  assert.equal(stdout.output, '');
+  assert.match(stderr.output, /boss_chat_active_uid_unresolved/);
 });
 
 test('attachment-state returns attachment facts for the bound target', async () => {
@@ -881,6 +1078,52 @@ test('resume-preview-meta returns preview identifiers from the bound target', as
   assert.equal(calls[0].targetId, 'boss-1');
   assert.equal(payload.canPreview, true);
   assert.equal(payload.encryptAuthorityId, 'authority-1');
+});
+
+test('resume-download writes browser-authenticated PDF bytes to disk and returns metadata', async () => {
+  const stdout = createWritable();
+  const outputPath = path.join(os.tmpdir(), `boss-resume-download-${Date.now()}.pdf`);
+
+  try {
+    const result = await executeCli(['resume-download', '--run-id', '55', '--output-path', outputPath], {
+      stdout,
+      env: {
+        DATABASE_URL: 'postgresql://example',
+        AGENT_TOKEN: 'token',
+        NANOBOT_CONFIG_PATH: '/tmp/nanobot.json'
+      },
+      dependencies: {
+        sessionStore: {
+          loadSession: async () => ({
+            runId: '55',
+            targetId: 'boss-1',
+            epoch: 0
+          })
+        },
+        browserCommands: {
+          downloadResumeAttachment: async () => ({
+            ok: true,
+            fileName: '曾艳简历.pdf',
+            mimeType: 'application/pdf',
+            fileSize: 3,
+            base64: Buffer.from('ABC').toString('base64'),
+            sourceUrl: 'https://www.zhipin.com/wflow/zpgeek/download/preview4boss/foo'
+          })
+        }
+      }
+    });
+
+    const payload = JSON.parse(stdout.output);
+    assert.equal(result.exitCode, 0);
+    assert.equal(fs.readFileSync(outputPath, 'utf8'), 'ABC');
+    assert.equal(payload.fileName, '曾艳简历.pdf');
+    assert.equal(payload.storedPath, outputPath);
+    assert.equal(payload.sha256.length, 64);
+  } finally {
+    if (fs.existsSync(outputPath)) {
+      fs.unlinkSync(outputPath);
+    }
+  }
 });
 
 function createWritable() {

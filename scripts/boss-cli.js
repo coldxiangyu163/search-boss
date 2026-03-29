@@ -2,6 +2,9 @@ const { loadConfig } = require('../src/config');
 const { BossCdpClient } = require('../src/services/boss-cdp-client');
 const { BossSessionStore } = require('../src/services/boss-session-store');
 const browserCommands = require('../src/services/boss-browser-commands');
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
 
 async function executeCli(
   argv,
@@ -252,6 +255,15 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
       jobId: options.jobId || null
     });
 
+    result.thread = await enrichThreadIdentity({
+      result: result.thread,
+      session,
+      browserCommands,
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+
     return {
       ok: true,
       ...result
@@ -340,12 +352,34 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
 
   if (options.command === 'chat-open-thread') {
     const session = await sessionStore.loadSession(options.runId);
+    const friend = typeof browserCommands.bossFetch === 'function'
+      ? await findFriendByUid({
+        browserCommands,
+        cdpClient,
+        targetId: session.targetId,
+        urlPrefix: config.bossCdpTargetUrlPrefix,
+        encryptUid: options.uid,
+        jobId: session.jobId || '0'
+      })
+      : null;
     const result = await browserCommands.openChatThread({
       cdpClient,
       targetId: session.targetId,
       urlPrefix: config.bossCdpTargetUrlPrefix,
-      uid: options.uid
+      uid: options.uid,
+      friendName: friend?.name || '',
+      jobName: friend?.jobName || '',
+      lastTime: friend?.lastTime || '',
+      lastMessage: friend?.lastMessageInfo?.text || ''
     });
+
+    if (result?.opened && typeof sessionStore.saveSession === 'function') {
+      await sessionStore.saveSession(options.runId, {
+        ...session,
+        selectedUid: options.uid,
+        lastOwner: 'boss-cli'
+      });
+    }
 
     return {
       ok: true,
@@ -360,6 +394,22 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
       targetId: session.targetId,
       urlPrefix: config.bossCdpTargetUrlPrefix
     });
+
+    if (!result.activeUid && result.threadOpen) {
+      const enriched = await enrichThreadIdentity({
+        result,
+        session,
+        browserCommands,
+        cdpClient,
+        targetId: session.targetId,
+        urlPrefix: config.bossCdpTargetUrlPrefix
+      });
+      Object.assign(result, enriched);
+    }
+
+    if (result.threadOpen && !result.activeUid) {
+      throw new Error('boss_chat_active_uid_unresolved');
+    }
 
     return {
       ok: true,
@@ -407,6 +457,34 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
     return {
       ok: true,
       ...result
+    };
+  }
+
+  if (options.command === 'resume-download') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.downloadResumeAttachment({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+    const outputPath = options.outputPath;
+    if (!outputPath) {
+      throw new Error('Missing value for --output-path');
+    }
+    const absoluteOutputPath = path.resolve(outputPath);
+    fs.mkdirSync(path.dirname(absoluteOutputPath), { recursive: true });
+    const bytes = Buffer.from(result.base64, 'base64');
+    fs.writeFileSync(absoluteOutputPath, bytes);
+    const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+
+    return {
+      ok: true,
+      fileName: result.fileName,
+      mimeType: result.mimeType,
+      fileSize: result.fileSize,
+      sha256,
+      storedPath: absoluteOutputPath,
+      sourceUrl: result.sourceUrl
     };
   }
 
@@ -466,16 +544,90 @@ async function findFriendByUid({
   cdpClient,
   targetId,
   urlPrefix,
-  encryptUid
+  encryptUid,
+  jobId = '0'
 }) {
   const data = await browserCommands.bossFetch({
     cdpClient,
     targetId,
     urlPrefix,
-    url: 'https://www.zhipin.com/wapi/zprelation/friend/getBossFriendListV2.json?page=1&status=0&jobId=0'
+    url: `https://www.zhipin.com/wapi/zprelation/friend/getBossFriendListV2.json?page=1&status=0&jobId=${encodeURIComponent(jobId)}`
   });
 
   return normalizeFriendList(data).find((friend) => friend.encryptUid === encryptUid) || null;
+}
+
+async function enrichThreadIdentity({ result, session, browserCommands, cdpClient, targetId, urlPrefix }) {
+  if (!result) {
+    return result;
+  }
+
+  if (result.encryptUid || result.activeUid) {
+    return result;
+  }
+
+  const fallbackUid = session?.selectedUid || '';
+  if (fallbackUid) {
+    return {
+      ...result,
+      encryptUid: result.encryptUid || fallbackUid,
+      activeUid: result.activeUid || fallbackUid
+    };
+  }
+
+  const inferredUid = typeof browserCommands.bossFetch === 'function'
+    ? await inferUidFromThreadMetadata({
+      result,
+      session,
+      browserCommands,
+      cdpClient,
+      targetId,
+      urlPrefix
+    })
+    : '';
+
+  if (inferredUid) {
+    return {
+      ...result,
+      encryptUid: result.encryptUid || inferredUid,
+      activeUid: result.activeUid || inferredUid
+    };
+  }
+
+  return result;
+}
+
+async function inferUidFromThreadMetadata({ result, session, browserCommands, cdpClient, targetId, urlPrefix }) {
+  const thread = result?.activeThread || result?.thread || {};
+  const threadName = String(thread.name || '').trim();
+  const threadJobName = String(thread.jobName || '').trim();
+  const threadLastTime = String(thread.lastTime || '').trim();
+
+  if (!threadName && !threadJobName && !threadLastTime) {
+    return '';
+  }
+
+  const data = await browserCommands.bossFetch({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    url: `https://www.zhipin.com/wapi/zprelation/friend/getBossFriendListV2.json?page=1&status=0&jobId=${encodeURIComponent(session?.jobId || '0')}`
+  });
+
+  const matches = normalizeFriendList(data).filter((friend) => {
+    if (threadName && friend.name !== threadName) {
+      return false;
+    }
+    if (threadJobName && friend.jobName !== threadJobName) {
+      return false;
+    }
+    if (threadLastTime && friend.lastTime !== threadLastTime) {
+      return false;
+    }
+    return true;
+  });
+
+  return matches.length === 1 ? (matches[0].encryptUid || '') : '';
 }
 
 function normalizeJobDetail(data) {

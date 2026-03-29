@@ -16,6 +16,15 @@ class BossCliRunner {
     if (mode && mode !== 'source' && mode !== 'sync') {
       args.push('--prefer-chat');
     }
+    if (mode) {
+      args.push('--mode', String(mode));
+    }
+    if (jobKey) {
+      args.push('--job-key', String(jobKey));
+    }
+    if (jobId) {
+      args.push('--job-id', String(jobId));
+    }
     const result = await this.#run(args);
 
     if (jobKey || jobId) {

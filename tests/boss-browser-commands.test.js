@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const vm = require('node:vm');
 
 const {
   getUrl,
@@ -11,7 +12,8 @@ const {
   openChatThread,
   inspectChatThreadState,
   inspectAttachmentState,
-  inspectResumePreviewMeta
+  inspectResumePreviewMeta,
+  downloadResumeAttachment
 } = require('../src/services/boss-browser-commands');
 
 test('getUrl reads the current URL from the bound target', async () => {
@@ -334,6 +336,33 @@ test('openChatThread uses a stable chat row selector instead of generic data-uid
   assert.doesNotMatch(calls[0].expression, /document\\.querySelectorAll\\('\\[data-uid\\], \\[data-encrypt-uid\\]'\\)/);
 });
 
+test('openChatThread can match a row by visible text hints when uid attributes are absent', async () => {
+  const row = createFakeNode({
+    className: 'geek-item',
+    textContent: '13:50 谢小洪 面点师傅（B0038011） [送达]你好，请问你最近在看机会吗？',
+    attributes: {
+      'data-id': '124264786-0'
+    }
+  });
+  const document = createFakeDocument({
+    querySelectorAllMap: {
+      '.geek-item, .user-item, .dialog-item, .chat-item': [row]
+    }
+  });
+  const cdpClient = createVmCdpClient({ document });
+
+  const result = await openChatThread({
+    cdpClient,
+    targetId: 'target-1',
+    uid: 'enc-uid-1',
+    friendName: '谢小洪',
+    jobName: '面点师傅（B0038011）'
+  });
+
+  assert.equal(result.opened, true);
+  assert.equal(row.clicked, true);
+});
+
 test('inspectChatThreadState reads active thread state from chat shell anchors', async () => {
   const calls = [];
   const cdpClient = {
@@ -390,6 +419,35 @@ test('inspectAttachmentState scopes attachment detection to the active right pan
   assert.match(calls[0].expression, /threadPane\.querySelectorAll/);
 });
 
+test('inspectAttachmentState ignores broad wrapper text when no concrete pdf filename is present', async () => {
+  const wrapper = createFakeNode({
+    tagName: 'DIV',
+    textContent: '谢小洪 今日活跃 46岁 10年以上 在线简历 附件简历 求简历 换电话 换微信 约面试 不合适 发送',
+    className: 'wrap-v2'
+  });
+  const threadPane = createFakeNode({
+    innerText: wrapper.textContent,
+    querySelectorAllMap: {
+      'button, a, span, div': [wrapper],
+      'a, div, span': [wrapper]
+    }
+  });
+  const document = createFakeDocument({
+    querySelectorMap: {
+      '.chat-conversation, .conversation-box, .chat-message-list, .conversation-message': threadPane
+    }
+  });
+  const cdpClient = createVmCdpClient({ document });
+
+  const result = await inspectAttachmentState({
+    cdpClient,
+    targetId: 'target-1'
+  });
+
+  assert.equal(result.present, false);
+  assert.equal(result.fileName, '');
+});
+
 test('inspectResumePreviewMeta returns preview identifiers from live runtime state', async () => {
   const calls = [];
   const cdpClient = {
@@ -422,3 +480,122 @@ test('inspectResumePreviewMeta returns preview identifiers from live runtime sta
   assert.match(calls[0].expression, /encryptAuthorityId/);
   assert.match(calls[0].expression, /resume-btn-file/);
 });
+
+test('downloadResumeAttachment returns browser-authenticated PDF bytes and metadata', async () => {
+  const calls = [];
+  const cdpClient = {
+    evaluate: async (payload) => {
+      calls.push(payload);
+      return {
+        type: 'string',
+        value: JSON.stringify({
+          ok: true,
+          fileName: '曾艳简历.pdf',
+          mimeType: 'application/pdf',
+          fileSize: 3,
+          base64: 'QUJD',
+          sourceUrl: 'https://www.zhipin.com/wflow/zpgeek/download/preview4boss/foo'
+        })
+      };
+    }
+  };
+
+  const result = await downloadResumeAttachment({
+    cdpClient,
+    targetId: 'target-1'
+  });
+
+  assert.equal(result.fileName, '曾艳简历.pdf');
+  assert.equal(result.mimeType, 'application/pdf');
+  assert.equal(result.base64, 'QUJD');
+  assert.match(calls[0].expression, /preview4boss/);
+  assert.match(calls[0].expression, /arrayBuffer/);
+  assert.match(calls[0].expression, /attachment-iframe|card-btn/);
+});
+
+function createVmCdpClient({ document, window = {} }) {
+  return {
+    evaluate: async (payload) => {
+      const context = vm.createContext({
+        window: {
+          location: { href: 'https://www.zhipin.com/web/chat/index' },
+          ...window
+        },
+        document,
+        JSON,
+        Array,
+        Object,
+        String,
+        Number,
+        Boolean,
+        RegExp,
+        Set,
+        Map,
+        decodeURIComponent,
+        encodeURIComponent
+      });
+      return {
+        type: 'string',
+        value: vm.runInContext(payload.expression, context)
+      };
+    }
+  };
+}
+
+function createFakeDocument({ querySelectorMap = {}, querySelectorAllMap = {} } = {}) {
+  return {
+    title: 'BOSS直聘',
+    body: {
+      innerText: ''
+    },
+    querySelector(selector) {
+      return querySelectorMap[selector] || null;
+    },
+    querySelectorAll(selector) {
+      return querySelectorAllMap[selector] || [];
+    }
+  };
+}
+
+function createFakeNode({
+  tagName = 'DIV',
+  textContent = '',
+  innerText,
+  className = '',
+  attributes = {},
+  dataset = {},
+  disabled = false,
+  querySelectorMap = {},
+  querySelectorAllMap = {}
+} = {}) {
+  return {
+    tagName,
+    textContent,
+    innerText: innerText === undefined ? textContent : innerText,
+    className,
+    dataset,
+    disabled,
+    clicked: false,
+    click() {
+      this.clicked = true;
+      this.className = `${this.className} active`.trim();
+    },
+    getAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(attributes, name) ? attributes[name] : null;
+    },
+    getAttributeNames() {
+      return Object.keys(attributes);
+    },
+    querySelector(selector) {
+      return querySelectorMap[selector] || null;
+    },
+    querySelectorAll(selector) {
+      return querySelectorAllMap[selector] || [];
+    },
+    classList: {
+      contains(name) {
+        return className.split(/\s+/).includes(name);
+      }
+    }
+  };
+}

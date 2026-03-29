@@ -245,3 +245,83 @@ test('SchedulerService records classified agent exit before failing non-terminal
   assert.equal(classificationEvent.payload.classification, 'agent_exit_after_target_bound');
   assert.equal(failedRuns[0].message, 'run_not_terminal_after_nanobot_exit');
 });
+
+test('SchedulerService completes parent run when nanobot exits after explicit resume-ingest handoff', async () => {
+  const recordedEvents = [];
+  const completedRuns = [];
+  let releaseNanobot = null;
+  let completeRunResolve = null;
+  const completeRunDone = new Promise((resolve) => {
+    completeRunResolve = resolve;
+  });
+
+  const pool = {
+    async query(sql) {
+      if (sql.includes('from scheduled_jobs') && sql.includes('job_key = $1')) {
+        return { rows: [] };
+      }
+
+      if (sql.includes('update sourcing_runs')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+
+  const agentService = {
+    async createRun(payload) {
+      return { id: 71, runKey: payload.runKey, status: 'pending' };
+    },
+    async recordRunEvent(payload) {
+      recordedEvents.push(payload);
+      return { ok: true };
+    },
+    async runNanobotForSchedule() {
+      await new Promise((resolve) => {
+        releaseNanobot = resolve;
+      });
+      return { ok: true };
+    },
+    async getRunStatus() {
+      return 'running';
+    },
+    async getLatestPhaseEvent() {
+      return {
+        eventType: 'context_snapshot_captured',
+        payload: {
+          phase: 'context_snapshot_captured'
+        }
+      };
+    },
+    async runHasSubstantiveEvents() {
+      return false;
+    },
+    async runHasResumeIngestHandoff() {
+      return true;
+    },
+    async failReplacementRunsForRunId() {
+      return { ok: true, failedRunIds: [] };
+    },
+    async completeRun(payload) {
+      completedRuns.push(payload);
+      completeRunResolve();
+      return { ok: true, status: 'completed' };
+    },
+    async failRun() {
+      throw new Error('failRun should not be called after explicit handoff');
+    }
+  };
+
+  const scheduler = new SchedulerService({ pool, agentService });
+  await scheduler.triggerJobTask('健康顾问_B0047007', 'download');
+
+  releaseNanobot();
+  await completeRunDone;
+
+  const classificationEvent = recordedEvents.find((event) => event.eventType === 'agent_exit_classified');
+  assert.equal(classificationEvent.payload.classification, 'agent_exit_after_context_snapshot');
+  assert.equal(classificationEvent.payload.hasSubstantiveWork, false);
+  assert.equal(classificationEvent.payload.hasResumeIngestHandoff, true);
+  assert.deepEqual(completedRuns, [{ runId: 71 }]);
+});
