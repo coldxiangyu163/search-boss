@@ -163,7 +163,7 @@ function bindEvents() {
     });
   });
 
-  document.getElementById('refresh-button').addEventListener('click', () => loadData());
+
 }
 
 async function loadData() {
@@ -337,11 +337,8 @@ async function syncRecruitData() {
     state.syncStatus = `BOSS数据同步失败：${error.message}`;
     render();
   } finally {
-    const btn = document.getElementById('sync-recruit-btn');
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = '同步BOSS数据';
-    }
+    button.disabled = false;
+    button.textContent = '同步BOSS数据';
   }
 }
 
@@ -642,9 +639,8 @@ function renderCommandCenter() {
             <div>
               <p class="eyebrow">BOSS 招聘数据中心</p>
               <h3 class="card-title">今日核心指标</h3>
-              <p class="card-subtitle">${hasRecruitData ? `数据来源：BOSS 直聘，采集于 ${formatDateTime(boss.scrapedAt)}` : '尚未同步 BOSS 招聘数据，点击「同步BOSS数据」获取。'}</p>
+              <p class="card-subtitle">${hasRecruitData ? `数据来源：BOSS 直聘，采集于 ${formatDateTime(boss.scrapedAt)}` : '尚未同步 BOSS 招聘数据，点击顶部「同步BOSS数据」获取。'}</p>
             </div>
-            <button class="button-secondary" onclick="syncRecruitData()" id="sync-recruit-btn">同步BOSS数据</button>
           </div>
           <div class="status-grid">
             <div class="status-box">
