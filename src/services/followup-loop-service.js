@@ -242,7 +242,7 @@ class FollowupLoopService {
       return;
     }
 
-    const encryptUid = threadState.activeUid || threadId;
+    const encryptUid = threadState.encryptUid || threadState.activeUid || threadId;
 
     // Step 2b: Upsert candidate record
     let candidateId = null;

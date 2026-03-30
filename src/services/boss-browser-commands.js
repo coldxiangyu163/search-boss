@@ -653,6 +653,34 @@ function buildContextSnapshotExpression({ jobId = null } = {}) {
           lastTime: (activeChatItem.querySelector('.time, .time-shadow')?.textContent || '').trim()
         }
         : null;
+      // Extract real encryptUid from Vue component data (chat page DOM attrs are empty)
+      let chatVueEncryptUid = '';
+      if (activeChatItem) {
+        const wrap = (activeChatItem.closest ? activeChatItem.closest('.geek-item-wrap') : null) || activeChatItem;
+        const vue = wrap.__vue__ || activeChatItem.__vue__;
+        chatVueEncryptUid = vue?.$props?.source?.encryptUid || vue?.$data?.source?.encryptUid || '';
+      }
+      // Fallback: extract from conversation panel Vue components
+      if (!chatVueEncryptUid && shell === 'chat') {
+        const convPanel = document.querySelector('.chat-conversation');
+        if (convPanel) {
+          const walkForUid = (el) => {
+            if (el.__vue__) {
+              const v = el.__vue__;
+              const d = v.$data?.currentData || v.$data?.geek || v.$props?.geek;
+              if (d?.encryptUid) return d.encryptUid;
+            }
+            for (const child of el.children || []) {
+              const found = walkForUid(child);
+              if (found) return found;
+            }
+            return '';
+          };
+          chatVueEncryptUid = walkForUid(convPanel);
+        }
+      }
+      const domEncryptUid = activeChatItem?.getAttribute('data-uid') || activeChatItem?.getAttribute('data-encrypt-uid') || '';
+      const domActiveUid = domEncryptUid || activeChatItem?.dataset?.uid || activeChatItem?.dataset?.encryptUid || '';
       const attachmentButton = Array.from(document.querySelectorAll('button, a, span, div'))
         .find((node) => /附件简历|附件|PDF/i.test((node.textContent || '').trim()));
       const attachmentCard = Array.from(document.querySelectorAll('a, div, span'))
@@ -680,14 +708,14 @@ function buildContextSnapshotExpression({ jobId = null } = {}) {
           matchesRunJob: expectedJobId ? pageJobId === expectedJobId : null
         },
         candidate: {
-          bossEncryptGeekId: geekIdNode?.getAttribute('encrypt-geek-id') || '',
+          bossEncryptGeekId: geekIdNode?.getAttribute('encrypt-geek-id') || chatVueEncryptUid || '',
           name: (nameNode?.textContent || '').trim(),
           inDetail: Boolean(detailWrap),
           detailText
         },
         thread: {
-          encryptUid: activeChatItem?.getAttribute('data-uid') || activeChatItem?.getAttribute('data-encrypt-uid') || '',
-          activeUid: activeChatItem?.getAttribute('data-uid') || activeChatItem?.getAttribute('data-encrypt-uid') || activeChatItem?.dataset?.uid || activeChatItem?.dataset?.encryptUid || '',
+          encryptUid: chatVueEncryptUid || domEncryptUid || '',
+          activeUid: chatVueEncryptUid || domActiveUid || '',
           isUnread: Boolean(activeChatItem?.querySelector('.unread, .unread-count, [class*="unread"]')),
           activeThread
         },
@@ -713,12 +741,17 @@ function buildOpenChatThreadExpression({ uid, friendName, jobName, lastTime, las
       const rows = Array.from(document.querySelectorAll('.geek-item, .user-item, .dialog-item, .chat-item'));
       const normalizeText = (value) => String(value || '').replace(/\s+/g, ' ').trim();
       let row = rows.find((node) => {
-        const value = node.getAttribute('data-uid')
+        const domValue = node.getAttribute('data-uid')
           || node.getAttribute('data-encrypt-uid')
           || node.dataset?.uid
           || node.dataset?.encryptUid
           || '';
-        return value === targetUid;
+        if (domValue === targetUid) return true;
+        // Check Vue component data for real encryptUid
+        const wrap = (node.closest ? node.closest('.geek-item-wrap') : null) || node;
+        const vue = wrap.__vue__ || node.__vue__;
+        const vueUid = vue?.$props?.source?.encryptUid || vue?.$data?.source?.encryptUid || '';
+        return vueUid && vueUid === targetUid;
       });
 
       if (!row && (targetName || targetJobName || targetLastTime || targetLastMessage)) {
@@ -769,10 +802,39 @@ function buildChatThreadStateExpression() {
           .find((node) => /附件简历|附件|PDF/i.test((node.textContent || '').trim()))
         : null;
 
+      // Extract real encryptUid from Vue component data (DOM attributes are empty on chat page)
+      let vueEncryptUid = '';
+      if (active) {
+        const wrap = (active.closest ? active.closest('.geek-item-wrap') : null) || active;
+        const vue = wrap.__vue__ || active.__vue__;
+        vueEncryptUid = vue?.$props?.source?.encryptUid || vue?.$data?.source?.encryptUid || '';
+      }
+      // Fallback: extract from slide-content or message-list Vue component in the conversation panel
+      if (!vueEncryptUid && threadPane) {
+        const walkForEncryptUid = (el) => {
+          if (el.__vue__) {
+            const v = el.__vue__;
+            const d = v.$data?.currentData || v.$data?.geek || v.$props?.geek;
+            if (d?.encryptUid) return d.encryptUid;
+          }
+          for (const child of el.children || []) {
+            const found = walkForEncryptUid(child);
+            if (found) return found;
+          }
+          return '';
+        };
+        vueEncryptUid = walkForEncryptUid(threadPane);
+      }
+
+      const domUid = active?.getAttribute('data-uid') || active?.getAttribute('data-encrypt-uid') || active?.dataset?.uid || active?.dataset?.encryptUid || '';
+      const fallbackId = active?.getAttribute('data-id') || active?.id?.replace(/^_/, '') || '';
+
       return JSON.stringify({
         ok: true,
         threadOpen: Boolean(active) && Boolean(threadPane),
-        activeUid: active?.getAttribute('data-uid') || active?.getAttribute('data-encrypt-uid') || active?.dataset?.uid || active?.dataset?.encryptUid || active?.getAttribute('data-id') || active?.id?.replace(/^_/, '') || '',
+        activeUid: vueEncryptUid || domUid || fallbackId,
+        encryptUid: vueEncryptUid || domUid || '',
+        threadId: fallbackId,
         activeThread: active ? {
           name: (active.querySelector('.geek-name, .name')?.textContent || '').trim(),
           jobName: (active.querySelector('.source-job, .job-name')?.textContent || '').trim(),
@@ -1285,8 +1347,13 @@ function buildInspectVisibleChatListExpression({ limit }) {
         const timeEl = row.querySelector('.time, .time-shadow');
         const msgEl = row.querySelector('.last-msg, .message, .msg');
         const unreadEl = row.querySelector('.unread, .unread-count, [class*="unread"]');
-        const uid = row.getAttribute('data-uid') || row.getAttribute('data-encrypt-uid') || row.dataset?.uid || row.dataset?.encryptUid || '';
+        const domUid = row.getAttribute('data-uid') || row.getAttribute('data-encrypt-uid') || row.dataset?.uid || row.dataset?.encryptUid || '';
         const dataId = row.getAttribute('data-id') || row.id || '';
+        // Extract real encryptUid from Vue component data
+        let vueEncryptUid = '';
+        const wrap = (row.closest ? row.closest('.geek-item-wrap') : null) || row;
+        const vue = wrap.__vue__ || row.__vue__;
+        vueEncryptUid = vue?.$props?.source?.encryptUid || vue?.$data?.source?.encryptUid || '';
         return {
           index,
           dataId,
@@ -1294,7 +1361,7 @@ function buildInspectVisibleChatListExpression({ limit }) {
           jobName: (jobEl?.textContent || '').trim(),
           lastTime: (timeEl?.textContent || '').trim(),
           lastMessage: (msgEl?.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80),
-          encryptUid: uid,
+          encryptUid: vueEncryptUid || domUid,
           hasUnread: Boolean(unreadEl && unreadEl.offsetWidth > 0)
         };
       });
