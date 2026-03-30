@@ -13,7 +13,8 @@ const {
   inspectChatThreadState,
   inspectAttachmentState,
   inspectResumePreviewMeta,
-  downloadResumeAttachment
+  downloadResumeAttachment,
+  closeResumeDetail
 } = require('../src/services/boss-browser-commands');
 
 test('getUrl reads the current URL from the bound target', async () => {
@@ -511,6 +512,33 @@ test('downloadResumeAttachment returns browser-authenticated PDF bytes and metad
   assert.match(calls[0].expression, /preview4boss/);
   assert.match(calls[0].expression, /arrayBuffer/);
   assert.match(calls[0].expression, /attachment-iframe|card-btn/);
+});
+
+test('closeResumeDetail closes resume preview iframe via evaluate', async () => {
+  const calls = [];
+  const cdpClient = {
+    evaluate: async (payload) => {
+      calls.push(payload);
+      return {
+        type: 'string',
+        value: JSON.stringify({
+          ok: true,
+          closed: true,
+          method: 'close_button'
+        })
+      };
+    }
+  };
+
+  const result = await closeResumeDetail({
+    cdpClient,
+    targetId: 'target-1'
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.closed, true);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].expression, /attachment-iframe|preview4boss|dialog-wrap/);
 });
 
 function createVmCdpClient({ document, window = {} }) {

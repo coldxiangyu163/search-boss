@@ -78,6 +78,14 @@ function createMockBossCliRunner({
     async resumeDownload(opts) {
       calls.push({ command: 'resumeDownload', ...opts });
       return downloadResults[opts.runId] || { ok: true, fileName: 'test.pdf', sha256: 'abc123' };
+    },
+    async closeResumeDetail(opts) {
+      calls.push({ command: 'closeResumeDetail', ...opts });
+      return { ok: true };
+    },
+    async bringToFront(opts) {
+      calls.push({ command: 'bringToFront', ...opts });
+      return { ok: true };
     }
   };
 }
@@ -184,14 +192,15 @@ test('FollowupLoopService executes correct workflow: navigate, filter job, filte
 
   const commandOrder = bossCliRunner.calls.map((c) => c.command);
   assert.equal(commandOrder[0], 'bindTarget');
-  assert.equal(commandOrder[1], 'navigateTo');
-  assert.equal(commandOrder[2], 'selectChatJobFilter');
-  assert.equal(commandOrder[3], 'selectChatUnreadFilter');
-  assert.equal(commandOrder[4], 'inspectVisibleChatList');
-  assert.equal(commandOrder[5], 'clickChatRow');
-  assert.equal(commandOrder[6], 'inspectChatThreadState');
-  assert.equal(commandOrder[7], 'inspectAttachmentState');
-  assert.equal(commandOrder[8], 'readOpenThreadMessages');
+  assert.equal(commandOrder[1], 'bringToFront');
+  assert.equal(commandOrder[2], 'navigateTo');
+  assert.equal(commandOrder[3], 'selectChatJobFilter');
+  assert.equal(commandOrder[4], 'selectChatUnreadFilter');
+  assert.equal(commandOrder[5], 'inspectVisibleChatList');
+  assert.equal(commandOrder[6], 'clickChatRow');
+  assert.equal(commandOrder[7], 'inspectChatThreadState');
+  assert.equal(commandOrder[8], 'inspectAttachmentState');
+  assert.equal(commandOrder[9], 'readOpenThreadMessages');
 
   const jobFilterCall = bossCliRunner.calls.find((c) => c.command === 'selectChatJobFilter');
   assert.equal(jobFilterCall.jobName, '面点师傅');
@@ -341,6 +350,71 @@ test('FollowupLoopService downloads resume when attachment present in followup m
 
   assert.equal(agentService.actions.length, 1);
   assert.equal(agentService.actions[0].actionType, 'resume_downloaded');
+
+  const closeCalls = bossCliRunner.calls.filter((c) => c.command === 'closeResumeDetail');
+  assert.equal(closeCalls.length, 1, 'should close resume detail page after download');
+});
+
+test('FollowupLoopService closes resume detail page when download result is incomplete', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    visibleThreads: [
+      { name: '钱七', dataId: '777-0', index: 0, hasUnread: true }
+    ],
+    attachmentStates: {
+      '777-0': { ok: true, present: true, buttonEnabled: true, fileName: '钱七.pdf' }
+    }
+  });
+  // Override resumeDownload to return incomplete result (missing fileName)
+  bossCliRunner.resumeDownload = async (opts) => {
+    bossCliRunner.calls.push({ command: 'resumeDownload', ...opts });
+    return { ok: true, fileName: '' };
+  };
+
+  const agentService = createMockAgentService();
+  const service = new FollowupLoopService({
+    bossCliRunner, agentService, llmEvaluator: createMockLlmEvaluator(),
+    threadDelayMin: 0, threadDelayMax: 0
+  });
+
+  const result = await service.run({ runId: 350, jobKey: '面点师傅（B0038011）_8eca6cad', mode: 'followup' });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stats.attachmentFound, 1);
+  assert.equal(result.stats.resumeDownloaded, 0, 'incomplete download should not count as downloaded');
+  assert.equal(result.stats.errors, 1);
+
+  const closeCalls = bossCliRunner.calls.filter((c) => c.command === 'closeResumeDetail');
+  assert.equal(closeCalls.length, 1, 'should close resume detail page even on incomplete download');
+});
+
+test('FollowupLoopService closes resume detail page when download throws error', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    visibleThreads: [
+      { name: '孙八', dataId: '888-0', index: 0, hasUnread: true }
+    ],
+    attachmentStates: {
+      '888-0': { ok: true, present: true, buttonEnabled: true, fileName: '孙八.pdf' }
+    }
+  });
+  bossCliRunner.resumeDownload = async (opts) => {
+    bossCliRunner.calls.push({ command: 'resumeDownload', ...opts });
+    throw new Error('network_timeout');
+  };
+
+  const agentService = createMockAgentService();
+  const service = new FollowupLoopService({
+    bossCliRunner, agentService, llmEvaluator: createMockLlmEvaluator(),
+    threadDelayMin: 0, threadDelayMax: 0
+  });
+
+  const result = await service.run({ runId: 351, jobKey: '面点师傅（B0038011）_8eca6cad', mode: 'followup' });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stats.resumeDownloaded, 0);
+  assert.equal(result.stats.errors, 1);
+
+  const closeCalls = bossCliRunner.calls.filter((c) => c.command === 'closeResumeDetail');
+  assert.equal(closeCalls.length, 1, 'should close resume detail page even on download error');
 });
 
 test('FollowupLoopService requests resume when LLM decides and followup-decision allows', async () => {

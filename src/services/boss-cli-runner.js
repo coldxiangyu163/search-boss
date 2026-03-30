@@ -339,6 +339,14 @@ class BossCliRunner {
     ]);
   }
 
+  async closeResumeDetail({ runId }) {
+    return this.#run([
+      'resume-close-detail',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
   async #run(argv) {
     const result = await this.executeCliImpl(argv, {
       env: this.env,

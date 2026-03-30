@@ -1126,6 +1126,41 @@ test('resume-download writes browser-authenticated PDF bytes to disk and returns
   }
 });
 
+test('resume-close-detail closes resume preview for the bound target', async () => {
+  const stdout = createWritable();
+
+  const result = await executeCli(['resume-close-detail', '--run-id', '55'], {
+    stdout,
+    env: {
+      DATABASE_URL: 'postgresql://example',
+      AGENT_TOKEN: 'token',
+      NANOBOT_CONFIG_PATH: '/tmp/nanobot.json'
+    },
+    dependencies: {
+      sessionStore: {
+        loadSession: async () => ({
+          runId: '55',
+          targetId: 'boss-1',
+          epoch: 0
+        })
+      },
+      browserCommands: {
+        closeResumeDetail: async () => ({
+          ok: true,
+          closed: true,
+          method: 'close_button'
+        })
+      }
+    }
+  });
+
+  const payload = JSON.parse(stdout.output);
+  assert.equal(result.exitCode, 0);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.closed, true);
+  assert.equal(payload.method, 'close_button');
+});
+
 function createWritable() {
   return {
     output: '',

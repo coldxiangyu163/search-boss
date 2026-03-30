@@ -931,7 +931,7 @@ function buildResumeDownloadExpression({ timeoutMs }) {
       const cards = threadPane
         ? Array.from(threadPane.querySelectorAll('.message-card-wrap, .message-item .message-card-wrap'))
         : [];
-      const card = cards.find((node) => /\\.pdf\\b/i.test(normalizeText(node.textContent)));
+      const card = cards.find((node) => /\\.(pdf|docx?|doc)\\b/i.test(normalizeText(node.textContent)));
       const button = card ? card.querySelector('.card-btn, .message-card-buttons .card-btn') : null;
       const fileNameNode = card ? card.querySelector('.message-card-top-title-wrap, .message-card-top-content, .message-card-top-wrap') : null;
       const iframe = document.querySelector('iframe.attachment-box.attachment-iframe, iframe[src*="preview4boss"], iframe[src*="pdf-viewer-b"]');
@@ -2005,6 +2005,62 @@ function buildClickFirstRecommendCardExpression() {
   })()`;
 }
 
+async function closeResumeDetail({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildCloseResumeDetailExpression()
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_close_resume_detail_failed');
+  }
+
+  return result;
+}
+
+function buildCloseResumeDetailExpression() {
+  return `(() => {
+    try {
+      const iframe = document.querySelector('iframe.attachment-box.attachment-iframe, iframe[src*="preview4boss"], iframe[src*="pdf-viewer-b"]');
+      if (!iframe) {
+        return JSON.stringify({ ok: true, closed: false, reason: 'no_preview_open' });
+      }
+
+      const activeDialog = document.querySelector('.dialog-wrap.active');
+      if (activeDialog) {
+        const closeBtn = activeDialog.querySelector('.boss-popup__close, .icon-close, .iboss-close');
+        if (closeBtn) {
+          closeBtn.click();
+          return JSON.stringify({ ok: true, closed: true, method: 'active_dialog_close' });
+        }
+      }
+
+      const overlay = iframe.closest('.dialog-wrap, .dialog-container, .dialog-resume-full');
+      if (overlay) {
+        const closeBtn = overlay.querySelector('.boss-popup__close, .icon-close, .iboss-close');
+        if (closeBtn) {
+          closeBtn.click();
+          return JSON.stringify({ ok: true, closed: true, method: 'overlay_close' });
+        }
+      }
+
+      iframe.remove();
+      if (overlay) {
+        overlay.remove();
+      }
+      return JSON.stringify({ ok: true, closed: true, method: 'dom_removal' });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_close_resume_detail_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
 module.exports = {
   getUrl,
   evaluateJson,
@@ -2039,4 +2095,5 @@ module.exports = {
   clickAtCoords,
   switchRecommendToLatest,
   scrollRecommendCardIntoView,
+  closeResumeDetail,
 };

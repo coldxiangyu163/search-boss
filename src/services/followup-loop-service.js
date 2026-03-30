@@ -485,10 +485,26 @@ class FollowupLoopService {
         message: `resume download failed: ${error.message}`,
         payload: { error: error.message, encryptUid }
       });
+      // Close resume detail page even on download failure
+      await this.#closeResumeDetailSafe(runId, encryptUid);
       return;
     }
 
-    // Step 4: Record attachment downloaded
+    // Step 4: Verify download completion
+    if (!downloadResult?.ok || !downloadResult?.fileName) {
+      stats.errors += 1;
+      await this.#recordEvent(runId, {
+        eventId: `followup-loop-download-incomplete:${runId}:${encryptUid}`,
+        eventType: 'followup_loop_error',
+        stage: 'followup_loop',
+        message: `resume download incomplete for ${candidateName}`,
+        payload: { encryptUid, downloadResult }
+      });
+      await this.#closeResumeDetailSafe(runId, encryptUid);
+      return;
+    }
+
+    // Step 5: Record attachment downloaded
     try {
       await this.agentService.recordAttachment({
         runId,
@@ -507,7 +523,7 @@ class FollowupLoopService {
       // Non-fatal
     }
 
-    // Step 5: Record resume_downloaded action
+    // Step 6: Record resume_downloaded action
     try {
       await this.agentService.recordAction({
         runId,
@@ -538,6 +554,9 @@ class FollowupLoopService {
         sha256: downloadResult?.sha256 || null
       }
     });
+
+    // Step 7: Close resume detail page after successful download
+    await this.#closeResumeDetailSafe(runId, encryptUid);
   }
 
   async #executeSendMessage({ runId, jobKey, encryptUid, candidateName, candidateId, text, stats }) {
@@ -649,6 +668,20 @@ class FollowupLoopService {
       });
     } catch (error) {
       // Non-fatal
+    }
+  }
+
+  async #closeResumeDetailSafe(runId, encryptUid) {
+    try {
+      await this.bossCliRunner.closeResumeDetail({ runId });
+    } catch (error) {
+      await this.#recordEvent(runId, {
+        eventId: `followup-loop-close-detail-warn:${runId}:${encryptUid}`,
+        eventType: 'followup_loop_warning',
+        stage: 'followup_loop',
+        message: `close resume detail failed: ${error.message}`,
+        payload: { error: error.message, encryptUid }
+      });
     }
   }
 

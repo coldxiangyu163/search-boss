@@ -755,6 +755,20 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
     };
   }
 
+  if (options.command === 'resume-close-detail') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.closeResumeDetail({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
   throw new Error(`Unknown command: ${options.command}${options.subcommand ? ` ${options.subcommand}` : ''}`);
 }
 

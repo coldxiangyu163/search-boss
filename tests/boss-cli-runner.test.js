@@ -321,3 +321,25 @@ test('BossCliRunner getResumePreviewMeta forwards run id and parses result', asy
   assert.deepEqual(calls[0], ['resume-preview-meta', '--run-id', '42']);
   assert.equal(payload.encryptAuthorityId, 'authority-1');
 });
+
+test('BossCliRunner closeResumeDetail forwards run id and parses result', async () => {
+  const calls = [];
+  const runner = new BossCliRunner({
+    executeCliImpl: async (argv) => {
+      calls.push(argv);
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          ok: true,
+          closed: true,
+          method: 'close_button'
+        })
+      };
+    }
+  });
+
+  const payload = await runner.closeResumeDetail({ runId: 42 });
+
+  assert.deepEqual(calls[0], ['resume-close-detail', '--run-id', '42']);
+  assert.equal(payload.closed, true);
+});
