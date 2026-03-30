@@ -769,6 +769,7 @@ class AgentService {
               resume_state = 'downloaded',
               resume_downloaded_at = $2,
               resume_path = coalesce($3, resume_path),
+              last_inbound_at = $2,
               updated_at = now()
           where id = $1
         `,
@@ -787,6 +788,7 @@ class AgentService {
                 else 'received'
               end,
               resume_received_at = coalesce(resume_received_at, $2),
+              last_inbound_at = $2,
               updated_at = now()
           where id = $1
         `,
