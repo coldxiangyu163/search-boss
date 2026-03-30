@@ -908,7 +908,7 @@ test('chatmsg resolves the friend and fetches message history', async () => {
   assert.equal(payload.messages[0].text, '你好');
 });
 
-test('job-detail resolves securityId from joblist and fetches structured detail', async () => {
+test('job-detail fetches structured detail from job edit API', async () => {
   const stdout = createWritable();
   const calls = [];
 
@@ -931,44 +931,28 @@ test('job-detail resolves securityId from joblist and fetches structured detail'
         bossFetch: async (payload) => {
           calls.push(payload.url);
 
-          if (payload.url.includes('/zpjob/job/chatted/jobList')) {
-            return {
-              zpData: [
-                {
-                  encryptJobId: 'enc-job-9',
-                  securityId: 'sec-job-9',
-                  jobName: '健康顾问'
-                }
-              ]
-            };
-          }
-
           return {
             zpData: {
-              jobInfo: {
+              job: {
+                encryptId: 'enc-job-9',
                 jobName: '健康顾问',
-                salaryDesc: '8-10K',
-                experienceName: '3-5年',
-                degreeName: '本科',
+                lowSalary: 8,
+                highSalary: 10,
+                experience: 105,
+                degree: 205,
                 locationName: '重庆',
-                areaDistrict: '渝北',
-                businessDistrict: '两江新区',
                 postDescription: '负责客户跟进',
-                showSkills: ['销售', '沟通'],
-                address: '渝兴广场',
-                encryptId: 'enc-job-9'
+                addressText: '渝兴广场'
               },
-              bossInfo: {
-                name: '王经理',
-                title: '招聘主管',
-                activeTimeDesc: '今日活跃'
+              skillList: ['销售', '沟通'],
+              jobPoi: {
+                address: '重庆渝北区渝兴广场',
+                area: '渝北',
+                businessName: '两江新区'
               },
-              brandComInfo: {
+              brandInfo: {
                 brandName: '北京好还',
-                industryName: '互联网',
-                scaleName: '1000-9999人',
-                stageName: 'D轮及以上',
-                labels: ['五险一金', '带薪培训']
+                industryName: '互联网'
               }
             }
           };
@@ -980,11 +964,12 @@ test('job-detail resolves securityId from joblist and fetches structured detail'
   const payload = JSON.parse(stdout.output);
 
   assert.equal(result.exitCode, 0);
-  assert.match(calls[0], /jobList/);
-  assert.match(calls[1], /securityId=sec-job-9/);
+  assert.match(calls[0], /zpjob\/job\/edit\?encJobId=enc-job-9/);
   assert.equal(payload.job.name, '健康顾问');
   assert.equal(payload.job.salary, '8-10K');
-  assert.equal(payload.job.welfare, '五险一金, 带薪培训');
+  assert.equal(payload.job.description, '负责客户跟进');
+  assert.equal(payload.job.skills, '销售, 沟通');
+  assert.equal(payload.job.address, '重庆渝北区渝兴广场');
   assert.equal(payload.job.url, 'https://www.zhipin.com/job_detail/enc-job-9.html');
 });
 

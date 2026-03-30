@@ -286,28 +286,20 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
 
   if (options.command === 'job-detail') {
     const session = await sessionStore.loadSession(options.runId);
-    const jobListData = await browserCommands.bossFetch({
+    const editData = await browserCommands.bossFetch({
       cdpClient,
       targetId: session.targetId,
       urlPrefix: config.bossCdpTargetUrlPrefix,
-      url: 'https://www.zhipin.com/wapi/zpjob/job/chatted/jobList'
+      url: `https://www.zhipin.com/wapi/zpjob/job/edit?encJobId=${encodeURIComponent(options.jobId)}`
     });
-    const job = normalizeJobList(jobListData).find((item) => item.encryptJobId === options.jobId);
 
-    if (!job || !job.securityId) {
+    if (!editData?.zpData?.job) {
       throw new Error('boss_job_not_found');
     }
 
-    const detailData = await browserCommands.bossFetch({
-      cdpClient,
-      targetId: session.targetId,
-      urlPrefix: config.bossCdpTargetUrlPrefix,
-      url: `https://www.zhipin.com/wapi/zpgeek/job/detail.json?securityId=${encodeURIComponent(job.securityId)}`
-    });
-
     return {
       ok: true,
-      job: normalizeJobDetail(detailData)
+      job: normalizeJobEditDetail(editData)
     };
   }
 
@@ -951,6 +943,44 @@ function normalizeJobDetail(data) {
     address: jobInfo.address || '',
     url: jobInfo.encryptId
       ? `https://www.zhipin.com/job_detail/${jobInfo.encryptId}.html`
+      : ''
+  };
+}
+
+function normalizeJobEditDetail(data) {
+  const zpData = data?.zpData || {};
+  const job = zpData.job || {};
+  const skillList = Array.isArray(zpData.skillList) ? zpData.skillList : [];
+  const jobPoi = zpData.jobPoi || {};
+  const brandInfo = zpData.brandInfo || zpData.proxyRecruitData || {};
+
+  const experienceMap = { 101: '不限', 103: '1年以内', 104: '1-3年', 105: '3-5年', 106: '5-10年', 107: '10年以上' };
+  const degreeMap = { 200: '不限', 201: '初中及以下', 202: '中专/中技', 203: '高中', 204: '大专', 205: '本科', 206: '硕士', 207: '博士' };
+
+  const salaryDesc = (job.lowSalary && job.highSalary)
+    ? `${job.lowSalary}-${job.highSalary}K`
+    : '';
+
+  return {
+    name: job.jobName || '',
+    salary: salaryDesc,
+    experience: experienceMap[job.experience] || '',
+    degree: degreeMap[job.degree] || '',
+    city: job.locationName || zpData.cityName || '',
+    district: [jobPoi.area, jobPoi.businessName].filter(Boolean).join('·'),
+    description: job.postDescription || '',
+    skills: skillList.join(', '),
+    welfare: '',
+    bossName: '',
+    bossTitle: '',
+    activeTime: '',
+    company: brandInfo.brandName || brandInfo.name || '',
+    industry: brandInfo.industryName || '',
+    scale: '',
+    stage: '',
+    address: jobPoi.address || job.addressText || '',
+    url: job.encryptId
+      ? `https://www.zhipin.com/job_detail/${job.encryptId}.html`
       : ''
   };
 }
