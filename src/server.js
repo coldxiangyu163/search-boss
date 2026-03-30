@@ -84,4 +84,5 @@ const port = config.port;
 
 app.listen(port, () => {
   console.log(`search-boss listening on ${port}`);
+  schedulerService.startTicker();
 });

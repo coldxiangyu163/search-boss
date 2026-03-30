@@ -4,6 +4,7 @@ class SchedulerService {
     this.agentService = agentService;
     this.sourceLoopService = sourceLoopService;
     this.followupLoopService = followupLoopService;
+    this._tickTimer = null;
   }
 
   async listSchedules() {
@@ -46,6 +47,92 @@ class SchedulerService {
     );
 
     return result.rows[0];
+  }
+
+  async deleteSchedule(id) {
+    const result = await this.pool.query(
+      `delete from scheduled_jobs where id = $1 returning *`,
+      [id]
+    );
+
+    if (!result.rows[0]) {
+      throw new Error('schedule_not_found');
+    }
+
+    return result.rows[0];
+  }
+
+  async toggleSchedule(id, enabled) {
+    const result = await this.pool.query(
+      `update scheduled_jobs set enabled = $2, updated_at = now() where id = $1 returning *`,
+      [id, enabled]
+    );
+
+    if (!result.rows[0]) {
+      throw new Error('schedule_not_found');
+    }
+
+    return result.rows[0];
+  }
+
+  startTicker() {
+    if (this._tickTimer) return;
+    this._tickTimer = setInterval(() => this.#tick(), 60_000);
+    this.#tick();
+  }
+
+  stopTicker() {
+    if (this._tickTimer) {
+      clearInterval(this._tickTimer);
+      this._tickTimer = null;
+    }
+  }
+
+  async #tick() {
+    try {
+      const schedules = await this.listSchedules();
+      const now = new Date();
+
+      for (const schedule of schedules) {
+        if (!schedule.enabled) continue;
+        if (this.#shouldRunNow(schedule, now)) {
+          try {
+            await this.triggerSchedule(schedule.id);
+          } catch {
+            // ignore individual trigger failures
+          }
+        }
+      }
+    } catch {
+      // ignore tick-level errors
+    }
+  }
+
+  #shouldRunNow(schedule, now) {
+    const payload = schedule.payload || {};
+    const startHour = payload.startHour ?? 0;
+    const startMinute = payload.startMinute ?? 0;
+    const intervalMinutes = payload.intervalMinutes ?? 0;
+
+    if (!intervalMinutes || intervalMinutes <= 0) return false;
+
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    const currentTotalMinutes = currentHour * 60 + currentMinute;
+    const startTotalMinutes = startHour * 60 + startMinute;
+
+    if (currentTotalMinutes < startTotalMinutes) return false;
+
+    const minutesSinceStart = currentTotalMinutes - startTotalMinutes;
+    if (minutesSinceStart % intervalMinutes !== 0) return false;
+
+    if (schedule.last_run_at) {
+      const lastRun = new Date(schedule.last_run_at);
+      const elapsedMs = now.getTime() - lastRun.getTime();
+      if (elapsedMs < (intervalMinutes - 1) * 60_000) return false;
+    }
+
+    return true;
   }
 
   async triggerSchedule(id) {
@@ -186,15 +273,20 @@ class SchedulerService {
   }
 
   async #executeJobTask({ runId, jobKey, taskType, scheduledJobId = null, scheduledRunId = null, schedule = null }) {
+    const schedulePayload = schedule?.payload || {};
     try {
       if (taskType === 'source' && this.sourceLoopService) {
-        await this.sourceLoopService.run({ runId, jobKey });
+        const overrides = {};
+        if (schedulePayload.targetCount) overrides.targetCount = schedulePayload.targetCount;
+        await this.sourceLoopService.run({ runId, jobKey, ...overrides });
         await this.#finalizeScheduledRun({ schedule, scheduledRunId, scheduledJobId });
         return;
       }
 
       if ((taskType === 'followup' || taskType === 'chat' || taskType === 'download') && this.followupLoopService) {
-        await this.followupLoopService.run({ runId, jobKey, mode: taskType });
+        const overrides = {};
+        if (schedulePayload.maxThreads) overrides.maxThreads = schedulePayload.maxThreads;
+        await this.followupLoopService.run({ runId, jobKey, mode: taskType, ...overrides });
         await this.#finalizeScheduledRun({ schedule, scheduledRunId, scheduledJobId });
         return;
       }

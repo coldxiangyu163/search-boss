@@ -892,3 +892,83 @@ tbody tr:hover {
     width: 100%;
   }
 }
+
+/* Schedule form */
+.schedule-form {
+  padding: 18px 0;
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+  margin: 14px 0;
+}
+
+.schedule-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.schedule-form-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.button-danger {
+  color: #d94040 !important;
+  border-color: rgba(217, 64, 64, 0.2) !important;
+}
+
+.button-danger:hover {
+  background: #fff5f5 !important;
+  border-color: rgba(217, 64, 64, 0.4) !important;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+input[type="time"] {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+}
+
+input[type="time"]:focus {
+  outline: 2px solid rgba(31, 94, 255, 0.12);
+  border-color: rgba(31, 94, 255, 0.35);
+}
+
+.schedule-modal {
+  max-width: 640px;
+}
+
+.schedule-modal .schedule-form-grid {
+  margin-top: 18px;
+}
+
+.schedule-modal-header-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.schedule-view-value {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  border-radius: 12px;
+  background: var(--panel-soft);
+  border: 1px solid var(--line-soft);
+  color: var(--text);
+  font-weight: 600;
+}

@@ -47,7 +47,8 @@ class SourceLoopService {
     this.candidateDelayMax = candidateDelayMax;
   }
 
-  async run({ runId, jobKey }) {
+  async run({ runId, jobKey, targetCount: overrideTargetCount } = {}) {
+    const effectiveTargetCount = overrideTargetCount || this.targetCount;
     const stats = {
       greeted: 0,
       skipped: 0,
@@ -65,7 +66,7 @@ class SourceLoopService {
       eventType: 'source_loop_started',
       stage: 'source_loop',
       message: 'deterministic source loop started',
-      payload: { targetCount: this.targetCount, jobKey, mode: 'deterministic' }
+      payload: { targetCount: effectiveTargetCount, jobKey, mode: 'deterministic' }
     });
 
     // Phase 1: Bind browser target
@@ -152,7 +153,7 @@ class SourceLoopService {
     // Phase 3: Read candidate list and evaluate each via LLM, greet through popup
     let listResult;
     try {
-      listResult = await this.bossCliRunner.inspectRecommendList({ runId, limit: this.targetCount + this.maxSkips });
+      listResult = await this.bossCliRunner.inspectRecommendList({ runId, limit: effectiveTargetCount + this.maxSkips });
     } catch (error) {
       await this.#failRun(runId, `recommend_list_failed:${error.message}`, stats);
       return { ok: false, stats, reason: 'recommend_list_unavailable' };
@@ -165,7 +166,7 @@ class SourceLoopService {
     }
 
     for (const candidate of candidates) {
-      if (stats.greeted >= this.targetCount) break;
+      if (stats.greeted >= effectiveTargetCount) break;
       if ((stats.skipped + stats.alreadyChatting + stats.errors) >= this.maxSkips) break;
 
       if (stats.totalEvaluated > 0) {
@@ -195,12 +196,12 @@ class SourceLoopService {
 
     // Phase 4: Complete run
     const summary = {
-      targetCount: this.targetCount,
+      targetCount: effectiveTargetCount,
       achievedCount: stats.greeted,
       ...stats
     };
 
-    if (stats.greeted < this.targetCount) {
+    if (stats.greeted < effectiveTargetCount) {
       const nonGreeted = stats.skipped + stats.alreadyChatting + stats.errors;
       summary.reason = nonGreeted >= this.maxSkips
         ? 'max_skips_reached'

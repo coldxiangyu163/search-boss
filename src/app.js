@@ -240,6 +240,24 @@ function createApp({ services = {}, config = {} } = {}) {
     }
   });
 
+  app.delete('/api/schedules/:id', async (req, res, next) => {
+    try {
+      const item = await services.scheduler.deleteSchedule(req.params.id);
+      res.json({ ok: true, item });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch('/api/schedules/:id/toggle', async (req, res, next) => {
+    try {
+      const item = await services.scheduler.toggleSchedule(req.params.id, req.body.enabled);
+      res.json({ item });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post('/api/jobs/:jobKey/tasks/:taskType/trigger', async (req, res, next) => {
     try {
       const result = await services.scheduler.triggerJobTask(

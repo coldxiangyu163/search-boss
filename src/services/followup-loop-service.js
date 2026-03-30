@@ -19,7 +19,8 @@ class FollowupLoopService {
     this.threadDelayMax = threadDelayMax;
   }
 
-  async run({ runId, jobKey, mode = 'followup' }) {
+  async run({ runId, jobKey, mode = 'followup', maxThreads: overrideMaxThreads } = {}) {
+    const effectiveMaxThreads = overrideMaxThreads || this.maxThreads;
     const stats = {
       processed: 0,
       replied: 0,
@@ -37,7 +38,7 @@ class FollowupLoopService {
       eventType: 'followup_loop_started',
       stage: 'followup_loop',
       message: 'deterministic followup loop started',
-      payload: { mode, jobKey, maxThreads: this.maxThreads }
+      payload: { mode, jobKey, maxThreads: effectiveMaxThreads }
     });
 
     // Phase 1: Bind browser target (prefer chat page)
@@ -123,7 +124,7 @@ class FollowupLoopService {
     try {
       const listResult = await this.bossCliRunner.inspectVisibleChatList({
         runId,
-        limit: this.maxThreads
+        limit: effectiveMaxThreads
       });
       threads = Array.isArray(listResult?.threads) ? listResult.threads : [];
     } catch (error) {
@@ -158,7 +159,7 @@ class FollowupLoopService {
     // Phase 6: Process each thread with anti-risk delays
     for (let i = 0; i < threads.length; i++) {
       const thread = threads[i];
-      if (stats.processed >= this.maxThreads) {
+      if (stats.processed >= effectiveMaxThreads) {
         break;
       }
 

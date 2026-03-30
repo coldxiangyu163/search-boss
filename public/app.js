@@ -22,6 +22,22 @@ const state = {
   schedules: [],
   syncStatus: '',
   triggeringTaskKey: '',
+  scheduleModal: {
+    open: false,
+    mode: 'create',
+    scheduleId: null,
+    saving: false,
+    error: '',
+    form: {
+      jobKey: '',
+      taskType: 'source',
+      startHour: 9,
+      startMinute: 0,
+      intervalMinutes: 60,
+      targetCount: 5,
+      maxThreads: 20
+    }
+  },
   syncModal: {
     open: false,
     runId: null,
@@ -1400,48 +1416,395 @@ function renderAutomation() {
         <div>
           <p class="eyebrow">自动化调度</p>
           <h3 class="card-title">任务调度配置</h3>
-          <p class="card-subtitle">统一查看任务编排、定时规则与最新执行记录。</p>
+          <p class="card-subtitle">为招聘中的岗位配置定时执行规则，系统将按设定节奏自动触发任务。</p>
         </div>
-        <span class="badge">${state.schedules.length} 个调度任务</span>
+        <div class="jobs-header-actions">
+          <span class="badge">${state.schedules.length} 个调度任务</span>
+          <button class="button-secondary" onclick="openScheduleModal('create')">添加定时任务</button>
+        </div>
       </div>
       ${state.schedules.length ? `
         <table>
           <thead>
             <tr>
               <th>职位</th>
-              <th>任务</th>
-              <th>执行规则</th>
-              <th>是否启用</th>
+              <th>任务类型</th>
+              <th>开始时间</th>
+              <th>执行间隔</th>
+              <th>寻源人数</th>
+              <th>回复线程数</th>
+              <th>状态</th>
               <th>最近执行</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody>
-            ${state.schedules.map((schedule) => `
-              <tr>
-                <td>${schedule.job_key}</td>
-                <td>${schedule.task_type}</td>
-                <td>${schedule.cron_expression}</td>
-                <td>${schedule.enabled ? '已启用' : '未启用'}</td>
-                <td>${schedule.last_run_at || '-'}</td>
-                <td>${renderTaskTriggerButton(schedule.job_key, schedule.task_type, { compact: true })}</td>
-              </tr>
-            `).join('')}
+            ${state.schedules.map((schedule) => {
+              const payload = schedule.payload || {};
+              const startTime = formatScheduleTime(payload.startHour, payload.startMinute);
+              const interval = payload.intervalMinutes ? `每 ${payload.intervalMinutes} 分钟` : '-';
+              const jobName = getJobNameByKey(schedule.job_key);
+              return `
+                <tr>
+                  <td>${escapeHtml(jobName)}<div class="muted">${escapeHtml(schedule.job_key)}</div></td>
+                  <td>${escapeHtml(formatTaskType(schedule.task_type))}</td>
+                  <td>${escapeHtml(startTime)}</td>
+                  <td>${escapeHtml(interval)}</td>
+                  <td>${payload.targetCount || '-'}</td>
+                  <td>${payload.maxThreads || '-'}</td>
+                  <td>
+                    <button
+                      class="badge ${schedule.enabled ? 'badge-success' : 'badge-warning'}"
+                      style="cursor:pointer;border:none;"
+                      onclick='toggleScheduleEnabled(${schedule.id}, ${!schedule.enabled})'
+                      title="点击${schedule.enabled ? '禁用' : '启用'}"
+                    >
+                      ${schedule.enabled ? '已启用' : '已禁用'}
+                    </button>
+                  </td>
+                  <td>${formatDateTime(schedule.last_run_at)}</td>
+                  <td>
+                    <div class="table-actions">
+                      <button
+                        class="button-secondary button-compact"
+                        onclick='openScheduleModal("view", ${schedule.id})'
+                        title="查看详情"
+                      >
+                        查看
+                      </button>
+                      <button
+                        class="button-secondary button-compact"
+                        onclick='openScheduleModal("edit", ${schedule.id})'
+                        title="编辑任务"
+                      >
+                        编辑
+                      </button>
+                      <button
+                        class="button-secondary button-compact button-danger"
+                        onclick='deleteSchedule(${schedule.id})'
+                        title="删除该定时任务"
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              `;
+            }).join('')}
           </tbody>
         </table>
-      ` : '<div class="empty-state">当前暂无调度任务，可在后续接入自动化规则后统一配置。</div>'}
+      ` : '<div class="empty-state">当前暂无调度任务，点击「添加定时任务」创建。</div>'}
     </section>
-    <section class="card">
-      <div class="card-header">
-        <div>
-          <p class="eyebrow">执行闭环</p>
-          <h3 class="card-title">自动化能力现状</h3>
-        </div>
-        <span class="badge badge-success">已打通基础链路</span>
-      </div>
-      <p class="card-subtitle">当前已支持创建执行记录、写入事件、完成回写；下一步可将定时触发器绑定到实际机器人执行流程。</p>
-    </section>
+    ${renderScheduleModal()}
+    ${renderSyncModal()}
   `;
+}
+
+function renderScheduleModal() {
+  if (!state.scheduleModal.open) return '';
+
+  const { mode, form, saving, error } = state.scheduleModal;
+  const isView = mode === 'view';
+  const isCreate = mode === 'create';
+  const openJobs = state.jobs.filter((job) => job.status === 'open');
+
+  const titleMap = {
+    create: '添加定时任务',
+    edit: '编辑定时任务',
+    view: '查看定时任务'
+  };
+
+  const eyebrowMap = {
+    create: '新建调度',
+    edit: '编辑调度',
+    view: '调度详情'
+  };
+
+  return `
+    <div class="modal-backdrop" onclick="closeScheduleModal()">
+      <section class="sync-modal schedule-modal" onclick="event.stopPropagation()">
+        <div class="card-header">
+          <div>
+            <p class="eyebrow">${eyebrowMap[mode]}</p>
+            <h3 class="card-title">${titleMap[mode]}</h3>
+            <p class="card-subtitle">${isView ? '当前定时任务的配置详情。' : '配置岗位、执行时间与执行参数。'}</p>
+          </div>
+          <div class="schedule-modal-header-actions">
+            ${isView ? `
+              <button class="button-secondary" onclick="switchScheduleModalToEdit()">编辑</button>
+            ` : ''}
+            <button class="button-secondary button-muted" onclick="closeScheduleModal()">关闭</button>
+          </div>
+        </div>
+        ${error ? `<div class="inline-status inline-status-error">${escapeHtml(error)}</div>` : ''}
+        <div class="schedule-form-grid">
+          <label class="form-field">
+            <span class="form-label">选择岗位</span>
+            ${isCreate ? `
+              <select onchange="updateScheduleModalForm('jobKey', this.value)">
+                <option value="">请选择岗位</option>
+                ${openJobs.map((job) => `
+                  <option value="${escapeHtml(job.job_key)}" ${form.jobKey === job.job_key ? 'selected' : ''}>
+                    ${escapeHtml(job.job_name)} (${escapeHtml(job.city || '-')})
+                  </option>
+                `).join('')}
+              </select>
+            ` : `
+              <div class="schedule-view-value">${escapeHtml(getJobNameByKey(form.jobKey) || form.jobKey || '-')}</div>
+            `}
+          </label>
+          <label class="form-field">
+            <span class="form-label">任务类型</span>
+            ${isCreate ? `
+              <select onchange="updateScheduleModalForm('taskType', this.value)">
+                <option value="source" ${form.taskType === 'source' ? 'selected' : ''}>寻源打招呼</option>
+                <option value="followup" ${form.taskType === 'followup' ? 'selected' : ''}>主动沟通拉简历</option>
+              </select>
+            ` : `
+              <div class="schedule-view-value">${escapeHtml(formatTaskType(form.taskType))}</div>
+            `}
+          </label>
+          <label class="form-field">
+            <span class="form-label">开始执行时间</span>
+            ${isView ? `
+              <div class="schedule-view-value">${escapeHtml(formatScheduleTime(form.startHour, form.startMinute))}</div>
+            ` : `
+              <input
+                type="time"
+                value="${padTime(form.startHour)}:${padTime(form.startMinute)}"
+                onchange="handleScheduleModalTimeChange(this.value)"
+              />
+            `}
+          </label>
+          <label class="form-field">
+            <span class="form-label">执行间隔（分钟）</span>
+            ${isView ? `
+              <div class="schedule-view-value">${form.intervalMinutes || '-'}</div>
+            ` : `
+              <input
+                type="number"
+                min="10"
+                max="1440"
+                value="${form.intervalMinutes}"
+                onchange="updateScheduleModalForm('intervalMinutes', Number(this.value))"
+              />
+            `}
+          </label>
+          <label class="form-field">
+            <span class="form-label">单次寻源人数</span>
+            ${isView ? `
+              <div class="schedule-view-value">${form.targetCount || '-'}</div>
+            ` : `
+              <input
+                type="number"
+                min="1"
+                max="50"
+                value="${form.targetCount}"
+                onchange="updateScheduleModalForm('targetCount', Number(this.value))"
+              />
+            `}
+          </label>
+          <label class="form-field">
+            <span class="form-label">单次回复线程数</span>
+            ${isView ? `
+              <div class="schedule-view-value">${form.maxThreads || '-'}</div>
+            ` : `
+              <input
+                type="number"
+                min="1"
+                max="100"
+                value="${form.maxThreads}"
+                onchange="updateScheduleModalForm('maxThreads', Number(this.value))"
+              />
+            `}
+          </label>
+        </div>
+        ${!isView ? `
+          <div class="schedule-form-actions">
+            <button class="button-secondary" onclick="submitScheduleModal()" ${saving ? 'disabled' : ''}>
+              ${saving ? '保存中...' : '保存'}
+            </button>
+            <button class="button-secondary button-muted" onclick="closeScheduleModal()">取消</button>
+          </div>
+        ` : ''}
+      </section>
+    </div>
+  `;
+}
+
+function formatScheduleTime(hour, minute) {
+  if (hour === undefined || hour === null) return '-';
+  return `${padTime(hour)}:${padTime(minute || 0)}`;
+}
+
+function padTime(value) {
+  return String(value ?? 0).padStart(2, '0');
+}
+
+function formatTaskType(taskType) {
+  const map = {
+    source: '寻源打招呼',
+    followup: '主动沟通拉简历',
+    chat: '主动沟通',
+    download: '简历下载',
+    sync_jobs: '职位同步'
+  };
+  return map[taskType] || taskType;
+}
+
+function getJobNameByKey(jobKey) {
+  const job = state.jobs.find((j) => j.job_key === jobKey);
+  return job?.job_name || jobKey;
+}
+
+function openScheduleModal(mode, scheduleId) {
+  if (mode === 'create') {
+    state.scheduleModal = {
+      open: true,
+      mode: 'create',
+      scheduleId: null,
+      saving: false,
+      error: '',
+      form: {
+        jobKey: '',
+        taskType: 'source',
+        startHour: 9,
+        startMinute: 0,
+        intervalMinutes: 60,
+        targetCount: 5,
+        maxThreads: 20
+      }
+    };
+  } else {
+    const schedule = state.schedules.find((s) => String(s.id) === String(scheduleId));
+    if (!schedule) return;
+    const payload = schedule.payload || {};
+    state.scheduleModal = {
+      open: true,
+      mode,
+      scheduleId,
+      saving: false,
+      error: '',
+      form: {
+        jobKey: schedule.job_key,
+        taskType: schedule.task_type,
+        startHour: payload.startHour ?? 0,
+        startMinute: payload.startMinute ?? 0,
+        intervalMinutes: payload.intervalMinutes ?? 60,
+        targetCount: payload.targetCount ?? 5,
+        maxThreads: payload.maxThreads ?? 20
+      }
+    };
+  }
+  render();
+}
+
+function closeScheduleModal() {
+  state.scheduleModal = {
+    open: false,
+    mode: 'create',
+    scheduleId: null,
+    saving: false,
+    error: '',
+    form: {
+      jobKey: '',
+      taskType: 'source',
+      startHour: 9,
+      startMinute: 0,
+      intervalMinutes: 60,
+      targetCount: 5,
+      maxThreads: 20
+    }
+  };
+  render();
+}
+
+function switchScheduleModalToEdit() {
+  state.scheduleModal.mode = 'edit';
+  render();
+}
+
+function updateScheduleModalForm(field, value) {
+  state.scheduleModal.form[field] = value;
+}
+
+function handleScheduleModalTimeChange(timeStr) {
+  const [hours, minutes] = timeStr.split(':').map(Number);
+  state.scheduleModal.form.startHour = hours || 0;
+  state.scheduleModal.form.startMinute = minutes || 0;
+}
+
+async function submitScheduleModal() {
+  const { mode, form, scheduleId } = state.scheduleModal;
+
+  if (!form.jobKey) {
+    state.scheduleModal.error = '请选择一个岗位。';
+    render();
+    return;
+  }
+
+  if (!form.intervalMinutes || form.intervalMinutes < 10) {
+    state.scheduleModal.error = '执行间隔不能小于 10 分钟。';
+    render();
+    return;
+  }
+
+  state.scheduleModal.saving = true;
+  state.scheduleModal.error = '';
+  render();
+
+  try {
+    const cronDesc = `每天 ${padTime(form.startHour)}:${padTime(form.startMinute)} 起，每 ${form.intervalMinutes} 分钟`;
+    await fetchJson('/api/schedules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jobKey: form.jobKey,
+        taskType: form.taskType,
+        cronExpression: cronDesc,
+        enabled: true,
+        payload: {
+          startHour: form.startHour,
+          startMinute: form.startMinute,
+          intervalMinutes: form.intervalMinutes,
+          targetCount: form.targetCount,
+          maxThreads: form.maxThreads
+        }
+      })
+    });
+
+    closeScheduleModal();
+    await loadData();
+  } catch (error) {
+    state.scheduleModal.error = `保存失败：${error.message}`;
+  } finally {
+    state.scheduleModal.saving = false;
+    render();
+  }
+}
+
+async function toggleScheduleEnabled(id, enabled) {
+  try {
+    await fetchJson(`/api/schedules/${id}/toggle`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled })
+    });
+    await loadData();
+  } catch (error) {
+    alert(`切换失败：${error.message}`);
+  }
+}
+
+async function deleteSchedule(id) {
+  if (!confirm('确认删除该定时任务？')) return;
+
+  try {
+    await fetchJson(`/api/schedules/${id}`, { method: 'DELETE' });
+    await loadData();
+  } catch (error) {
+    alert(`删除失败：${error.message}`);
+  }
 }
 
 function renderHealth() {
