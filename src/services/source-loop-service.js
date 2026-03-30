@@ -100,15 +100,15 @@ class SourceLoopService {
       // Non-fatal
     }
 
-    // Phase 1c: Navigate to recommend page if not already there
+    // Phase 1c: Always reset to recommend initial URL to clear stale tab state
     try {
-      const targetInfo = await this.bossCliRunner.inspectTarget({ runId });
-      const currentUrl = targetInfo?.currentUrl || '';
-      if (!currentUrl.includes('/web/chat/recommend')) {
-        await this.bossCliRunner.navigateTo({ runId, url: 'https://www.zhipin.com/web/chat/recommend' });
-      }
+      await this.bossCliRunner.navigateTo({
+        runId,
+        url: buildRecommendInitialUrl(jobContext.bossEncryptJobId)
+      });
     } catch (error) {
-      // Non-fatal: proceed and let inspectRecommendState detect the problem
+      await this.#failRun(runId, `recommend_page_navigation_failed:${error.message}`, stats);
+      return { ok: false, stats, reason: 'recommend_page_unavailable' };
     }
 
     // Phase 2: Wait for recommend iframe to load (poll up to 10s)
@@ -510,6 +510,14 @@ function buildJobRequirementText(jobContext) {
   }
 
   return parts.join('\n') || '(无岗位信息)';
+}
+
+function buildRecommendInitialUrl(jobId) {
+  if (!jobId) {
+    return 'https://www.zhipin.com/web/chat/recommend';
+  }
+
+  return `https://www.zhipin.com/web/chat/recommend?jobid=${encodeURIComponent(jobId)}`;
 }
 
 module.exports = {

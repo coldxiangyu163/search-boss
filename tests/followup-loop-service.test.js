@@ -177,7 +177,7 @@ test('FollowupLoopService executes correct workflow: navigate, filter job, filte
 
   const commandOrder = bossCliRunner.calls.map((c) => c.command);
   assert.equal(commandOrder[0], 'bindTarget');
-  assert.equal(commandOrder[1], 'inspectTarget');
+  assert.equal(commandOrder[1], 'navigateTo');
   assert.equal(commandOrder[2], 'selectChatJobFilter');
   assert.equal(commandOrder[3], 'selectChatUnreadFilter');
   assert.equal(commandOrder[4], 'inspectVisibleChatList');
@@ -213,7 +213,7 @@ test('FollowupLoopService navigates to chat page when not already there', async 
   assert.equal(navCall.url, 'https://www.zhipin.com/web/chat/index');
 });
 
-test('FollowupLoopService skips navigation when already on chat page', async () => {
+test('FollowupLoopService always refreshes chat initial url even when already on chat page', async () => {
   const bossCliRunner = createMockBossCliRunner({
     visibleThreads: [],
     inspectResult: { ok: true, currentUrl: 'https://www.zhipin.com/web/chat/index' }
@@ -228,7 +228,8 @@ test('FollowupLoopService skips navigation when already on chat page', async () 
   await service.run({ runId: 302, jobKey: '面点师傅（B0038011）_8eca6cad' });
 
   const navCall = bossCliRunner.calls.find((c) => c.command === 'navigateTo');
-  assert.equal(navCall, undefined);
+  assert.ok(navCall);
+  assert.equal(navCall.url, 'https://www.zhipin.com/web/chat/index');
 });
 
 test('FollowupLoopService downloads resume when attachment present in followup mode', async () => {

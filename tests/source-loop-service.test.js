@@ -290,6 +290,34 @@ test('SourceLoopService handles already-chatting candidates', async () => {
   assert.equal(result.stats.greeted, 2);
 });
 
+test('SourceLoopService always refreshes recommend initial url before processing', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    listResult: makeCandidateList([
+      { geekId: 'geek-1', name: '张三' }
+    ])
+  });
+
+  const agentService = createMockAgentService();
+  const llmEvaluator = createMockLlmEvaluator([
+    { action: 'greet', tier: 'A', reason: 'good', facts: {} }
+  ]);
+
+  const service = new SourceLoopService({
+    bossCliRunner,
+    agentService,
+    llmEvaluator,
+    targetCount: 1,
+    candidateDelayMin: 0,
+    candidateDelayMax: 0
+  });
+
+  await service.run({ runId: 109, jobKey: '测试岗位_abc' });
+
+  const navCall = bossCliRunner.calls.find((call) => call.command === 'navigateTo');
+  assert.ok(navCall);
+  assert.equal(navCall.url, 'https://www.zhipin.com/web/chat/recommend?jobid=enc-job-1');
+});
+
 test('SourceLoopService records checkpoint events', async () => {
   const bossCliRunner = createMockBossCliRunner({
     listResult: makeCandidateList([

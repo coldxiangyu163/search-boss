@@ -68,16 +68,12 @@ class FollowupLoopService {
       // Non-fatal
     }
 
-    // Phase 2: Navigate to chat page if not already there
+    // Phase 2: Always reset to chat initial URL to clear stale thread state
     try {
-      const targetInfo = await this.bossCliRunner.inspectTarget({ runId });
-      const currentUrl = targetInfo?.currentUrl || '';
-      if (!currentUrl.includes('/web/chat/index')) {
-        await this.bossCliRunner.navigateTo({
-          runId,
-          url: 'https://www.zhipin.com/web/chat/index'
-        });
-      }
+      await this.bossCliRunner.navigateTo({
+        runId,
+        url: 'https://www.zhipin.com/web/chat/index'
+      });
     } catch (error) {
       await this.#failRun(runId, `chat_page_navigation_failed:${error.message}`, stats);
       return { ok: false, stats, reason: 'chat_page_unavailable' };
