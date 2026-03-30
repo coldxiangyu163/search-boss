@@ -217,6 +217,31 @@ class BossCliRunner {
     ]);
   }
 
+  async scrollCardIntoView({ runId, cardIndex }) {
+    return this.#run([
+      'recommend-scroll-card',
+      '--run-id', String(runId),
+      '--card-index', String(cardIndex)
+    ]);
+  }
+
+  async switchRecommendToLatest({ runId }) {
+    return this.#run(['recommend-switch-latest', '--run-id', String(runId)]);
+  }
+
+  async clickAtCoords({ runId, x, y }) {
+    return this.#run([
+      'click-at-coords',
+      '--run-id', String(runId),
+      '--x', String(x),
+      '--y', String(y)
+    ]);
+  }
+
+  async closeRecommendPopup({ runId }) {
+    return this.#run(['recommend-close-popup', '--run-id', String(runId)]);
+  }
+
   async switchRecommendToGridView({ runId }) {
     return this.#run(['recommend-switch-grid', '--run-id', String(runId)]);
   }

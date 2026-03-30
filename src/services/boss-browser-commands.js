@@ -1619,6 +1619,11 @@ function buildInspectRecommendListExpression({ limit = 10 }) {
           greetY = Math.round(frameRect.top + btnRect.top + btnRect.height / 2);
         }
 
+        // Compute card center coordinates for clicking to open detail popup
+        const wrapRect = wrap.getBoundingClientRect();
+        const cardX = Math.round(frameRect.left + wrapRect.left + wrapRect.width / 3);
+        const cardY = Math.round(frameRect.top + wrapRect.top + wrapRect.height / 2);
+
         candidates.push({
           index: i,
           geekId,
@@ -1627,7 +1632,9 @@ function buildInspectRecommendListExpression({ limit = 10 }) {
           hasGreetBtn,
           greetBtnText,
           greetX,
-          greetY
+          greetY,
+          cardX,
+          cardY
         });
       }
 
@@ -1662,6 +1669,141 @@ async function clickRecommendGreetByCoords({
     resultText: result?.resultText || '',
     alreadyChatting: result?.alreadyChatting || false
   };
+}
+
+async function scrollRecommendCardIntoView({
+  cdpClient,
+  targetId,
+  urlPrefix,
+  cardIndex
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: `(() => {
+      try {
+        const recFrame = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+        const recDoc = recFrame?.contentDocument;
+        if (!recFrame || !recDoc) return JSON.stringify({ ok: false, reason: 'boss_recommend_frame_unavailable' });
+        const wraps = recDoc.querySelectorAll('.candidate-card-wrap');
+        const wrap = wraps[${Number(cardIndex)}];
+        if (!wrap) return JSON.stringify({ ok: false, reason: 'boss_recommend_card_not_found' });
+        wrap.scrollIntoView({ block: 'center', behavior: 'instant' });
+        const frameRect = recFrame.getBoundingClientRect();
+        const rect = wrap.getBoundingClientRect();
+        return JSON.stringify({
+          ok: true,
+          cardX: Math.round(frameRect.left + rect.left + rect.width / 3),
+          cardY: Math.round(frameRect.top + rect.top + rect.height / 2)
+        });
+      } catch (err) {
+        return JSON.stringify({ ok: false, reason: 'boss_recommend_scroll_error:' + (err && err.message || String(err)) });
+      }
+    })()`
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_recommend_scroll_failed');
+  }
+
+  await randomDelay(300, 600);
+  return result;
+}
+
+async function switchRecommendToLatest({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const target = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: `(() => {
+      try {
+        const recFrame = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+        const recDoc = recFrame?.contentDocument;
+        if (!recFrame || !recDoc) return JSON.stringify({ ok: false, reason: 'boss_recommend_frame_unavailable' });
+        const tabs = Array.from(recDoc.querySelectorAll('.tab-item'));
+        const latestTab = tabs.find(t => (t.textContent || '').trim() === '最新');
+        if (!latestTab) return JSON.stringify({ ok: false, reason: 'boss_recommend_latest_tab_not_found' });
+        if (latestTab.classList.contains('curr')) return JSON.stringify({ ok: true, alreadyActive: true });
+        const frameRect = recFrame.getBoundingClientRect();
+        const rect = latestTab.getBoundingClientRect();
+        return JSON.stringify({
+          ok: true,
+          alreadyActive: false,
+          x: frameRect.left + rect.left + rect.width / 2,
+          y: frameRect.top + rect.top + rect.height / 2
+        });
+      } catch (err) {
+        return JSON.stringify({ ok: false, reason: 'boss_recommend_latest_tab_error:' + (err && err.message || String(err)) });
+      }
+    })()`
+  });
+
+  if (!target?.ok) {
+    throw new Error(target?.reason || 'boss_recommend_latest_tab_failed');
+  }
+
+  if (target.alreadyActive) {
+    return { ok: true, alreadyActive: true };
+  }
+
+  await cdpClient.dispatchMouseClick({ targetId, urlPrefix, x: target.x, y: target.y });
+  await randomDelay(2_000, 3_000);
+  return { ok: true, alreadyActive: false };
+}
+
+async function clickAtCoords({
+  cdpClient,
+  targetId,
+  urlPrefix,
+  x,
+  y
+} = {}) {
+  await cdpClient.dispatchMouseClick({ targetId, urlPrefix, x, y });
+  await randomDelay(1_000, 2_000);
+  return { ok: true, x, y };
+}
+
+async function closeRecommendPopup({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const target = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: `(() => {
+      try {
+        const recFrame = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+        const recDoc = recFrame?.contentDocument;
+        if (!recFrame || !recDoc) return JSON.stringify({ ok: false, reason: 'boss_recommend_frame_unavailable' });
+        const closeBtn = recDoc.querySelector('.boss-popup__close');
+        if (!closeBtn) return JSON.stringify({ ok: false, reason: 'boss_recommend_popup_close_not_found' });
+        const frameRect = recFrame.getBoundingClientRect();
+        const rect = closeBtn.getBoundingClientRect();
+        return JSON.stringify({
+          ok: true,
+          x: frameRect.left + rect.left + rect.width / 2,
+          y: frameRect.top + rect.top + rect.height / 2
+        });
+      } catch (err) {
+        return JSON.stringify({ ok: false, reason: 'boss_recommend_popup_close_error:' + (err && err.message || String(err)) });
+      }
+    })()`
+  });
+
+  if (!target?.ok) {
+    return { ok: true, closed: false, reason: target?.reason || 'no_popup' };
+  }
+
+  await cdpClient.dispatchMouseClick({ targetId, urlPrefix, x: target.x, y: target.y });
+  await randomDelay(500, 1_000);
+  return { ok: true, closed: true };
 }
 
 async function switchRecommendToGridView({
@@ -1893,4 +2035,8 @@ module.exports = {
   switchRecommendToGridView,
   inspectRecommendList,
   clickRecommendGreetByCoords,
+  closeRecommendPopup,
+  clickAtCoords,
+  switchRecommendToLatest,
+  scrollRecommendCardIntoView,
 };

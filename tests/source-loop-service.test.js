@@ -37,13 +37,29 @@ function createMockBossCliRunner({
       calls.push({ command: 'inspectRecommendState', ...opts });
       return { ok: true, detailOpen: true };
     },
+    async switchRecommendToLatest(opts) {
+      calls.push({ command: 'switchRecommendToLatest', ...opts });
+      return { ok: true, alreadyActive: true };
+    },
     async inspectRecommendList(opts) {
       calls.push({ command: 'inspectRecommendList', ...opts });
       return listResult;
     },
-    async clickRecommendGreetByCoords(opts) {
-      calls.push({ command: 'clickRecommendGreetByCoords', ...opts });
-      return greetResults[greetIndex++] || { ok: true, greeted: true };
+    async scrollCardIntoView(opts) {
+      calls.push({ command: 'scrollCardIntoView', ...opts });
+      return { ok: true, cardX: 300, cardY: 300 };
+    },
+    async clickAtCoords(opts) {
+      calls.push({ command: 'clickAtCoords', ...opts });
+      return { ok: true };
+    },
+    async clickRecommendGreet(opts) {
+      calls.push({ command: 'clickRecommendGreet', ...opts });
+      return greetResults[greetIndex++] || { ok: true, greeted: true, alreadyChatting: false };
+    },
+    async closeRecommendPopup(opts) {
+      calls.push({ command: 'closeRecommendPopup', ...opts });
+      return { ok: true, closed: true };
     }
   };
 }
@@ -119,7 +135,9 @@ function makeCandidateList(items) {
       hasGreetBtn: item.hasGreetBtn !== false,
       greetBtnText: item.alreadyChatting ? '继续沟通' : '打招呼',
       greetX: item.greetX || 500 + i * 10,
-      greetY: item.greetY || 100 + i * 50
+      greetY: item.greetY || 100 + i * 50,
+      cardX: item.cardX || 300 + i * 10,
+      cardY: item.cardY || 100 + i * 50
     }))
   };
 }
@@ -381,7 +399,9 @@ test('SourceLoopService sends card text to LLM evaluator and logs evaluation', a
         hasGreetBtn: true,
         greetBtnText: '打招呼',
         greetX: 500,
-        greetY: 100
+        greetY: 100,
+        cardX: 300,
+        cardY: 100
       }]
     }
   });

@@ -515,6 +515,55 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
     return { ok: true, ...result };
   }
 
+  if (options.command === 'recommend-scroll-card') {
+    const session = await sessionStore.loadSession(options.runId);
+    if (options.cardIndex === undefined) {
+      throw new Error('Missing --card-index');
+    }
+    const result = await browserCommands.scrollRecommendCardIntoView({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      cardIndex: Number(options.cardIndex)
+    });
+    return { ok: true, ...result };
+  }
+
+  if (options.command === 'recommend-switch-latest') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.switchRecommendToLatest({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+    return { ok: true, ...result };
+  }
+
+  if (options.command === 'click-at-coords') {
+    const session = await sessionStore.loadSession(options.runId);
+    if (!options.x || !options.y) {
+      throw new Error('Missing --x or --y');
+    }
+    const result = await browserCommands.clickAtCoords({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      x: Number(options.x),
+      y: Number(options.y)
+    });
+    return { ok: true, ...result };
+  }
+
+  if (options.command === 'recommend-close-popup') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.closeRecommendPopup({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+    return { ok: true, ...result };
+  }
+
   if (options.command === 'recommend-switch-grid') {
     const session = await sessionStore.loadSession(options.runId);
     const result = await browserCommands.switchRecommendToGridView({

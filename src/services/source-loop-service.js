@@ -109,6 +109,16 @@ class SourceLoopService {
       return { ok: false, stats, reason: 'recommend_job_select_failed' };
     }
 
+    // Phase 2c: Switch to "最新" tab for stable list without similar-geek interference
+    try {
+      const latestResult = await this.bossCliRunner.switchRecommendToLatest({ runId });
+      if (!latestResult.alreadyActive) {
+        await new Promise((r) => setTimeout(r, 2_000));
+      }
+    } catch (error) {
+      // Non-fatal: proceed with current tab
+    }
+
     // Phase 3: Read candidate list and evaluate each via LLM, greet through popup
     let listResult;
     try {
@@ -320,34 +330,65 @@ class SourceLoopService {
   }
 
   async #executeGreetViaPopup({ runId, jobKey, bossEncryptGeekId, candidateName, candidate, stats }) {
-    // Try coordinate click on the card's greet button first (list mode)
-    if (candidate?.greetX && candidate?.greetY) {
-      try {
-        await this.bossCliRunner.clickRecommendGreetByCoords({
-          runId,
-          x: candidate.greetX,
-          y: candidate.greetY
-        });
-      } catch (error) {
-        await this.#recordEvent(runId, {
-          eventId: `source-loop-greet-error:${runId}:${bossEncryptGeekId}`,
-          eventType: 'source_loop_error',
-          stage: 'source_loop',
-          message: `greet click failed: ${error.message}`,
-          payload: { error: error.message, bossEncryptGeekId }
-        });
-        return { greeted: false, alreadyChatting: false };
-      }
-    } else {
+    // Step 1: Click card to open detail popup
+    if (!candidate?.cardX || !candidate?.cardY) {
       await this.#recordEvent(runId, {
         eventId: `source-loop-greet-error:${runId}:${bossEncryptGeekId}`,
         eventType: 'source_loop_error',
         stage: 'source_loop',
-        message: 'no greet button coordinates',
+        message: 'no card coordinates for popup',
         payload: { bossEncryptGeekId }
       });
       return { greeted: false, alreadyChatting: false };
     }
+
+    // Scroll the card into view and get fresh coordinates
+    let clickX = candidate.cardX;
+    let clickY = candidate.cardY;
+    try {
+      const scrollResult = await this.bossCliRunner.scrollCardIntoView({
+        runId,
+        cardIndex: candidate.index
+      });
+      if (scrollResult?.cardX && scrollResult?.cardY) {
+        clickX = scrollResult.cardX;
+        clickY = scrollResult.cardY;
+      }
+    } catch (error) {
+      // Fall back to original coordinates
+    }
+
+    try {
+      await this.bossCliRunner.clickAtCoords({ runId, x: clickX, y: clickY });
+    } catch (error) {
+      // Non-fatal: popup may still have opened
+    }
+
+    // Wait for popup to load
+    const delayMs = this.candidateDelayMin + Math.random() * (this.candidateDelayMax - this.candidateDelayMin);
+    await new Promise((r) => setTimeout(r, delayMs));
+
+    // Step 2: Click greet button inside the popup
+    try {
+      const greetResult = await this.bossCliRunner.clickRecommendGreet({ runId });
+      if (greetResult.alreadyChatting) {
+        try { await this.bossCliRunner.closeRecommendPopup({ runId }); } catch (_) {}
+        return { greeted: false, alreadyChatting: true };
+      }
+    } catch (error) {
+      try { await this.bossCliRunner.closeRecommendPopup({ runId }); } catch (_) {}
+      await this.#recordEvent(runId, {
+        eventId: `source-loop-greet-error:${runId}:${bossEncryptGeekId}`,
+        eventType: 'source_loop_error',
+        stage: 'source_loop',
+        message: `popup greet failed: ${error.message}`,
+        payload: { error: error.message, bossEncryptGeekId }
+      });
+      return { greeted: false, alreadyChatting: false };
+    }
+
+    // Step 3: Close popup after greeting
+    try { await this.bossCliRunner.closeRecommendPopup({ runId }); } catch (_) {}
 
     // Record greet action
     const dedupeKey = `greet:${jobKey}:${bossEncryptGeekId}`;
