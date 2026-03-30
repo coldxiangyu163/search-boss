@@ -25,6 +25,7 @@ class FollowupLoopService {
       processed: 0,
       replied: 0,
       resumeRequested: 0,
+      consentAccepted: 0,
       attachmentFound: 0,
       resumeDownloaded: 0,
       skipped: 0,
@@ -263,6 +264,9 @@ class FollowupLoopService {
       candidateId = await this.#resolveCandidateId({ encryptUid });
     }
 
+    // Step 2c: Check and accept resume consent if pending
+    await this.#handleResumeConsentIfNeeded({ runId, encryptUid, candidateName: thread.name, stats });
+
     // Step 3: Check attachment state
     let attachmentState;
     try {
@@ -433,6 +437,45 @@ class FollowupLoopService {
 
     const raw = await this.llmEvaluator.chat({ systemPrompt, userPrompt });
     return parseChatDecision(raw);
+  }
+
+  async #handleResumeConsentIfNeeded({ runId, encryptUid, candidateName, stats }) {
+    let consentState;
+    try {
+      consentState = await this.bossCliRunner.inspectResumeConsentState({ runId });
+    } catch (error) {
+      return;
+    }
+
+    if (!consentState?.consentPending) {
+      return;
+    }
+
+    try {
+      const result = await this.bossCliRunner.acceptResumeConsent({ runId });
+      stats.consentAccepted += 1;
+
+      await this.#recordEvent(runId, {
+        eventId: `followup-loop-consent-accepted:${runId}:${encryptUid}`,
+        eventType: 'resume_consent_accepted',
+        stage: 'followup_loop',
+        message: `accepted resume consent from ${candidateName}`,
+        payload: {
+          encryptUid,
+          candidateName,
+          source: consentState.source,
+          attachmentAppeared: result?.attachmentAppeared || false
+        }
+      });
+    } catch (error) {
+      await this.#recordEvent(runId, {
+        eventId: `followup-loop-consent-error:${runId}:${encryptUid}`,
+        eventType: 'followup_loop_warning',
+        stage: 'followup_loop',
+        message: `resume consent accept failed: ${error.message}`,
+        payload: { error: error.message, encryptUid, candidateName }
+      });
+    }
   }
 
   async #executeResumeDownload({ runId, jobKey, encryptUid, candidateName, candidateId, stats }) {

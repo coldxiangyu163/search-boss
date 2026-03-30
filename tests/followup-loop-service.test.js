@@ -7,6 +7,7 @@ function createMockBossCliRunner({
   visibleThreads = [],
   threadStates = {},
   attachmentStates = {},
+  consentStateMap = {},
   messageResults = {},
   previewMeta = {},
   downloadResults = {},
@@ -86,6 +87,15 @@ function createMockBossCliRunner({
     async bringToFront(opts) {
       calls.push({ command: 'bringToFront', ...opts });
       return { ok: true };
+    },
+    async inspectResumeConsentState(opts) {
+      calls.push({ command: 'inspectResumeConsentState', ...opts });
+      const consentStates = consentStateMap || {};
+      return consentStates[lastClickedDataId] || { ok: true, consentPending: false, source: null };
+    },
+    async acceptResumeConsent(opts) {
+      calls.push({ command: 'acceptResumeConsent', ...opts });
+      return { ok: true, accepted: true, source: 'notice_bar', attachmentAppeared: true };
     }
   };
 }
@@ -199,8 +209,9 @@ test('FollowupLoopService executes correct workflow: navigate, filter job, filte
   assert.equal(commandOrder[5], 'inspectVisibleChatList');
   assert.equal(commandOrder[6], 'clickChatRow');
   assert.equal(commandOrder[7], 'inspectChatThreadState');
-  assert.equal(commandOrder[8], 'inspectAttachmentState');
-  assert.equal(commandOrder[9], 'readOpenThreadMessages');
+  assert.equal(commandOrder[8], 'inspectResumeConsentState');
+  assert.equal(commandOrder[9], 'inspectAttachmentState');
+  assert.equal(commandOrder[10], 'readOpenThreadMessages');
 
   const jobFilterCall = bossCliRunner.calls.find((c) => c.command === 'selectChatJobFilter');
   assert.equal(jobFilterCall.jobName, '面点师傅');
@@ -682,6 +693,77 @@ test('FollowupLoopService falls back to findLatestCandidateByGeekId when upsert 
 
   assert.equal(result.ok, true);
   assert.equal(result.stats.replied, 1);
+});
+
+test('FollowupLoopService accepts resume consent before checking attachment state', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    visibleThreads: [
+      { name: '陶洪', dataId: '541-0', index: 0, hasUnread: true }
+    ],
+    consentStateMap: {
+      '541-0': { ok: true, consentPending: true, source: 'notice_bar' }
+    },
+    attachmentStates: {
+      '541-0': { ok: true, present: true, buttonEnabled: true, fileName: '陶洪简历.pdf' }
+    }
+  });
+
+  const agentService = createMockAgentService();
+  const llmEvaluator = createMockLlmEvaluator([]);
+
+  const service = new FollowupLoopService({
+    bossCliRunner, agentService, llmEvaluator,
+    threadDelayMin: 0, threadDelayMax: 0
+  });
+
+  const result = await service.run({ runId: 314, jobKey: '面点师傅（B0038011）_8eca6cad' });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stats.consentAccepted, 1);
+  assert.equal(result.stats.attachmentFound, 1);
+  assert.equal(result.stats.resumeDownloaded, 1);
+
+  const consentCalls = bossCliRunner.calls.filter((c) => c.command === 'acceptResumeConsent');
+  assert.equal(consentCalls.length, 1, 'should call acceptResumeConsent');
+
+  const attachmentCalls = bossCliRunner.calls.filter((c) => c.command === 'inspectAttachmentState');
+  assert.equal(attachmentCalls.length, 1, 'should check attachment state after consent');
+
+  const consentEvents = agentService.events.filter((e) => e.eventType === 'resume_consent_accepted');
+  assert.equal(consentEvents.length, 1);
+  assert.equal(consentEvents[0].payload.source, 'notice_bar');
+});
+
+test('FollowupLoopService skips consent when not pending', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    visibleThreads: [
+      { name: '张三', dataId: '123-0', index: 0, hasUnread: true }
+    ],
+    messageResults: {
+      '123-0': { ok: true, messages: [{ from: '张三', type: 'text', text: '在的', time: '1' }] }
+    }
+  });
+
+  const agentService = createMockAgentService();
+  const llmEvaluator = createMockLlmEvaluator([
+    { action: 'skip', reason: 'ack' }
+  ]);
+
+  const service = new FollowupLoopService({
+    bossCliRunner, agentService, llmEvaluator,
+    threadDelayMin: 0, threadDelayMax: 0
+  });
+
+  const result = await service.run({ runId: 315, jobKey: '面点师傅（B0038011）_8eca6cad' });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stats.consentAccepted, 0);
+
+  const consentCheckCalls = bossCliRunner.calls.filter((c) => c.command === 'inspectResumeConsentState');
+  assert.equal(consentCheckCalls.length, 1, 'should still check consent state');
+
+  const acceptCalls = bossCliRunner.calls.filter((c) => c.command === 'acceptResumeConsent');
+  assert.equal(acceptCalls.length, 0, 'should not call acceptResumeConsent when not pending');
 });
 
 test('parseChatDecision parses valid reply', () => {

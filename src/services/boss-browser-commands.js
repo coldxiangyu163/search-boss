@@ -2223,6 +2223,167 @@ function buildCloseResumeDetailExpression() {
   })()`;
 }
 
+async function inspectResumeConsentState({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildResumeConsentStateExpression()
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_resume_consent_state_unavailable');
+  }
+
+  return result;
+}
+
+function buildResumeConsentStateExpression() {
+  return `(() => {
+    try {
+      const threadPane = document.querySelector('.chat-conversation, .conversation-box, .chat-message-list, .conversation-message');
+      if (!threadPane) {
+        return JSON.stringify({ ok: true, consentPending: false, source: null });
+      }
+
+      // 1. Check the bottom notice bar (sticky, most reliable)
+      const noticeBar = threadPane.querySelector('.notice-list');
+      if (noticeBar && noticeBar.offsetWidth > 0) {
+        const barText = (noticeBar.textContent || '').replace(/\\s+/g, ' ').trim();
+        if (barText.includes('发送附件简历') && barText.includes('同意')) {
+          const acceptLink = noticeBar.querySelector('a.btn');
+          if (acceptLink && acceptLink.offsetWidth > 0) {
+            return JSON.stringify({ ok: true, consentPending: true, source: 'notice_bar' });
+          }
+        }
+      }
+
+      // 2. Check in-message consent cards
+      const cards = threadPane.querySelectorAll('.message-card-wrap.boss-green');
+      for (const card of cards) {
+        const text = (card.textContent || '').replace(/\\s+/g, ' ').trim();
+        if (text.includes('发送附件简历') && text.includes('同意')) {
+          const acceptBtn = Array.from(card.querySelectorAll('.card-btn'))
+            .find((btn) => (btn.textContent || '').trim() === '同意' && btn.offsetWidth > 0);
+          if (acceptBtn) {
+            return JSON.stringify({ ok: true, consentPending: true, source: 'message_card' });
+          }
+        }
+      }
+
+      return JSON.stringify({ ok: true, consentPending: false, source: null });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_resume_consent_state_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
+async function acceptResumeConsent({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  // Step 1: Locate the accept button coordinates
+  const target = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildAcceptResumeConsentTargetExpression()
+  });
+
+  if (!target?.ok || !target?.found) {
+    throw new Error(target?.reason || 'boss_resume_consent_accept_button_not_found');
+  }
+
+  // Step 2: Real mouse click on the accept button
+  await cdpClient.dispatchMouseClick({
+    targetId,
+    urlPrefix,
+    x: target.x,
+    y: target.y
+  });
+
+  // Step 3: Wait for PDF card to appear (poll up to 3 times, 1s apart)
+  let attachmentAppeared = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    try {
+      const state = await inspectAttachmentState({ cdpClient, targetId, urlPrefix });
+      if (state?.present) {
+        attachmentAppeared = true;
+        break;
+      }
+    } catch (_) {
+      // ignore transient errors during stabilization
+    }
+  }
+
+  return {
+    ok: true,
+    accepted: true,
+    source: target.source,
+    attachmentAppeared
+  };
+}
+
+function buildAcceptResumeConsentTargetExpression() {
+  return `(() => {
+    try {
+      const threadPane = document.querySelector('.chat-conversation, .conversation-box, .chat-message-list, .conversation-message');
+      if (!threadPane) {
+        return JSON.stringify({ ok: true, found: false, reason: 'no_thread_pane' });
+      }
+
+      // 1. Prefer the bottom notice bar accept button (fixed position, always visible)
+      const noticeBar = threadPane.querySelector('.notice-list');
+      if (noticeBar && noticeBar.offsetWidth > 0) {
+        const barText = (noticeBar.textContent || '').replace(/\\s+/g, ' ').trim();
+        if (barText.includes('发送附件简历') && barText.includes('同意')) {
+          const acceptLink = noticeBar.querySelector('a.btn');
+          if (acceptLink && acceptLink.offsetWidth > 0) {
+            const rect = acceptLink.getBoundingClientRect();
+            return JSON.stringify({
+              ok: true,
+              found: true,
+              source: 'notice_bar',
+              x: rect.x + rect.width / 2,
+              y: rect.y + rect.height / 2
+            });
+          }
+        }
+      }
+
+      // 2. Fallback to in-message card accept button
+      const cards = threadPane.querySelectorAll('.message-card-wrap.boss-green');
+      for (const card of cards) {
+        const text = (card.textContent || '').replace(/\\s+/g, ' ').trim();
+        if (text.includes('发送附件简历') && text.includes('同意')) {
+          const acceptBtn = Array.from(card.querySelectorAll('.card-btn'))
+            .find((btn) => (btn.textContent || '').trim() === '同意' && btn.offsetWidth > 0);
+          if (acceptBtn) {
+            const rect = acceptBtn.getBoundingClientRect();
+            return JSON.stringify({
+              ok: true,
+              found: true,
+              source: 'message_card',
+              x: rect.x + rect.width / 2,
+              y: rect.y + rect.height / 2
+            });
+          }
+        }
+      }
+
+      return JSON.stringify({ ok: true, found: false, reason: 'no_consent_accept_button' });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_resume_consent_target_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
 module.exports = {
   getUrl,
   evaluateJson,
@@ -2240,6 +2401,8 @@ module.exports = {
   openChatThread,
   inspectChatThreadState,
   inspectAttachmentState,
+  inspectResumeConsentState,
+  acceptResumeConsent,
   inspectResumePreviewMeta,
   downloadResumeAttachment,
   bringToFront,

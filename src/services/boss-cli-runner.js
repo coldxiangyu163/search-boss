@@ -321,6 +321,22 @@ class BossCliRunner {
     ]);
   }
 
+  async inspectResumeConsentState({ runId }) {
+    return this.#run([
+      'resume-consent-state',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
+  async acceptResumeConsent({ runId }) {
+    return this.#run([
+      'resume-accept-consent',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
   async resumeDownload({ runId, outputPath }) {
     return this.#run([
       'resume-download',

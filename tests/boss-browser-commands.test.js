@@ -12,6 +12,8 @@ const {
   openChatThread,
   inspectChatThreadState,
   inspectAttachmentState,
+  inspectResumeConsentState,
+  acceptResumeConsent,
   inspectResumePreviewMeta,
   downloadResumeAttachment,
   closeResumeDetail
@@ -541,6 +543,112 @@ test('closeResumeDetail closes resume preview iframe via evaluate', async () => 
   assert.match(calls[0].expression, /attachment-iframe|preview4boss|dialog-wrap/);
 });
 
+test('inspectResumeConsentState detects pending consent from notice bar', async () => {
+  const acceptLink = createFakeNode({
+    tagName: 'A',
+    className: 'btn',
+    textContent: '同意',
+    attributes: {}
+  });
+  const noticeBar = createFakeNode({
+    className: 'notice-list notice-blue-list',
+    textContent: '对方想发送附件简历给您，您是否同意 拒绝 同意',
+    querySelectorMap: {
+      'a.btn': acceptLink
+    }
+  });
+  const threadPane = createFakeNode({
+    className: 'chat-conversation',
+    querySelectorMap: {
+      '.notice-list': noticeBar
+    },
+    querySelectorAllMap: {
+      '.message-card-wrap.boss-green': []
+    }
+  });
+  const document = createFakeDocument({
+    querySelectorMap: {
+      '.chat-conversation, .conversation-box, .chat-message-list, .conversation-message': threadPane
+    }
+  });
+  const cdpClient = createVmCdpClient({ document });
+
+  const result = await inspectResumeConsentState({
+    cdpClient,
+    targetId: 'target-1'
+  });
+
+  assert.equal(result.consentPending, true);
+  assert.equal(result.source, 'notice_bar');
+});
+
+test('inspectResumeConsentState returns false when no consent card is present', async () => {
+  const threadPane = createFakeNode({
+    className: 'chat-conversation',
+    querySelectorMap: {
+      '.notice-list': null
+    },
+    querySelectorAllMap: {
+      '.message-card-wrap.boss-green': []
+    }
+  });
+  const document = createFakeDocument({
+    querySelectorMap: {
+      '.chat-conversation, .conversation-box, .chat-message-list, .conversation-message': threadPane
+    }
+  });
+  const cdpClient = createVmCdpClient({ document });
+
+  const result = await inspectResumeConsentState({
+    cdpClient,
+    targetId: 'target-1'
+  });
+
+  assert.equal(result.consentPending, false);
+  assert.equal(result.source, null);
+});
+
+test('acceptResumeConsent clicks accept and polls for attachment', async () => {
+  let callCount = 0;
+  const cdpClient = {
+    evaluate: async (payload) => {
+      callCount += 1;
+      if (callCount === 1) {
+        return {
+          type: 'string',
+          value: JSON.stringify({
+            ok: true,
+            found: true,
+            source: 'notice_bar',
+            x: 948,
+            y: 553
+          })
+        };
+      }
+      return {
+        type: 'string',
+        value: JSON.stringify({
+          ok: true,
+          present: true,
+          buttonEnabled: true,
+          fileName: '陶洪简历.pdf'
+        })
+      };
+    },
+    dispatchMouseClick: async () => {}
+  };
+
+  const result = await acceptResumeConsent({
+    cdpClient,
+    targetId: 'target-1'
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.accepted, true);
+  assert.equal(result.source, 'notice_bar');
+  assert.equal(result.attachmentAppeared, true);
+});
+
 function createVmCdpClient({ document, window = {} }) {
   return {
     evaluate: async (payload) => {
@@ -593,6 +701,8 @@ function createFakeNode({
   attributes = {},
   dataset = {},
   disabled = false,
+  offsetWidth = 100,
+  offsetHeight = 30,
   querySelectorMap = {},
   querySelectorAllMap = {}
 } = {}) {
@@ -603,6 +713,8 @@ function createFakeNode({
     className,
     dataset,
     disabled,
+    offsetWidth,
+    offsetHeight,
     clicked: false,
     click() {
       this.clicked = true;

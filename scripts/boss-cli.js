@@ -705,6 +705,34 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
     };
   }
 
+  if (options.command === 'resume-consent-state') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.inspectResumeConsentState({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
+  if (options.command === 'resume-accept-consent') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.acceptResumeConsent({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
   if (options.command === 'resume-preview-meta') {
     const session = await sessionStore.loadSession(options.runId);
     const result = await browserCommands.inspectResumePreviewMeta({
