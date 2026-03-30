@@ -94,7 +94,14 @@ function createMockAgentService() {
     events, messages, actions, attachments, completions, failures,
     candidateUpserts: [],
     async _getJobNanobotContext(jobKey) {
-      return { jobName: '面点师傅（B0038011）', bossEncryptJobId: 'enc-job-1', customRequirement: null };
+      return {
+        jobName: '面点师傅（B0038011）',
+        bossEncryptJobId: 'enc-job-1',
+        city: '重庆',
+        salary: '8-10K',
+        jdText: '负责门店面点制作与出品。',
+        customRequirement: null
+      };
     },
     async upsertCandidate(payload) {
       this.candidateUpserts.push(payload);
@@ -192,6 +199,77 @@ test('FollowupLoopService executes correct workflow: navigate, filter job, filte
   const clickCall = bossCliRunner.calls.find((c) => c.command === 'clickChatRow');
   assert.equal(clickCall.dataId, '123-0');
   assert.equal(clickCall.index, 0);
+});
+
+test('FollowupLoopService passes job city context to LLM and forbids placeholder replies', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    visibleThreads: [
+      { name: '张三', dataId: '123-0', index: 0, hasUnread: true }
+    ],
+    messageResults: {
+      '123-0': {
+        ok: true,
+        messages: [
+          { from: '张三', type: 'text', text: '这个岗位在哪上班？', time: '10:00' }
+        ]
+      }
+    }
+  });
+
+  const agentService = createMockAgentService();
+  const prompts = [];
+  const llmEvaluator = {
+    async chat(payload) {
+      prompts.push(payload);
+      return JSON.stringify({ action: 'skip', reason: 'captured' });
+    }
+  };
+
+  const service = new FollowupLoopService({
+    bossCliRunner, agentService, llmEvaluator,
+    threadDelayMin: 0, threadDelayMax: 0
+  });
+
+  await service.run({ runId: 3001, jobKey: '面点师傅（B0038011）_8eca6cad' });
+
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0].userPrompt, /工作地点：重庆/);
+  assert.match(prompts[0].userPrompt, /薪资范围：8-10K/);
+  assert.match(prompts[0].userPrompt, /岗位说明：负责门店面点制作与出品。/);
+  assert.match(prompts[0].userPrompt, /禁止输出`\[工作地点\]`、`\[薪资\]`这类占位符/);
+});
+
+test('FollowupLoopService resets chat page again after finishing processed threads', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    visibleThreads: [
+      { name: '张三', dataId: '123-0', index: 0, hasUnread: true }
+    ],
+    messageResults: {
+      '123-0': {
+        ok: true,
+        messages: [
+          { from: '张三', type: 'text', text: '你好，我对这个岗位感兴趣', time: '10:00' }
+        ]
+      }
+    }
+  });
+
+  const agentService = createMockAgentService();
+  const llmEvaluator = createMockLlmEvaluator([
+    { action: 'reply', replyText: '您好！欢迎了解岗位', reason: 'interested' }
+  ]);
+
+  const service = new FollowupLoopService({
+    bossCliRunner, agentService, llmEvaluator,
+    threadDelayMin: 0, threadDelayMax: 0
+  });
+
+  await service.run({ runId: 3002, jobKey: '面点师傅（B0038011）_8eca6cad' });
+
+  const navCalls = bossCliRunner.calls.filter((c) => c.command === 'navigateTo');
+  assert.equal(navCalls.length, 2);
+  assert.equal(navCalls[0].url, 'https://www.zhipin.com/web/chat/index');
+  assert.equal(navCalls[1].url, 'https://www.zhipin.com/web/chat/index');
 });
 
 test('FollowupLoopService navigates to chat page when not already there', async () => {
@@ -344,6 +422,11 @@ test('FollowupLoopService completes when no unread threads visible', async () =>
   assert.equal(result.stats.processed, 0);
   assert.equal(agentService.completions.length, 1);
   assert.equal(agentService.completions[0].payload.reason, 'no_unread_threads');
+
+  const navCalls = bossCliRunner.calls.filter((c) => c.command === 'navigateTo');
+  assert.equal(navCalls.length, 2);
+  assert.equal(navCalls[0].url, 'https://www.zhipin.com/web/chat/index');
+  assert.equal(navCalls[1].url, 'https://www.zhipin.com/web/chat/index');
 });
 
 test('FollowupLoopService fails when browser bind fails', async () => {

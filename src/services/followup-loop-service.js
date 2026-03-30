@@ -139,6 +139,7 @@ class FollowupLoopService {
         message: 'no unread threads visible',
         payload: { jobKey }
       });
+      await this.#resetChatPageAfterCompletion({ runId });
       await this.agentService.completeRun({
         runId,
         payload: { ...stats, reason: 'no_unread_threads' }
@@ -198,6 +199,7 @@ class FollowupLoopService {
       payload: summary
     });
 
+    await this.#resetChatPageAfterCompletion({ runId });
     await this.agentService.completeRun({ runId, payload: summary });
 
     return { ok: true, stats: summary };
@@ -409,6 +411,9 @@ class FollowupLoopService {
 
     const userPrompt = [
       `## 岗位：${jobContext.jobName || '未知'}`,
+      jobContext.city ? `工作地点：${jobContext.city}` : '',
+      jobContext.salary ? `薪资范围：${jobContext.salary}` : '',
+      jobContext.jdText ? `岗位说明：${String(jobContext.jdText).slice(0, 200)}` : '',
       `## 候选人：${candidateName}`,
       '',
       '## 最近对话',
@@ -419,6 +424,8 @@ class FollowupLoopService {
       '- reply：需要回复候选人（附带 replyText，简洁专业）',
       canRequestResume ? '- request_resume：候选人态度积极且已有实质沟通，可以索要简历' : '',
       '- skip：不需要回复（对方只是已读、表情、或无实质内容）',
+      '- 只能使用上面明确提供的岗位信息；如果缺少地点、薪资、班次等信息，就不要写。',
+      '- 禁止输出`[工作地点]`、`[薪资]`这类占位符，也不要自行脑补未提供的信息。',
       '',
       '返回纯 JSON：{"action":"reply"|"request_resume"|"skip","replyText":"回复内容(仅reply时需要)","reason":"简要原因"}'
     ].filter(Boolean).join('\n');
@@ -642,6 +649,23 @@ class FollowupLoopService {
       });
     } catch (error) {
       // Non-fatal
+    }
+  }
+
+  async #resetChatPageAfterCompletion({ runId }) {
+    try {
+      await this.bossCliRunner.navigateTo({
+        runId,
+        url: 'https://www.zhipin.com/web/chat/index'
+      });
+    } catch (error) {
+      await this.#recordEvent(runId, {
+        eventId: `followup-loop-reset-warn:${runId}`,
+        eventType: 'followup_loop_warning',
+        stage: 'followup_loop',
+        message: `final chat reset failed: ${error.message}`,
+        payload: { error: error.message }
+      });
     }
   }
 }
