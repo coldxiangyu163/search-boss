@@ -129,15 +129,32 @@ class SourceLoopService {
       return { ok: false, stats, reason: 'recommend_state_unavailable' };
     }
 
-    // Phase 2b: Select the correct job in recommend page
-    try {
-      const selectResult = await this.bossCliRunner.selectRecommendJob({ runId, jobName: jobContext.jobName });
-      if (!selectResult.alreadySelected) {
-        await new Promise((r) => setTimeout(r, 3_000));
+    // Phase 2b: Select the correct job in recommend page (retry for DOM render lag)
+    {
+      const maxRetries = 5;
+      let selectError = null;
+      let selectDone = false;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          const selectResult = await this.bossCliRunner.selectRecommendJob({ runId, jobName: jobContext.jobName });
+          if (!selectResult.alreadySelected) {
+            await new Promise((r) => setTimeout(r, 3_000));
+          }
+          selectDone = true;
+          break;
+        } catch (error) {
+          selectError = error;
+          if (/no_job_items|frame_unavailable/.test(error.message) && attempt < maxRetries - 1) {
+            await new Promise((r) => setTimeout(r, 2_000));
+            continue;
+          }
+          break;
+        }
       }
-    } catch (error) {
-      await this.#failRun(runId, `recommend_job_select_failed:${error.message}`, stats);
-      return { ok: false, stats, reason: 'recommend_job_select_failed' };
+      if (!selectDone) {
+        await this.#failRun(runId, `recommend_job_select_failed:${selectError.message}`, stats);
+        return { ok: false, stats, reason: 'recommend_job_select_failed' };
+      }
     }
 
     // Phase 2c: Switch to "最新" tab for stable list without similar-geek interference

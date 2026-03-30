@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { SchedulerService } = require('../src/services/scheduler-service');
+const { TaskLock } = require('../src/services/task-lock');
 
 test('SchedulerService triggerJobTask returns immediately and respects explicit terminal run state', async () => {
   const queryCalls = [];
@@ -324,4 +325,152 @@ test('SchedulerService completes parent run when nanobot exits after explicit re
   assert.equal(classificationEvent.payload.hasSubstantiveWork, false);
   assert.equal(classificationEvent.payload.hasResumeIngestHandoff, true);
   assert.deepEqual(completedRuns, [{ runId: 71 }]);
+});
+
+test('SchedulerService rejects trigger when task lock is held', async () => {
+  const taskLock = new TaskLock();
+  taskLock.tryAcquire({ runId: 99, jobKey: 'other_job', taskType: 'source' });
+  let runSequence = 80;
+
+  const pool = {
+    async query(sql) {
+      if (sql.includes('from scheduled_jobs') && sql.includes('job_key = $1')) {
+        return { rows: [] };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+
+  const agentService = {
+    async createRun(payload) {
+      runSequence += 1;
+      return { id: runSequence, runKey: payload.runKey, status: 'pending' };
+    }
+  };
+
+  const scheduler = new SchedulerService({ pool, agentService, taskLock });
+
+  await assert.rejects(
+    () => scheduler.triggerJobTask('健康顾问_B0047007', 'followup'),
+    (err) => {
+      assert.equal(err.message, 'task_already_running');
+      assert.equal(err.holder.runId, 99);
+      assert.equal(err.holder.jobKey, 'other_job');
+      return true;
+    }
+  );
+
+  assert.equal(taskLock.getHolder().runId, 99);
+});
+
+test('SchedulerService releases task lock after execution completes', async () => {
+  const taskLock = new TaskLock();
+  let releaseNanobot = null;
+  let completeResolve = null;
+  const completeDone = new Promise((resolve) => {
+    completeResolve = resolve;
+  });
+
+  const pool = {
+    async query(sql) {
+      if (sql.includes('from scheduled_jobs') && sql.includes('job_key = $1')) {
+        return { rows: [] };
+      }
+      if (sql.includes('update sourcing_runs')) {
+        return { rows: [], rowCount: 1 };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+
+  const agentService = {
+    async createRun(payload) {
+      return { id: 90, runKey: payload.runKey, status: 'pending' };
+    },
+    async recordRunEvent() {
+      return { ok: true };
+    },
+    async runNanobotForSchedule() {
+      await new Promise((resolve) => {
+        releaseNanobot = resolve;
+      });
+      return { ok: true };
+    },
+    async getRunStatus() {
+      return 'completed';
+    },
+    async completeRun() {
+      throw new Error('should not be called');
+    },
+    async failRun() {
+      throw new Error('should not be called');
+    }
+  };
+
+  const scheduler = new SchedulerService({ pool, agentService, taskLock });
+  const result = await scheduler.triggerJobTask('健康顾问_B0047007', 'followup');
+
+  assert.equal(result.ok, true);
+  assert.equal(taskLock.isBusy(), true);
+  assert.equal(taskLock.getHolder().runId, 90);
+
+  // Override getRunStatus to resolve completeDone after lock release check
+  agentService.getRunStatus = async () => {
+    setTimeout(() => completeResolve(), 0);
+    return 'completed';
+  };
+
+  releaseNanobot();
+  await completeDone;
+  // Give the finally block a tick to execute
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.equal(taskLock.isBusy(), false);
+});
+
+test('SchedulerService releases task lock after execution fails', async () => {
+  const taskLock = new TaskLock();
+  let failResolve = null;
+  const failDone = new Promise((resolve) => {
+    failResolve = resolve;
+  });
+
+  const pool = {
+    async query(sql) {
+      if (sql.includes('from scheduled_jobs') && sql.includes('job_key = $1')) {
+        return { rows: [] };
+      }
+      if (sql.includes('update sourcing_runs')) {
+        return { rows: [], rowCount: 1 };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+
+  const agentService = {
+    async createRun(payload) {
+      return { id: 91, runKey: payload.runKey, status: 'pending' };
+    },
+    async recordRunEvent() {
+      return { ok: true };
+    },
+    async runNanobotForSchedule() {
+      throw new Error('nanobot_crashed');
+    },
+    async failReplacementRunsForRunId() {
+      return { ok: true, failedRunIds: [] };
+    },
+    async failRun() {
+      failResolve();
+      return { ok: true, status: 'failed' };
+    }
+  };
+
+  const scheduler = new SchedulerService({ pool, agentService, taskLock });
+  await scheduler.triggerJobTask('健康顾问_B0047007', 'followup');
+
+  await failDone;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.equal(taskLock.isBusy(), false);
 });

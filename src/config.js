@@ -85,14 +85,28 @@ function loadConfig({ env = process.env, envFilePath } = {}) {
   return buildConfig(resolveRuntimeEnv({ env, envFilePath }));
 }
 
+let _cachedConfig = null;
+
+function getCachedConfig() {
+  if (!_cachedConfig) {
+    _cachedConfig = loadConfig();
+  }
+  return _cachedConfig;
+}
+
+function reloadConfig() {
+  _cachedConfig = loadConfig();
+  return _cachedConfig;
+}
+
 const config = new Proxy(
   {},
   {
     get(_target, property) {
-      return loadConfig()[property];
+      return getCachedConfig()[property];
     },
     ownKeys() {
-      return Reflect.ownKeys(loadConfig());
+      return Reflect.ownKeys(getCachedConfig());
     },
     getOwnPropertyDescriptor() {
       return {
@@ -106,5 +120,6 @@ const config = new Proxy(
 module.exports = {
   buildConfig,
   loadConfig,
+  reloadConfig,
   config
 };

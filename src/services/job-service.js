@@ -1,7 +1,8 @@
 class JobService {
-  constructor({ pool, agentService }) {
+  constructor({ pool, agentService, taskLock = null }) {
     this.pool = pool;
     this.agentService = agentService;
+    this.taskLock = taskLock;
   }
 
   async listJobs() {
@@ -176,6 +177,13 @@ class JobService {
       mode: 'sync_jobs'
     });
 
+    if (this.taskLock && !this.taskLock.tryAcquire({ runId: run.id, jobKey: jobKey || '__all__', taskType: 'sync_jobs' })) {
+      const holder = this.taskLock.getHolder();
+      const err = new Error('task_already_running');
+      err.holder = holder;
+      throw err;
+    }
+
     await this.agentService.recordRunEvent({
       runId: run.id,
       eventId: `job-sync:start:${run.id}`,
@@ -197,7 +205,9 @@ class JobService {
       [run.id, timestamp]
     );
 
-    void this.#executeSyncRun({ runId: run.id });
+    this.#executeSyncRun({ runId: run.id }).catch((err) => {
+      console.error(`[job-service] executeSyncRun failed for run ${run.id}:`, err);
+    });
 
     return {
       runId: run.id,
@@ -214,10 +224,14 @@ class JobService {
       if (isTerminalRunStatus(runStatus)) {
         return;
       }
-      const hasPersistedJobs = await this.#hasJobsBatchSynced(runId)
-        || detectJobsBatchSyncedFromOutput(syncResult);
+      const hasPersistedJobs = await this.#hasJobsBatchSynced(runId);
       if (!hasPersistedJobs) {
-        throw new Error('job_sync_not_persisted');
+        const fromOutput = detectJobsBatchSyncedFromOutput(syncResult);
+        if (fromOutput) {
+          console.warn(`[job-service] run ${runId}: no persisted jobs_batch_synced event found, but stdout suggests sync occurred — treating as success (unreliable)`);
+        } else {
+          throw new Error('job_sync_not_persisted');
+        }
       }
       await this.agentService.completeRun({
         runId,
@@ -241,6 +255,8 @@ class JobService {
       } catch (failError) {
         console.error('job sync failure recording failed', failError);
       }
+    } finally {
+      this.taskLock?.release(runId);
     }
   }
 

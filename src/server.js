@@ -6,6 +6,7 @@ const { JobService } = require('./services/job-service');
 const { CandidateService } = require('./services/candidate-service');
 const { AgentService } = require('./services/agent-service');
 const { SchedulerService } = require('./services/scheduler-service');
+const { TaskLock } = require('./services/task-lock');
 const { NanobotRunner } = require('./services/nanobot-runner');
 const { BossCliRunner } = require('./services/boss-cli-runner');
 const { BossContextStore } = require('./services/boss-context-store');
@@ -65,17 +66,19 @@ const followupLoopService = (config.sourceLoopEnabled && bossCliRunner && llmEva
   })
   : null;
 
-const schedulerService = new SchedulerService({ pool, agentService, sourceLoopService, followupLoopService });
-const jobService = new JobService({ pool, agentService });
+const taskLock = new TaskLock();
+const schedulerService = new SchedulerService({ pool, agentService, sourceLoopService, followupLoopService, taskLock });
+const jobService = new JobService({ pool, agentService, taskLock });
 agentService.jobService = jobService;
 
 const app = createApp({
   services: {
-    dashboard: new DashboardService({ pool, bossCliRunner }),
+    dashboard: new DashboardService({ pool, bossCliRunner, taskLock }),
     jobs: jobService,
     candidates: new CandidateService({ pool }),
     agent: agentService,
-    scheduler: schedulerService
+    scheduler: schedulerService,
+    taskLock
   },
   config
 });

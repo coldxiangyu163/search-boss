@@ -1,9 +1,10 @@
 class SchedulerService {
-  constructor({ pool, agentService, sourceLoopService = null, followupLoopService = null }) {
+  constructor({ pool, agentService, sourceLoopService = null, followupLoopService = null, taskLock = null }) {
     this.pool = pool;
     this.agentService = agentService;
     this.sourceLoopService = sourceLoopService;
     this.followupLoopService = followupLoopService;
+    this.taskLock = taskLock;
     this._tickTimer = null;
   }
 
@@ -90,6 +91,12 @@ class SchedulerService {
 
   async #tick() {
     try {
+      if (this.taskLock?.isBusy()) {
+        const holder = this.taskLock.getHolder();
+        console.log(`[scheduler] tick skipped: task lock held by run ${holder?.runId} (${holder?.jobKey}/${holder?.taskType})`);
+        return;
+      }
+
       const schedules = await this.listSchedules();
       const now = new Date();
 
@@ -98,17 +105,28 @@ class SchedulerService {
         if (this.#shouldRunNow(schedule, now)) {
           try {
             await this.triggerSchedule(schedule.id);
-          } catch {
-            // ignore individual trigger failures
+          } catch (triggerError) {
+            if (triggerError.message === 'task_already_running') break;
+            console.error(`[scheduler] trigger failed for schedule ${schedule.id} (${schedule.job_key}/${schedule.task_type}):`, triggerError);
           }
         }
       }
-    } catch {
-      // ignore tick-level errors
+    } catch (tickError) {
+      console.error('[scheduler] tick failed:', tickError);
     }
   }
 
   #shouldRunNow(schedule, now) {
+    const cron = schedule.cron_expression;
+    if (cron && cron.trim()) {
+      if (!matchesCronExpression(cron, now)) return false;
+      if (schedule.last_run_at) {
+        const elapsedMs = now.getTime() - new Date(schedule.last_run_at).getTime();
+        if (elapsedMs < 59_000) return false;
+      }
+      return true;
+    }
+
     const payload = schedule.payload || {};
     const startHour = payload.startHour ?? 0;
     const startMinute = payload.startMinute ?? 0;
@@ -211,6 +229,13 @@ class SchedulerService {
       mode: taskType
     });
 
+    if (this.taskLock && !this.taskLock.tryAcquire({ runId: run.id, jobKey, taskType })) {
+      const holder = this.taskLock.getHolder();
+      const err = new Error('task_already_running');
+      err.holder = holder;
+      throw err;
+    }
+
     await this.pool.query(
       `
         update sourcing_runs
@@ -252,13 +277,15 @@ class SchedulerService {
       )).rows[0].id
       : null;
 
-    void this.#executeJobTask({
+    this.#executeJobTask({
       runId: run.id,
       jobKey,
       taskType,
       scheduledJobId,
       scheduledRunId,
       schedule
+    }).catch((err) => {
+      console.error(`[scheduler] executeJobTask failed for run ${run.id} (${jobKey}/${taskType}):`, err);
     });
 
     return {
@@ -316,8 +343,6 @@ class SchedulerService {
       }
 
       if (runStatus !== 'completed') {
-        // Nanobot exited without writing terminal state.
-        // Auto-complete if substantive work was done, otherwise auto-fail.
         const latestPhaseEvent = typeof this.agentService.getLatestPhaseEvent === 'function'
           ? await this.agentService.getLatestPhaseEvent(runId)
           : null;
@@ -405,6 +430,8 @@ class SchedulerService {
           jobKey
         }
       });
+    } finally {
+      this.taskLock?.release(runId);
     }
   }
 
@@ -435,6 +462,43 @@ class SchedulerService {
   }
 }
 
+function matchesCronExpression(cronExpression, date) {
+  const parts = cronExpression.trim().split(/\s+/);
+  if (parts.length !== 5) return false;
+
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+
+  return matchesCronField(minute, date.getMinutes())
+    && matchesCronField(hour, date.getHours())
+    && matchesCronField(dayOfMonth, date.getDate())
+    && matchesCronField(month, date.getMonth() + 1)
+    && matchesCronField(dayOfWeek, date.getDay());
+}
+
+function matchesCronField(field, value) {
+  if (field === '*') return true;
+
+  if (field.includes(',')) {
+    return field.split(',').some((part) => matchesCronField(part.trim(), value));
+  }
+
+  if (field.includes('/')) {
+    const [range, step] = field.split('/');
+    const stepNum = parseInt(step, 10);
+    if (isNaN(stepNum) || stepNum <= 0) return false;
+    if (range === '*') return value % stepNum === 0;
+    const start = parseInt(range, 10);
+    return value >= start && (value - start) % stepNum === 0;
+  }
+
+  if (field.includes('-')) {
+    const [from, to] = field.split('-').map(Number);
+    return value >= from && value <= to;
+  }
+
+  return parseInt(field, 10) === value;
+}
+
 function classifyAgentExit(latestPhaseEvent) {
   const phase = latestPhaseEvent?.payload?.phase || latestPhaseEvent?.eventType || '';
 
@@ -454,5 +518,6 @@ function classifyAgentExit(latestPhaseEvent) {
 }
 
 module.exports = {
-  SchedulerService
+  SchedulerService,
+  matchesCronExpression
 };

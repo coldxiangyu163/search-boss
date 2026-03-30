@@ -331,15 +331,38 @@ async function syncRecruitData() {
   button.textContent = '同步中...';
 
   try {
-    await fetchJson('/api/dashboard/sync-recruit-data', { method: 'POST' });
+    const result = await fetchJson('/api/dashboard/sync-recruit-data', { method: 'POST' });
+    if (result.status === 'running') {
+      await pollTaskLockUntilDone('sync-recruit-btn', '同步BOSS数据');
+    }
     await loadData();
   } catch (error) {
     state.syncStatus = `BOSS数据同步失败：${error.message}`;
     render();
   } finally {
-    if (document.getElementById('sync-recruit-btn')) {
-      button.disabled = false;
-      button.textContent = '同步BOSS数据';
+    const btn = document.getElementById('sync-recruit-btn');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '同步BOSS数据';
+    }
+  }
+}
+
+async function pollTaskLockUntilDone(buttonId, label) {
+  const maxAttempts = 90;
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    try {
+      const lockState = await fetchJson('/api/task-lock');
+      const btn = document.getElementById(buttonId);
+      if (btn) {
+        const elapsed = i + 1;
+        btn.textContent = `${label}（${elapsed}s）`;
+        btn.disabled = true;
+      }
+      if (!lockState.busy) return;
+    } catch (_) {
+      return;
     }
   }
 }

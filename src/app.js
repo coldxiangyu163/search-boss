@@ -213,6 +213,11 @@ function createApp({ services = {}, config = {} } = {}) {
     }
   });
 
+  app.get('/api/task-lock', (_req, res) => {
+    const holder = services.taskLock?.getHolder() || null;
+    res.json({ busy: holder !== null, holder });
+  });
+
   app.get('/api/schedules', async (_req, res, next) => {
     try {
       const items = await services.scheduler.listSchedules();
@@ -472,6 +477,15 @@ function createApp({ services = {}, config = {} } = {}) {
       res.status(502).json({
         error: 'nanobot_provider_error',
         message: '小聘AGENT 调用上游模型失败，未实际触发职位同步。'
+      });
+      return;
+    }
+
+    if (error.message === 'task_already_running') {
+      res.status(409).json({
+        error: 'task_already_running',
+        message: '当前已有任务在执行，请等待完成后再试。',
+        holder: error.holder || null
       });
       return;
     }
