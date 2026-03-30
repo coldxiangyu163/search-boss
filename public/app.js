@@ -69,7 +69,8 @@ const {
   getLifecycleBadgeClass,
   getResumeBadgeClass,
   getGuardBadgeClass,
-  buildCandidateTimeline
+  buildCandidateTimeline,
+  buildResumePreviewUrl
 } = window.CandidateUiHelpers;
 
 const {
@@ -301,6 +302,29 @@ async function saveJobCustomRequirement() {
   } finally {
     state.jobDetailModal.saving = false;
     render();
+  }
+}
+
+async function syncRecruitData() {
+  const button = document.getElementById('sync-recruit-btn');
+  if (!button) {
+    return;
+  }
+
+  button.disabled = true;
+  button.textContent = '同步中...';
+
+  try {
+    await fetchJson('/api/dashboard/sync-recruit-data', { method: 'POST' });
+    await loadData();
+  } catch (error) {
+    state.syncStatus = `BOSS数据同步失败：${error.message}`;
+    render();
+  } finally {
+    if (document.getElementById('sync-recruit-btn')) {
+      button.disabled = false;
+      button.textContent = '同步BOSS数据';
+    }
   }
 }
 
@@ -583,46 +607,80 @@ function applySyncTerminalStatus(terminalStatus) {
 }
 
 function renderCommandCenter() {
-  const { kpis, queues, health } = state.summary;
-  const conversionRate = kpis.greetedToday ? `${Math.round((kpis.repliedToday / kpis.greetedToday) * 100)}%` : '0%';
+  const { kpis, queues, health, bossRecruitData } = state.summary;
+  const boss = bossRecruitData || {};
+  const hasRecruitData = Boolean(bossRecruitData);
 
   return `
     <section class="card-grid">
-      ${metricCard('在招职位数', kpis.jobs, '当前系统内持续跟进的职位总量')}
-      ${metricCard('人才池规模', kpis.candidates, '已进入管理范围的候选人总数')}
-      ${metricCard('今日主动沟通', kpis.greetedToday, '今日已发起的招呼与触达次数')}
-      ${metricCard('今日有效回复', kpis.repliedToday, `当前沟通回复转化率 ${conversionRate}`)}
+      ${metricCard('我看过', boss.viewed?.value ?? '-', boss.viewed ? `较昨日 ${formatDelta(boss.viewed.delta)}` : 'BOSS 数据未同步')}
+      ${metricCard('看过我', boss.viewedMe?.value ?? '-', boss.viewedMe ? `较昨日 ${formatDelta(boss.viewedMe.delta)}` : 'BOSS 数据未同步')}
+      ${metricCard('我打招呼', boss.greeted?.value ?? '-', boss.greeted ? `较昨日 ${formatDelta(boss.greeted.delta)}` : 'BOSS 数据未同步')}
+      ${metricCard('牛人新招呼', boss.newGreetings?.value ?? '-', boss.newGreetings ? `较昨日 ${formatDelta(boss.newGreetings.delta)}` : 'BOSS 数据未同步')}
     </section>
     <section class="overview-grid">
       <div class="data-stack">
         <div class="card highlight-panel">
           <div class="card-header">
             <div>
-              <p class="eyebrow">核心推进</p>
-              <h3 class="card-title">简历推进漏斗</h3>
-              <p class="card-subtitle">以今日动作与待处理量为核心，快速识别推进压力。</p>
+              <p class="eyebrow">BOSS 招聘数据中心</p>
+              <h3 class="card-title">今日核心指标</h3>
+              <p class="card-subtitle">${hasRecruitData ? `数据来源：BOSS 直聘，采集于 ${formatDateTime(boss.scrapedAt)}` : '尚未同步 BOSS 招聘数据，点击「同步BOSS数据」获取。'}</p>
             </div>
-            <span class="badge">进度概览</span>
+            <button class="button-secondary" onclick="syncRecruitData()" id="sync-recruit-btn">同步BOSS数据</button>
           </div>
           <div class="status-grid">
             <div class="status-box">
-              <span class="muted">今日索取简历</span>
-              <strong>${kpis.resumeRequestedToday}</strong>
+              <span class="muted">我沟通</span>
+              <strong>${boss.chatted?.value ?? '-'}</strong>
+              ${boss.chatted ? `<span class="muted">${formatDelta(boss.chatted.delta)}</span>` : ''}
             </div>
             <div class="status-box">
-              <span class="muted">今日收到简历</span>
-              <strong>${kpis.resumeReceivedToday}</strong>
+              <span class="muted">收获简历</span>
+              <strong>${boss.resumesReceived?.value ?? '-'}</strong>
+              ${boss.resumesReceived ? `<span class="muted">${formatDelta(boss.resumesReceived.delta)}</span>` : ''}
+            </div>
+            <div class="status-box">
+              <span class="muted">交换电话微信</span>
+              <strong>${boss.contactExchanged?.value ?? '-'}</strong>
+              ${boss.contactExchanged ? `<span class="muted">${formatDelta(boss.contactExchanged.delta)}</span>` : ''}
+            </div>
+            <div class="status-box">
+              <span class="muted">接受面试</span>
+              <strong>${boss.interviewAccepted?.value ?? '-'}</strong>
+              ${boss.interviewAccepted ? `<span class="muted">${formatDelta(boss.interviewAccepted.delta)}</span>` : ''}
+            </div>
+          </div>
+        </div>
+        <div class="card highlight-panel">
+          <div class="card-header">
+            <div>
+              <p class="eyebrow">系统数据</p>
+              <h3 class="card-title">内部管理指标</h3>
+            </div>
+            <span class="badge">实时</span>
+          </div>
+          <div class="status-grid">
+            <div class="status-box">
+              <span class="muted">在招职位数</span>
+              <strong>${kpis.jobs}</strong>
+            </div>
+            <div class="status-box">
+              <span class="muted">人才池规模</span>
+              <strong>${kpis.candidates}</strong>
             </div>
             <div class="status-box">
               <span class="muted">待处理队列</span>
               <strong>${queues.resumePipeline}</strong>
             </div>
             <div class="status-box">
-              <span class="muted">沟通回复率</span>
-              <strong>${conversionRate}</strong>
+              <span class="muted">权益余量</span>
+              <strong>${boss.quotas?.chat ? `${boss.quotas.chat.used}/${boss.quotas.chat.total}` : '-'}</strong>
             </div>
           </div>
         </div>
+      </div>
+      <div class="data-stack">
         <div class="table-card">
           <div class="card-header">
             <div>
@@ -641,22 +699,20 @@ function renderCommandCenter() {
             </div>
             <div class="list-item">
               <div>
-                <p class="list-title">关注今日沟通到回复的转化表现</p>
-                <p class="list-desc">主动沟通 ${kpis.greetedToday} 次，已收到 ${kpis.repliedToday} 次回复。</p>
+                <p class="list-title">关注今日招呼与沟通转化</p>
+                <p class="list-desc">今日打招呼 ${boss.greeted?.value ?? '-'} 次，沟通 ${boss.chatted?.value ?? '-'} 人，收获简历 ${boss.resumesReceived?.value ?? '-'} 份。</p>
               </div>
               <span class="badge">分析</span>
             </div>
             <div class="list-item">
               <div>
-                <p class="list-title">强化简历获取动作</p>
-                <p class="list-desc">今日已索取 ${kpis.resumeRequestedToday} 份简历，收到 ${kpis.resumeReceivedToday} 份。</p>
+                <p class="list-title">权益使用情况</p>
+                <p class="list-desc">${boss.quotas?.view ? `查看权益 ${boss.quotas.view.used}/${boss.quotas.view.total}，沟通权益 ${boss.quotas.chat.used}/${boss.quotas.chat.total}` : '权益数据未同步。'}</p>
               </div>
-              <span class="badge">推进</span>
+              <span class="badge">资源</span>
             </div>
           </div>
         </div>
-      </div>
-      <div class="data-stack">
         <div class="table-card">
           <div class="card-header">
             <div>
@@ -682,18 +738,17 @@ function renderCommandCenter() {
             </div>
           </div>
         </div>
-        <div class="table-card">
-          <div class="card-header">
-            <div>
-              <p class="eyebrow">管理视角</p>
-              <h3 class="card-title">运营概览摘要</h3>
-            </div>
-          </div>
-          <p class="card-subtitle">当前平台已覆盖职位、候选人、调度与执行闭环，适合作为招聘运营统一入口。</p>
-        </div>
       </div>
     </section>
   `;
+}
+
+function formatDelta(delta) {
+  if (delta === undefined || delta === null) {
+    return '';
+  }
+
+  return delta >= 0 ? `+${delta}` : `${delta}`;
 }
 
 function renderJobs() {
@@ -1195,7 +1250,7 @@ function renderCandidateDetailDrawer() {
                 ${renderCandidateFact('学历', item.education)}
                 ${renderCandidateFact('经验', item.experience)}
                 ${renderCandidateFact('学校', item.school)}
-                ${renderCandidateFact('简历路径', item.resume_path)}
+                ${renderCandidateFact('简历路径', item.resume_path, { href: buildResumePreviewUrl(item.resume_path) })}
                 ${renderCandidateFact('备注', item.notes)}
               </div>
             </section>
@@ -1266,11 +1321,15 @@ function renderCandidateDetailDrawer() {
   `;
 }
 
-function renderCandidateFact(label, value) {
+function renderCandidateFact(label, value, options = {}) {
+  const content = options.href
+    ? `<a href="${escapeHtml(options.href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(value || '-')}</a>`
+    : escapeHtml(value || '-');
+
   return `
     <div class="job-meta-item">
       <span class="muted">${escapeHtml(label)}</span>
-      <strong>${escapeHtml(value || '-')}</strong>
+      <strong>${content}</strong>
     </div>
   `;
 }
@@ -1286,7 +1345,11 @@ function renderAttachmentList(attachments = []) {
         <div class="list-item">
           <div>
             <p class="list-title">${escapeHtml(attachment.file_name || '未命名附件')}</p>
-            <p class="list-desc">${escapeHtml(attachment.stored_path || '尚未落盘')} · ${escapeHtml(formatResumeState(attachment.status === 'downloaded' ? 'downloaded' : 'received'))}</p>
+            <p class="list-desc">
+              ${renderResumePreviewLink(attachment.stored_path)}
+              ${attachment.stored_path ? ' · ' : ''}
+              ${escapeHtml(formatResumeState(attachment.status === 'downloaded' ? 'downloaded' : 'received'))}
+            </p>
           </div>
           <span class="badge ${attachment.status === 'downloaded' ? 'badge-success' : 'badge-warning'}">
             ${escapeHtml(attachment.status || '-')}
@@ -1295,6 +1358,16 @@ function renderAttachmentList(attachments = []) {
       `).join('')}
     </div>
   `;
+}
+
+function renderResumePreviewLink(value) {
+  const href = buildResumePreviewUrl(value);
+
+  if (!href) {
+    return escapeHtml(value || '尚未落盘');
+  }
+
+  return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(value)}</a>`;
 }
 
 function renderRelatedJobs(relatedJobs = []) {

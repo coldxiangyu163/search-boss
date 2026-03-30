@@ -769,6 +769,20 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
     };
   }
 
+  if (options.command === 'recruit-data') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.scrapeRecruitData({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
   throw new Error(`Unknown command: ${options.command}${options.subcommand ? ` ${options.subcommand}` : ''}`);
 }
 

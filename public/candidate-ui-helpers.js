@@ -102,6 +102,23 @@
       .sort((left, right) => new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime());
   }
 
+  function buildResumePreviewUrl(value) {
+    if (typeof value !== 'string') {
+      return '';
+    }
+
+    const normalizedValue = value.trim().replace(/\\/g, '/');
+    if (!normalizedValue || !normalizedValue.startsWith('resumes/')) {
+      return '';
+    }
+
+    if (normalizedValue.includes('..')) {
+      return '';
+    }
+
+    return `/api/resume-preview?path=${encodeURIComponent(normalizedValue)}`;
+  }
+
   function formatActionTitle(actionType) {
     const labels = {
       resume_request_sent: '已发送索简历消息',
@@ -137,7 +154,8 @@
     getLifecycleBadgeClass,
     getResumeBadgeClass,
     getGuardBadgeClass,
-    buildCandidateTimeline
+    buildCandidateTimeline,
+    buildResumePreviewUrl
   };
 
   if (typeof module !== 'undefined' && module.exports) {

@@ -35,6 +35,7 @@ test('database bootstrap creates required tables', async () => {
           'candidate_actions',
           'candidate_attachments',
           'daily_job_stats',
+          'boss_recruit_snapshots',
           'scheduled_jobs',
           'scheduled_job_runs',
           'sourcing_runs',
@@ -46,6 +47,7 @@ test('database bootstrap creates required tables', async () => {
     assert.deepEqual(
       result.rows.map((row) => row.table_name),
       [
+        'boss_recruit_snapshots',
         'candidate_actions',
         'candidate_attachments',
         'candidate_messages',

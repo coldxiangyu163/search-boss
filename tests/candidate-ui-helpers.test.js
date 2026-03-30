@@ -5,7 +5,8 @@ const {
   formatLifecycleStatus,
   formatResumeState,
   formatGuardStatus,
-  buildCandidateTimeline
+  buildCandidateTimeline,
+  buildResumePreviewUrl
 } = require('../public/candidate-ui-helpers');
 
 test('candidate UI helpers format lifecycle and resume labels', () => {
@@ -48,4 +49,13 @@ test('candidate UI helpers build a reverse chronological timeline', () => {
   assert.equal(timeline[0].title, '简历已下载');
   assert.equal(timeline[1].type, 'message');
   assert.equal(timeline[2].type, 'action');
+});
+
+test('candidate UI helpers build preview urls only for stored resumes paths', () => {
+  assert.equal(
+    buildResumePreviewUrl('resumes/java_backend/张三.pdf'),
+    '/api/resume-preview?path=resumes%2Fjava_backend%2F%E5%BC%A0%E4%B8%89.pdf'
+  );
+  assert.equal(buildResumePreviewUrl('tmp/outside.pdf'), '');
+  assert.equal(buildResumePreviewUrl('../resumes/escape.pdf'), '');
 });

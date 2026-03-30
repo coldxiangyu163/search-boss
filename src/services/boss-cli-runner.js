@@ -347,6 +347,14 @@ class BossCliRunner {
     ]);
   }
 
+  async scrapeRecruitData({ runId }) {
+    return this.#run([
+      'recruit-data',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
   async #run(argv) {
     const result = await this.executeCliImpl(argv, {
       env: this.env,

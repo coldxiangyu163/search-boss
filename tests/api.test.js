@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const path = require('node:path');
 const request = require('supertest');
 
 const { createApp } = require('../src/app');
@@ -31,6 +33,81 @@ test('GET /api/dashboard/summary returns dashboard payload', async () => {
   assert.equal(response.body.kpis.greetedToday, 9);
   assert.equal(response.body.queues.followup, 5);
   assert.equal(response.body.health.api, 'ok');
+});
+
+test('POST /api/dashboard/sync-recruit-data stores recruit snapshot', async () => {
+  let capturedPayload = null;
+
+  const app = createApp({
+    services: {
+      dashboard: {
+        async getSummary() {
+          return { kpis: {}, queues: {}, health: {} };
+        },
+        async syncRecruitData(payload) {
+          capturedPayload = payload;
+          return { ok: true, snapshotId: 1, snapshotDate: '2026-03-30' };
+        }
+      }
+    }
+  });
+
+  const response = await request(app)
+    .post('/api/dashboard/sync-recruit-data')
+    .send({
+      metrics: {
+        viewed: { value: 93, delta: 70 },
+        greeted: { value: 33, delta: 19 },
+        resumesReceived: { value: 8, delta: 6 }
+      },
+      quotas: {
+        view: { used: 83, total: 100 },
+        chat: { used: 33, total: 50 }
+      },
+      scrapedAt: '2026-03-30T12:00:00.000Z'
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(capturedPayload.metrics.greeted.value, 33);
+  assert.equal(capturedPayload.quotas.chat.total, 50);
+});
+
+test('GET /api/dashboard/summary includes bossRecruitData when available', async () => {
+  const app = createApp({
+    services: {
+      dashboard: {
+        async getSummary() {
+          return {
+            kpis: {
+              jobs: 5,
+              candidates: 100,
+              greetedToday: 33,
+              repliedToday: 2,
+              resumeRequestedToday: 50,
+              resumeReceivedToday: 8
+            },
+            bossRecruitData: {
+              viewed: { value: 93, delta: 70 },
+              greeted: { value: 33, delta: 19 },
+              resumesReceived: { value: 8, delta: 6 },
+              quotas: { view: { used: 83, total: 100 }, chat: { used: 33, total: 50 } },
+              scrapedAt: '2026-03-30T12:00:00.000Z'
+            },
+            queues: { resumePipeline: 3 },
+            health: { api: 'ok', database: 'connected' }
+          };
+        }
+      }
+    }
+  });
+
+  const response = await request(app).get('/api/dashboard/summary');
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.bossRecruitData.greeted.value, 33);
+  assert.equal(response.body.bossRecruitData.resumesReceived.value, 8);
+  assert.equal(response.body.bossRecruitData.quotas.chat.total, 50);
 });
 
 test('GET /api/jobs returns job list payload', async () => {
@@ -204,6 +281,37 @@ test('GET /api/candidates/:candidateId returns 404 when candidate detail is miss
 
   assert.equal(response.status, 404);
   assert.equal(response.body.error, 'candidate_not_found');
+});
+
+test('GET /api/resume-preview returns resume files for inline preview', async () => {
+  const app = createApp();
+  const previewDir = path.join(__dirname, '..', 'resumes', '__preview_test__');
+  const previewFile = path.join(previewDir, 'resume.pdf');
+
+  await fs.mkdir(previewDir, { recursive: true });
+  await fs.writeFile(previewFile, '%PDF-1.4\npreview');
+
+  try {
+    const response = await request(app)
+      .get('/api/resume-preview')
+      .query({ path: 'resumes/__preview_test__/resume.pdf' });
+
+    assert.equal(response.status, 200);
+    assert.match(response.headers['content-type'], /application\/pdf/);
+  } finally {
+    await fs.rm(previewDir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/resume-preview rejects non-resume paths', async () => {
+  const app = createApp();
+
+  const response = await request(app)
+    .get('/api/resume-preview')
+    .query({ path: '../package.json' });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'invalid_resume_path');
 });
 
 test('GET /api/jobs/:jobKey returns job detail payload', async () => {

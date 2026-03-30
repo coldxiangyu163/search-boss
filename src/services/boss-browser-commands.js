@@ -2005,6 +2005,101 @@ function buildClickFirstRecommendCardExpression() {
   })()`;
 }
 
+async function scrapeRecruitData({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const currentUrl = await getUrl({ cdpClient, targetId, urlPrefix });
+  const isRecruitPage = currentUrl.includes('/web/chat/data-recruit');
+
+  if (!isRecruitPage) {
+    await navigateTo({ cdpClient, targetId, urlPrefix, url: 'https://www.zhipin.com/web/chat/data-recruit' });
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+  }
+
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildScrapeRecruitDataExpression()
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_recruit_data_scrape_failed');
+  }
+
+  if (!isRecruitPage) {
+    await navigateTo({ cdpClient, targetId, urlPrefix, url: currentUrl });
+  }
+
+  return result;
+}
+
+function buildScrapeRecruitDataExpression() {
+  return `(() => {
+    try {
+      const iframe = document.querySelector('iframe[src*="data-center"], iframe[src*="report"]');
+      const doc = iframe?.contentDocument;
+      if (!iframe || !doc) {
+        return JSON.stringify({ ok: false, reason: 'boss_recruit_iframe_not_found' });
+      }
+
+      const cards = doc.querySelectorAll('.today-num');
+      if (!cards.length) {
+        return JSON.stringify({ ok: false, reason: 'boss_recruit_data_cards_not_found' });
+      }
+
+      const metrics = {};
+      const metricKeyMap = {
+        '我看过': 'viewed',
+        '看过我': 'viewedMe',
+        '我打招呼': 'greeted',
+        '牛人新招呼': 'newGreetings',
+        '我沟通': 'chatted',
+        '收获简历': 'resumesReceived',
+        '交换电话微信': 'contactExchanged',
+        '接受面试': 'interviewAccepted'
+      };
+
+      cards.forEach(el => {
+        const card = el.closest('[class*="data-card"]') || el.closest('[class*="card-item"]') || el.parentElement?.parentElement;
+        const h4 = card ? card.querySelector('h4.name') : null;
+        const title = h4 ? (h4.childNodes[0]?.textContent || '').trim() : '';
+        const value = parseInt(el.textContent.trim(), 10) || 0;
+
+        const trendEl = card ? card.querySelector('.trend-data') : null;
+        const trendText = trendEl ? trendEl.textContent.replace(/\\s+/g, ' ').trim() : '';
+        const trendMatch = trendText.match(/([+-])\\s*(\\d+)/);
+        const delta = trendMatch ? parseInt(trendMatch[1] + trendMatch[2], 10) : 0;
+
+        const key = metricKeyMap[title];
+        if (key) {
+          metrics[key] = { value, delta };
+        }
+      });
+
+      const quotaPatterns = (doc.body?.innerText || '').match(/(\\d+)\\s*\\/\\s*(\\d+)/g) || [];
+      const quotas = quotaPatterns.map(p => {
+        const m = p.match(/(\\d+)\\s*\\/\\s*(\\d+)/);
+        return m ? { used: parseInt(m[1], 10), total: parseInt(m[2], 10) } : null;
+      }).filter(Boolean);
+
+      return JSON.stringify({
+        ok: true,
+        metrics,
+        quotas: {
+          view: quotas[0] || null,
+          chat: quotas[1] || null
+        },
+        scrapedAt: new Date().toISOString()
+      });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_recruit_data_scrape_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
 async function closeResumeDetail({
   cdpClient,
   targetId,
@@ -2096,4 +2191,5 @@ module.exports = {
   switchRecommendToLatest,
   scrollRecommendCardIntoView,
   closeResumeDetail,
+  scrapeRecruitData,
 };

@@ -1,4 +1,10 @@
+const { createReadStream } = require('node:fs');
+const fs = require('node:fs/promises');
+const path = require('node:path');
 const express = require('express');
+
+const REPO_ROOT = path.resolve(__dirname, '..');
+const RESUMES_ROOT = path.join(REPO_ROOT, 'resumes');
 
 function createApp({ services = {}, config = {} } = {}) {
   const app = express();
@@ -14,6 +20,15 @@ function createApp({ services = {}, config = {} } = {}) {
     try {
       const summary = await services.dashboard.getSummary();
       res.json(summary);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/dashboard/sync-recruit-data', async (req, res, next) => {
+    try {
+      const result = await services.dashboard.syncRecruitData(req.body);
+      res.json(result);
     } catch (error) {
       next(error);
     }
@@ -164,6 +179,36 @@ function createApp({ services = {}, config = {} } = {}) {
 
       res.json({ item });
     } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/api/resume-preview', async (req, res, next) => {
+    try {
+      const resumePath = resolveResumePreviewPath(req.query.path);
+      if (!resumePath) {
+        res.status(400).json({
+          error: 'invalid_resume_path',
+          message: '简历路径不合法。'
+        });
+        return;
+      }
+
+      await fs.access(resumePath);
+      res.type(path.extname(resumePath));
+      res.set('Content-Disposition', 'inline');
+      createReadStream(resumePath)
+        .on('error', next)
+        .pipe(res);
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        res.status(404).json({
+          error: 'resume_not_found',
+          message: '未找到对应简历文件。'
+        });
+        return;
+      }
+
       next(error);
     }
   });
@@ -532,6 +577,25 @@ function normalizeTerminalPayload(body) {
     message,
     payload: legacyPayload
   };
+}
+
+function resolveResumePreviewPath(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const normalizedValue = value.trim().replace(/\\/g, '/');
+  if (!normalizedValue || !normalizedValue.startsWith('resumes/')) {
+    return '';
+  }
+
+  const resolvedPath = path.resolve(REPO_ROOT, normalizedValue);
+  const relativeToResumes = path.relative(RESUMES_ROOT, resolvedPath);
+  if (!relativeToResumes || relativeToResumes.startsWith('..') || path.isAbsolute(relativeToResumes)) {
+    return '';
+  }
+
+  return resolvedPath;
 }
 
 module.exports = {

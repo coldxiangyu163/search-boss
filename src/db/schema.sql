@@ -139,6 +139,16 @@ create table if not exists sourcing_run_events (
   unique (run_id, event_id)
 );
 
+create table if not exists boss_recruit_snapshots (
+  id bigserial primary key,
+  snapshot_date date not null,
+  metrics jsonb not null default '{}'::jsonb,
+  quotas jsonb not null default '{}'::jsonb,
+  scraped_at timestamptz not null,
+  created_at timestamptz not null default now(),
+  unique (snapshot_date)
+);
+
 create table if not exists scheduled_jobs (
   id bigserial primary key,
   job_key text not null,
