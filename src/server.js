@@ -68,12 +68,12 @@ const followupLoopService = (config.sourceLoopEnabled && bossCliRunner && llmEva
 
 const taskLock = new TaskLock();
 const schedulerService = new SchedulerService({ pool, agentService, sourceLoopService, followupLoopService, taskLock });
-const jobService = new JobService({ pool, agentService, taskLock });
+const jobService = new JobService({ pool, agentService });
 agentService.jobService = jobService;
 
 const app = createApp({
   services: {
-    dashboard: new DashboardService({ pool, bossCliRunner, taskLock }),
+    dashboard: new DashboardService({ pool, bossCliRunner }),
     jobs: jobService,
     candidates: new CandidateService({ pool }),
     agent: agentService,

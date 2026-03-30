@@ -46,10 +46,14 @@ class DeterministicJobSyncService {
     const rawJobs = Array.isArray(jobListResult?.jobs) ? jobListResult.jobs : [];
     const jobs = [];
 
-    for (const job of rawJobs) {
+    for (let i = 0; i < rawJobs.length; i++) {
+      const job = rawJobs[i];
       let detailJob = null;
 
       if (job.encryptJobId) {
+        if (i > 0) {
+          await new Promise((r) => setTimeout(r, 1000 + Math.random() * 2000));
+        }
         try {
           detailJob = (await this.bossCliRunner.getJobDetail({
             runId,

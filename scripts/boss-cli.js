@@ -763,15 +763,20 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
 
   if (options.command === 'recruit-data') {
     const session = await sessionStore.loadSession(options.runId);
-    const result = await browserCommands.scrapeRecruitData({
+    const data = await browserCommands.bossFetch({
       cdpClient,
       targetId: session.targetId,
-      urlPrefix: config.bossCdpTargetUrlPrefix
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      url: 'https://www.zhipin.com/wapi/zpboss/h5/weeklyReportV3/recruitDataCenter/get.json?jobId=0&platform=1&date='
     });
+
+    if (!data?.zpData?.todayData) {
+      throw new Error('boss_recruit_data_unavailable');
+    }
 
     return {
       ok: true,
-      ...result
+      ...normalizeRecruitApiData(data.zpData)
     };
   }
 
@@ -944,6 +949,31 @@ function normalizeJobDetail(data) {
     url: jobInfo.encryptId
       ? `https://www.zhipin.com/job_detail/${jobInfo.encryptId}.html`
       : ''
+  };
+}
+
+function normalizeRecruitApiData(zpData) {
+  const d = zpData.todayData || {};
+  const rights = zpData.dailyRightStates || {};
+  const viewRight = rights.viewRightState?.progressBarList?.[0] || {};
+  const chatRight = rights.chatRightState?.progressBarList?.[0] || {};
+
+  return {
+    metrics: {
+      viewed: { value: d.view ?? 0, delta: d.viewCTY ?? 0 },
+      viewedMe: { value: d.viewed ?? 0, delta: d.viewedCTY ?? 0 },
+      greeted: { value: d.chatInitiative ?? 0, delta: d.chatInitiativeCTY ?? 0 },
+      newGreetings: { value: d.contactMe ?? 0, delta: d.contactMeCTY ?? 0 },
+      chatted: { value: d.chat ?? 0, delta: d.chatCTY ?? 0 },
+      resumesReceived: { value: d.resume ?? 0, delta: d.resumeCTY ?? 0 },
+      contactExchanged: { value: d.exchangePhoneAndWeiXin ?? 0, delta: d.exchangePhoneAndWeiXinCTY ?? 0 },
+      interviewAccepted: { value: d.interviewAccept ?? 0, delta: d.interviewAcceptCTY ?? 0 }
+    },
+    quotas: {
+      view: { used: viewRight.usedCount ?? 0, total: viewRight.limitCount ?? 0 },
+      chat: { used: chatRight.usedCount ?? 0, total: chatRight.limitCount ?? 0 }
+    },
+    scrapedAt: new Date().toISOString()
   };
 }
 

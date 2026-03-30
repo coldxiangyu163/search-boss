@@ -1,9 +1,8 @@
 class DashboardService {
-  constructor({ pool, bossCliRunner = null, sessionStore = null, taskLock = null }) {
+  constructor({ pool, bossCliRunner = null, sessionStore = null }) {
     this.pool = pool;
     this.bossCliRunner = bossCliRunner;
     this.sessionStore = sessionStore;
-    this.taskLock = taskLock;
   }
 
   async getSummary() {
@@ -59,7 +58,7 @@ class DashboardService {
 
   async syncRecruitData({ metrics, quotas, scrapedAt } = {}) {
     if (!metrics && this.bossCliRunner) {
-      return this._startScrapeAndSync();
+      return this._fetchAndSync();
     }
 
     if (!metrics) {
@@ -69,36 +68,16 @@ class DashboardService {
     return this._saveSnapshot({ metrics, quotas, scrapedAt });
   }
 
-  async _startScrapeAndSync() {
+  async _fetchAndSync() {
     const runId = `recruit-sync-${Date.now()}`;
+    await this.bossCliRunner.bindTarget({ runId, mode: 'recruit-data' });
+    const scrapeResult = await this.bossCliRunner.scrapeRecruitData({ runId });
 
-    if (this.taskLock && !this.taskLock.tryAcquire({ runId, jobKey: '__dashboard__', taskType: 'recruit_sync' })) {
-      const holder = this.taskLock.getHolder();
-      const err = new Error('task_already_running');
-      err.holder = holder;
-      throw err;
-    }
-
-    this._executeScrapeAndSync(runId).catch((err) => {
-      console.error(`[dashboard] scrapeAndSync failed for ${runId}:`, err);
+    return this._saveSnapshot({
+      metrics: scrapeResult.metrics,
+      quotas: scrapeResult.quotas,
+      scrapedAt: scrapeResult.scrapedAt
     });
-
-    return { ok: true, status: 'running', runId };
-  }
-
-  async _executeScrapeAndSync(runId) {
-    try {
-      await this.bossCliRunner.bindTarget({ runId, mode: 'recruit-data' });
-      const scrapeResult = await this.bossCliRunner.scrapeRecruitData({ runId });
-
-      await this._saveSnapshot({
-        metrics: scrapeResult.metrics,
-        quotas: scrapeResult.quotas,
-        scrapedAt: scrapeResult.scrapedAt
-      });
-    } finally {
-      this.taskLock?.release(runId);
-    }
   }
 
   async _saveSnapshot({ metrics, quotas, scrapedAt }) {

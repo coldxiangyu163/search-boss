@@ -1,8 +1,7 @@
 class JobService {
-  constructor({ pool, agentService, taskLock = null }) {
+  constructor({ pool, agentService }) {
     this.pool = pool;
     this.agentService = agentService;
-    this.taskLock = taskLock;
   }
 
   async listJobs() {
@@ -177,13 +176,6 @@ class JobService {
       mode: 'sync_jobs'
     });
 
-    if (this.taskLock && !this.taskLock.tryAcquire({ runId: run.id, jobKey: jobKey || '__all__', taskType: 'sync_jobs' })) {
-      const holder = this.taskLock.getHolder();
-      const err = new Error('task_already_running');
-      err.holder = holder;
-      throw err;
-    }
-
     await this.agentService.recordRunEvent({
       runId: run.id,
       eventId: `job-sync:start:${run.id}`,
@@ -255,8 +247,6 @@ class JobService {
       } catch (failError) {
         console.error('job sync failure recording failed', failError);
       }
-    } finally {
-      this.taskLock?.release(runId);
     }
   }
 

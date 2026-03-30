@@ -1146,13 +1146,12 @@ test('resume-close-detail closes resume preview for the bound target', async () 
   assert.equal(payload.method, 'close_button');
 });
 
-test('recruit-data scrapes BOSS recruit data center', async () => {
+test('recruit-data fetches BOSS recruit data via API', async () => {
   const stdout = createWritable();
-  const stderr = createWritable();
+  const calls = [];
 
   const result = await executeCli(['recruit-data', '--run-id', '200'], {
     stdout,
-    stderr,
     env: {
       DATABASE_URL: 'postgresql://example',
       AGENT_TOKEN: 'token',
@@ -1163,23 +1162,39 @@ test('recruit-data scrapes BOSS recruit data center', async () => {
       sessionStore: {
         loadSession: async () => ({
           targetId: 'boss-1',
-          tabUrl: 'https://www.zhipin.com/web/chat/data-recruit'
+          tabUrl: 'https://www.zhipin.com/web/chat/index'
         })
       },
       browserCommands: {
-        scrapeRecruitData: async () => ({
-          ok: true,
-          metrics: {
-            viewed: { value: 93, delta: 70 },
-            greeted: { value: 33, delta: 19 },
-            resumesReceived: { value: 8, delta: 6 }
-          },
-          quotas: {
-            view: { used: 83, total: 100 },
-            chat: { used: 33, total: 50 }
-          },
-          scrapedAt: '2026-03-30T12:00:00.000Z'
-        })
+        bossFetch: async (payload) => {
+          calls.push(payload.url);
+          return {
+            zpData: {
+              todayData: {
+                view: 93,
+                viewCTY: 70,
+                viewed: 65,
+                viewedCTY: 20,
+                chatInitiative: 33,
+                chatInitiativeCTY: 19,
+                contactMe: 4,
+                contactMeCTY: -3,
+                chat: 50,
+                chatCTY: 15,
+                resume: 8,
+                resumeCTY: 6,
+                exchangePhoneAndWeiXin: 0,
+                exchangePhoneAndWeiXinCTY: 0,
+                interviewAccept: 0,
+                interviewAcceptCTY: 0
+              },
+              dailyRightStates: {
+                viewRightState: { progressBarList: [{ usedCount: 83, limitCount: 100 }] },
+                chatRightState: { progressBarList: [{ usedCount: 33, limitCount: 50 }] }
+              }
+            }
+          };
+        }
       }
     }
   });
@@ -1187,7 +1202,11 @@ test('recruit-data scrapes BOSS recruit data center', async () => {
   const payload = JSON.parse(stdout.output);
   assert.equal(result.exitCode, 0);
   assert.equal(payload.ok, true);
+  assert.match(calls[0], /recruitDataCenter\/get\.json/);
+  assert.equal(payload.metrics.viewed.value, 93);
   assert.equal(payload.metrics.greeted.value, 33);
+  assert.equal(payload.metrics.resumesReceived.value, 8);
+  assert.equal(payload.quotas.chat.used, 33);
   assert.equal(payload.quotas.chat.total, 50);
 });
 
