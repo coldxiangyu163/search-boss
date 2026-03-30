@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { SourceLoopService } = require('../src/services/source-loop-service');
+const { SourceLoopService, parseCardText } = require('../src/services/source-loop-service');
 
 function createMockBossCliRunner({
   listResult = { ok: true, total: 0, candidates: [] },
@@ -433,4 +433,54 @@ test('SourceLoopService sends card text to LLM evaluator and logs evaluation', a
   assert.equal(evalEvents.length, 1);
   assert.equal(evalEvents[0].payload.action, 'greet');
   assert.equal(evalEvents[0].payload.reason, 'good');
+});
+
+// --- parseCardText tests ---
+
+test('parseCardText: extracts all fields from typical card text', () => {
+  const text = '5-7K 那明强 今日活跃 28岁 4年 本科 离职-随时到岗 期望 重庆 营养师/健康管理师 优势 学习能力强 2022 2024 贵州中医药大学时珍学院 健康服务与管理 本科';
+  const result = parseCardText(text);
+  assert.equal(result.name, '那明强');
+  assert.equal(result.city, '重庆');
+  assert.equal(result.education, '本科');
+  assert.equal(result.experience, '4年');
+  assert.equal(result.school, '贵州中医药大学时珍学院');
+});
+
+test('parseCardText: handles 10年以上 experience', () => {
+  const text = '5-8K 周旋 刚刚活跃 37岁 10年以上 大专 离职-随时到岗 期望 重庆 健康顾问 2007 2010 南昌职业大学 商务日语 大专';
+  const result = parseCardText(text);
+  assert.equal(result.name, '周旋');
+  assert.equal(result.experience, '10年以上');
+  assert.equal(result.education, '大专');
+  assert.equal(result.city, '重庆');
+  assert.equal(result.school, '南昌职业大学');
+});
+
+test('parseCardText: handles 硕士 education', () => {
+  const text = '6-8K 柳苗苗 3日内活跃 34岁 10年以上 硕士 离职-随时到岗 期望 重庆 营养师 2024 2026 某大学 工商管理 硕士';
+  const result = parseCardText(text);
+  assert.equal(result.name, '柳苗苗');
+  assert.equal(result.education, '硕士');
+  assert.equal(result.school, '某大学');
+});
+
+test('parseCardText: picks last school when multiple education entries', () => {
+  const text = '3-5K 李颖 32岁 10年以上 本科 期望 重庆 护士 2018 2021 中南大学 护理 本科 2013 2016 重庆三峡医药高等专科学校 护理 本科';
+  const result = parseCardText(text);
+  assert.equal(result.school, '重庆三峡医药高等专科学校');
+});
+
+test('parseCardText: returns empty strings for empty input', () => {
+  const result = parseCardText('');
+  assert.equal(result.name, '');
+  assert.equal(result.city, '');
+  assert.equal(result.education, '');
+  assert.equal(result.experience, '');
+  assert.equal(result.school, '');
+});
+
+test('parseCardText: returns empty strings for null/undefined', () => {
+  assert.deepStrictEqual(parseCardText(null), { name: '', city: '', education: '', experience: '', school: '' });
+  assert.deepStrictEqual(parseCardText(undefined), { name: '', city: '', education: '', experience: '', school: '' });
 });

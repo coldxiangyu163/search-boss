@@ -1,3 +1,33 @@
+function parseCardText(text) {
+  const result = { name: '', city: '', education: '', experience: '', school: '' };
+  if (!text) return result;
+
+  // Name: after optional salary prefix like "5-7K"
+  const nameMatch = text.replace(/^\d+-\d+K\s*/, '').split(/\s/)[0];
+  if (nameMatch) result.name = nameMatch;
+
+  // Experience: "4年" or "10年以上"
+  const expMatch = text.match(/(\d+年(?:以上)?)/);
+  if (expMatch) result.experience = expMatch[1];
+
+  // Education: 本科/大专/硕士/博士 (first occurrence in the header area)
+  const eduMatch = text.match(/(?:^[^期]*?)(本科|大专|硕士|博士)/);
+  if (eduMatch) result.education = eduMatch[1];
+
+  // City: after "期望" keyword
+  const cityMatch = text.match(/期望\s+(\S+)/);
+  if (cityMatch) result.city = cityMatch[1];
+
+  // School: last education entry pattern "YYYY YYYY <school> <major> <degree>"
+  // Education entries look like: "2020 2024 贵州中医药大学时珍学院 健康服务与管理 本科"
+  const schoolMatches = [...text.matchAll(/(?:^|\s)(\d{4})\s+(\d{4})\s+(\S+)\s+\S+\s+(?:本科|大专|硕士|博士)/g)];
+  if (schoolMatches.length > 0) {
+    result.school = schoolMatches[schoolMatches.length - 1][3];
+  }
+
+  return result;
+}
+
 class SourceLoopService {
   constructor({
     bossCliRunner,
@@ -196,7 +226,8 @@ class SourceLoopService {
   async #processCandidate({ runId, jobKey, jobRequirement, customRequirement, candidate, stats }) {
     const bossEncryptGeekId = candidate.geekId;
     const candidateText = candidate.text || '';
-    const candidateName = candidateText.replace(/^\d+-\d+K\s*/, '').split(/\s/)[0] || '';
+    const parsed = parseCardText(candidateText);
+    const candidateName = parsed.name;
 
     if (!bossEncryptGeekId) {
       stats.errors += 1;
@@ -286,6 +317,10 @@ class SourceLoopService {
         jobKey,
         bossEncryptGeekId,
         name: candidateName,
+        city: parsed.city,
+        education: parsed.education,
+        experience: parsed.experience,
+        school: parsed.school,
         status: decision.action === 'greet' ? 'greeted' : 'discovered',
         metadata: {
           decision: decision.action,
@@ -478,5 +513,6 @@ function buildJobRequirementText(jobContext) {
 }
 
 module.exports = {
-  SourceLoopService
+  SourceLoopService,
+  parseCardText
 };
