@@ -109,7 +109,7 @@ class SourceLoopService {
       return { ok: false, stats, reason: 'recommend_job_select_failed' };
     }
 
-    // Phase 3: Read candidate list and process each one
+    // Phase 3: Read candidate list and evaluate each via LLM, greet through popup
     let listResult;
     try {
       listResult = await this.bossCliRunner.inspectRecommendList({ runId, limit: this.targetCount + this.maxSkips });
@@ -133,7 +133,7 @@ class SourceLoopService {
         await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
 
-      await this.#processListCandidate({
+      await this.#processCandidate({
         runId,
         jobKey,
         jobRequirement,
@@ -183,16 +183,28 @@ class SourceLoopService {
     return { ok: true, stats: summary };
   }
 
-  async #processListCandidate({ runId, jobKey, jobRequirement, customRequirement, candidate, stats }) {
+  async #processCandidate({ runId, jobKey, jobRequirement, customRequirement, candidate, stats }) {
     const bossEncryptGeekId = candidate.geekId;
     const candidateText = candidate.text || '';
-    // Extract name from text (first recognizable name-like token after salary)
     const candidateName = candidateText.replace(/^\d+-\d+K\s*/, '').split(/\s/)[0] || '';
 
     if (!bossEncryptGeekId) {
       stats.errors += 1;
       return;
     }
+
+    await this.#recordEvent(runId, {
+      eventId: `source-loop-card-read:${runId}:${bossEncryptGeekId}`,
+      eventType: 'candidate_detail_read',
+      stage: 'source_loop',
+      message: `read card: ${candidateName}`,
+      payload: {
+        bossEncryptGeekId,
+        candidateName,
+        cardTextLength: candidateText.length,
+        alreadyChatting: candidate.alreadyChatting || false
+      }
+    });
 
     // Already chatting detection from button text
     if (candidate.alreadyChatting) {
@@ -225,7 +237,7 @@ class SourceLoopService {
       // Non-fatal
     }
 
-    // LLM evaluation
+    // LLM evaluation with card text
     let decision;
     try {
       decision = await this.llmEvaluator.evaluateCandidate({
@@ -237,6 +249,23 @@ class SourceLoopService {
       stats.errors += 1;
       decision = { action: 'skip', tier: 'C', reason: `llm_error:${error.message}`, facts: {} };
     }
+
+    // Record LLM analysis in event log
+    await this.#recordEvent(runId, {
+      eventId: `source-loop-llm:${runId}:${bossEncryptGeekId}`,
+      eventType: 'candidate_evaluated',
+      stage: 'source_loop',
+      message: `LLM ${decision.action}: ${candidateName} [${decision.tier}] ${decision.reason}`,
+      payload: {
+        bossEncryptGeekId,
+        candidateName,
+        action: decision.action,
+        tier: decision.tier,
+        reason: decision.reason,
+        facts: decision.facts,
+        cardTextPreview: candidateText.slice(0, 500)
+      }
+    });
 
     // Write candidate record
     try {
@@ -253,16 +282,16 @@ class SourceLoopService {
           priority: decision.tier,
           facts: decision.facts,
           reasoning: decision.reason,
-          evaluationMode: 'deterministic_loop'
+          evaluationMode: 'list_popup_loop'
         }
       });
     } catch (error) {
       // Non-fatal
     }
 
-    // Execute greet or skip
+    // Execute greet (via popup) or skip
     if (decision.action === 'greet') {
-      const greetResult = await this.#executeGreet({
+      const greetResult = await this.#executeGreetViaPopup({
         runId,
         jobKey,
         bossEncryptGeekId,
@@ -290,8 +319,8 @@ class SourceLoopService {
     }
   }
 
-  async #executeGreet({ runId, jobKey, bossEncryptGeekId, candidateName, candidate, stats }) {
-    // Use coordinate-based click if available (list mode), otherwise fallback to detail mode
+  async #executeGreetViaPopup({ runId, jobKey, bossEncryptGeekId, candidateName, candidate, stats }) {
+    // Try coordinate click on the card's greet button first (list mode)
     if (candidate?.greetX && candidate?.greetY) {
       try {
         await this.bossCliRunner.clickRecommendGreetByCoords({
@@ -310,7 +339,6 @@ class SourceLoopService {
         return { greeted: false, alreadyChatting: false };
       }
     } else {
-      // Fallback: no greet coordinates available
       await this.#recordEvent(runId, {
         eventId: `source-loop-greet-error:${runId}:${bossEncryptGeekId}`,
         eventType: 'source_loop_error',
@@ -332,7 +360,7 @@ class SourceLoopService {
         dedupeKey,
         jobKey,
         bossEncryptGeekId,
-        payload: { candidateName, source: 'deterministic_loop' }
+        payload: { candidateName, source: 'list_popup_loop' }
       });
     } catch (error) {
       // Non-fatal

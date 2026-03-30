@@ -538,9 +538,15 @@ function buildRecommendDetailExpression() {
       'h2'
     ]);
     const selectedCardName = resolveSelectedCardName(recDoc);
-    const currentActionText = Array.from(recDoc.querySelectorAll('.resume-detail-wrap button, .resume-detail-wrap a, .resume-detail-wrap .btn, .resume-detail-wrap .btn-v2'))
+    // Look for greet/action button inside detailWrap first, then fallback to detail panel button
+    let currentActionText = Array.from(detailWrap.querySelectorAll('button, a, .btn, .btn-v2'))
       .map((node) => (node.textContent || '').trim())
-      .find(Boolean) || null;
+      .find((t) => t === '立即沟通' || t === '打招呼' || t === '继续沟通') || null;
+    if (!currentActionText) {
+      const panelBtn = Array.from(recDoc.querySelectorAll('button.btn-greet, .btn-v2.btn-greet, .btn-sure-v2'))
+        .find((btn) => !btn.closest('.candidate-card-wrap, .card-inner'));
+      currentActionText = panelBtn ? (panelBtn.textContent || '').trim() : null;
+    }
 
     return JSON.stringify({
       ok: true,
@@ -1063,11 +1069,22 @@ function buildRecommendGreetTargetExpression() {
         return JSON.stringify({ ok: false, reason: 'boss_recommend_detail_not_open' });
       }
 
-      const buttons = Array.from(detailWrap.querySelectorAll('button, a, .btn, .btn-v2'));
-      const greetBtn = buttons.find((btn) => {
+      // Search inside detailWrap first, then fallback to detail-panel greet button outside detailWrap
+      let buttons = Array.from(detailWrap.querySelectorAll('button, a, .btn, .btn-v2'));
+      let greetBtn = buttons.find((btn) => {
         const text = (btn.textContent || '').replace(/\\s+/g, '').trim();
         return text === '立即沟通' || text === '打招呼' || text === '继续沟通';
       });
+
+      // Fallback: look for the detail panel greet button (btn-sure-v2/btn-greet) that is NOT inside a card
+      if (!greetBtn) {
+        const allBtns = Array.from(recDoc.querySelectorAll('button.btn-greet, .btn-v2.btn-greet, .btn-sure-v2'));
+        greetBtn = allBtns.find((btn) => {
+          const text = (btn.textContent || '').replace(/\\s+/g, '').trim();
+          const inCard = btn.closest('.candidate-card-wrap, .card-inner');
+          return !inCard && (text === '立即沟通' || text === '打招呼' || text === '继续沟通');
+        });
+      }
 
       if (!greetBtn) {
         return JSON.stringify({ ok: false, reason: 'boss_recommend_greet_button_not_found' });
@@ -1605,7 +1622,7 @@ function buildInspectRecommendListExpression({ limit = 10 }) {
         candidates.push({
           index: i,
           geekId,
-          text: text.slice(0, 300),
+          text: text.slice(0, 1500),
           alreadyChatting,
           hasGreetBtn,
           greetBtnText,

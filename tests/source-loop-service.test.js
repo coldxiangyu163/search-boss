@@ -5,11 +5,9 @@ const { SourceLoopService } = require('../src/services/source-loop-service');
 
 function createMockBossCliRunner({
   listResult = { ok: true, total: 0, candidates: [] },
-  stateSequence = [],
   greetResults = [],
   bindResult = { ok: true, session: { targetId: 'tab-1' } }
 } = {}) {
-  let stateIndex = 0;
   let greetIndex = 0;
   const calls = [];
 
@@ -33,13 +31,11 @@ function createMockBossCliRunner({
     },
     async selectRecommendJob(opts) {
       calls.push({ command: 'selectRecommendJob', ...opts });
-      return { ok: true, alreadySelected: false };
+      return { ok: true, alreadySelected: true };
     },
     async inspectRecommendState(opts) {
       calls.push({ command: 'inspectRecommendState', ...opts });
-      const result = stateSequence[stateIndex] || { ok: true, detailOpen: true };
-      stateIndex += 1;
-      return result;
+      return { ok: true, detailOpen: true };
     },
     async inspectRecommendList(opts) {
       calls.push({ command: 'inspectRecommendList', ...opts });
@@ -48,10 +44,6 @@ function createMockBossCliRunner({
     async clickRecommendGreetByCoords(opts) {
       calls.push({ command: 'clickRecommendGreetByCoords', ...opts });
       return greetResults[greetIndex++] || { ok: true, greeted: true };
-    },
-    async clickRecommendGreet(opts) {
-      calls.push({ command: 'clickRecommendGreet', ...opts });
-      return greetResults[greetIndex++] || { ok: true, greeted: true, alreadyChatting: false };
     }
   };
 }
@@ -122,7 +114,7 @@ function makeCandidateList(items) {
     candidates: items.map((item, i) => ({
       index: i,
       geekId: item.geekId || `geek-${i + 1}`,
-      text: item.text || `8-9K ${item.name || `候选人${i + 1}`} 3年经验`,
+      text: item.text || `8-9K ${item.name || `候选人${i + 1}`} 3年经验 重庆 面点师 工作经历 教育经历`,
       alreadyChatting: item.alreadyChatting || false,
       hasGreetBtn: item.hasGreetBtn !== false,
       greetBtnText: item.alreadyChatting ? '继续沟通' : '打招呼',
@@ -132,7 +124,7 @@ function makeCandidateList(items) {
   };
 }
 
-test('SourceLoopService completes successfully with 3 greets from list', async () => {
+test('SourceLoopService completes successfully with 3 greets', async () => {
   const bossCliRunner = createMockBossCliRunner({
     listResult: makeCandidateList([
       { geekId: 'geek-1', name: '张三' },
@@ -164,6 +156,9 @@ test('SourceLoopService completes successfully with 3 greets from list', async (
   assert.equal(result.stats.greeted, 3);
   assert.equal(agentService.actions.length, 3);
   assert.equal(agentService.candidates.length, 3);
+
+  const evalEvents = agentService.events.filter((e) => e.eventType === 'candidate_evaluated');
+  assert.equal(evalEvents.length, 3);
 });
 
 test('SourceLoopService skips candidates when LLM says skip', async () => {
@@ -201,9 +196,7 @@ test('SourceLoopService skips candidates when LLM says skip', async () => {
 });
 
 test('SourceLoopService fails when browser bind fails', async () => {
-  const bossCliRunner = createMockBossCliRunner({
-    bindResult: null
-  });
+  const bossCliRunner = createMockBossCliRunner();
   bossCliRunner.bindTarget = async () => { throw new Error('cdp_connect_failed'); };
 
   const agentService = createMockAgentService();
@@ -229,7 +222,6 @@ test('SourceLoopService fails when recommend list is empty', async () => {
   const bossCliRunner = createMockBossCliRunner({
     listResult: { ok: true, total: 0, candidates: [] }
   });
-  bossCliRunner.inspectRecommendList = async () => { throw new Error('boss_recommend_no_cards'); };
 
   const agentService = createMockAgentService();
   const llmEvaluator = createMockLlmEvaluator();
@@ -373,4 +365,52 @@ test('SourceLoopService DB dedup skips already-greeted candidates', async () => 
   assert.equal(result.ok, true);
   assert.equal(result.stats.alreadyChatting, 1);
   assert.equal(result.stats.greeted, 1);
+});
+
+test('SourceLoopService sends card text to LLM evaluator and logs evaluation', async () => {
+  const cardText = '8-9K 张三 5年Java开发 本科 重庆 工作经历 腾讯2019-2024 后端开发 教育经历 重庆大学 计算机科学';
+  const bossCliRunner = createMockBossCliRunner({
+    listResult: {
+      ok: true,
+      total: 1,
+      candidates: [{
+        index: 0,
+        geekId: 'geek-1',
+        text: cardText,
+        alreadyChatting: false,
+        hasGreetBtn: true,
+        greetBtnText: '打招呼',
+        greetX: 500,
+        greetY: 100
+      }]
+    }
+  });
+
+  const agentService = createMockAgentService();
+
+  let receivedDetail = null;
+  const llmEvaluator = {
+    async evaluateCandidate({ candidateDetail }) {
+      receivedDetail = candidateDetail;
+      return { action: 'greet', tier: 'A', reason: 'good', facts: {} };
+    }
+  };
+
+  const service = new SourceLoopService({
+    bossCliRunner,
+    agentService,
+    llmEvaluator,
+    targetCount: 5,
+    candidateDelayMin: 0,
+    candidateDelayMax: 0
+  });
+
+  await service.run({ runId: 108, jobKey: '测试岗位_abc' });
+
+  assert.equal(receivedDetail.detailText, cardText);
+
+  const evalEvents = agentService.events.filter((e) => e.eventType === 'candidate_evaluated');
+  assert.equal(evalEvents.length, 1);
+  assert.equal(evalEvents[0].payload.action, 'greet');
+  assert.equal(evalEvents[0].payload.reason, 'good');
 });
