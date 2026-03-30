@@ -1280,6 +1280,9 @@ class AgentService {
         select
           job_name,
           boss_encrypt_job_id,
+          city,
+          salary,
+          jd_text,
           custom_requirement
         from jobs
         where job_key = $1
@@ -1292,10 +1295,14 @@ class AgentService {
       throw new Error('job_not_found');
     }
 
+    const row = result.rows[0];
     return {
-      jobName: result.rows[0].job_name || '',
-      bossEncryptJobId: result.rows[0].boss_encrypt_job_id || '',
-      customRequirement: normalizeJobRequirement(result.rows[0].custom_requirement)
+      jobName: row.job_name || '',
+      bossEncryptJobId: row.boss_encrypt_job_id || '',
+      city: row.city || '',
+      salary: row.salary || '',
+      jdText: row.jd_text || '',
+      customRequirement: normalizeJobRequirement(row.custom_requirement)
     };
   }
 

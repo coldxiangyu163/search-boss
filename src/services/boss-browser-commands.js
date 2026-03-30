@@ -999,6 +999,16 @@ async function clickRecommendGreet({
     throw new Error(target?.reason || 'boss_recommend_greet_not_found');
   }
 
+  // If button already says "继续沟通", candidate was already greeted — skip without clicking
+  if (target.alreadyChatting) {
+    return {
+      ok: true,
+      greeted: false,
+      resultText: target.buttonText || '继续沟通',
+      alreadyChatting: true
+    };
+  }
+
   await cdpClient.dispatchMouseClick({
     targetId,
     urlPrefix,
@@ -1534,6 +1544,308 @@ function buildReadOpenThreadMessagesExpression({ limit }) {
   })()`;
 }
 
+async function inspectRecommendList({
+  cdpClient,
+  targetId,
+  urlPrefix,
+  limit = 10
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildInspectRecommendListExpression({ limit })
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_recommend_list_unavailable');
+  }
+
+  return result;
+}
+
+function buildInspectRecommendListExpression({ limit = 10 }) {
+  return `(() => {
+    try {
+      const recFrame = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+      const recDoc = recFrame?.contentDocument;
+      if (!recFrame || !recDoc) {
+        return JSON.stringify({ ok: false, reason: 'boss_recommend_frame_unavailable' });
+      }
+
+      const wraps = recDoc.querySelectorAll('.candidate-card-wrap');
+      if (!wraps.length) {
+        return JSON.stringify({ ok: false, reason: 'boss_recommend_no_cards' });
+      }
+
+      const frameRect = recFrame.getBoundingClientRect();
+      const candidates = [];
+      const maxItems = Math.min(wraps.length, ${Number(limit)});
+
+      for (let i = 0; i < maxItems; i++) {
+        const wrap = wraps[i];
+        const inner = wrap.querySelector('.card-inner[data-geekid], .card-inner[data-geek]');
+        const geekId = inner?.getAttribute('data-geekid') || inner?.getAttribute('data-geek') || '';
+        const text = (wrap.innerText || '').replace(/\\s+/g, ' ').trim();
+
+        // Find greet button in the full wrap (not just card-inner)
+        const greetBtn = wrap.querySelector('button.btn-greet, .btn-greet, .button-chat .btn-doc');
+        const greetBtnText = greetBtn ? (greetBtn.textContent || '').trim() : '';
+        const alreadyChatting = greetBtnText === '继续沟通';
+        const hasGreetBtn = Boolean(greetBtn);
+
+        // Compute greet button coordinates for real click
+        let greetX = 0, greetY = 0;
+        if (greetBtn) {
+          const btnRect = greetBtn.getBoundingClientRect();
+          greetX = Math.round(frameRect.left + btnRect.left + btnRect.width / 2);
+          greetY = Math.round(frameRect.top + btnRect.top + btnRect.height / 2);
+        }
+
+        candidates.push({
+          index: i,
+          geekId,
+          text: text.slice(0, 300),
+          alreadyChatting,
+          hasGreetBtn,
+          greetBtnText,
+          greetX,
+          greetY
+        });
+      }
+
+      return JSON.stringify({ ok: true, total: wraps.length, candidates });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_recommend_list_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
+async function clickRecommendGreetByCoords({
+  cdpClient,
+  targetId,
+  urlPrefix,
+  x,
+  y
+} = {}) {
+  await cdpClient.dispatchMouseClick({ targetId, urlPrefix, x, y });
+  await randomDelay(2_000, 3_000);
+
+  // Check for confirmation dialog or result
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildRecommendGreetResultExpression()
+  });
+
+  return {
+    ok: true,
+    greeted: true,
+    resultText: result?.resultText || '',
+    alreadyChatting: result?.alreadyChatting || false
+  };
+}
+
+async function switchRecommendToGridView({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildSwitchRecommendViewExpression()
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_recommend_view_switch_failed');
+  }
+
+  if (!result.alreadyGrid) {
+    await randomDelay(2_000, 3_000);
+  }
+
+  return result;
+}
+
+function buildSwitchRecommendViewExpression() {
+  return `(() => {
+    try {
+      const recFrame = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+      const recDoc = recFrame?.contentDocument;
+      if (!recFrame || !recDoc) {
+        return JSON.stringify({ ok: false, reason: 'boss_recommend_frame_unavailable' });
+      }
+
+      // Already in grid/card mode if detail-wrap exists
+      const detailWrap = recDoc.querySelector('.resume-detail-wrap');
+      if (detailWrap) {
+        return JSON.stringify({ ok: true, alreadyGrid: true });
+      }
+
+      // .mode-switcher-wrap has two .mode-item spans: first is card/grid, second (curr) is list
+      const modeItems = recDoc.querySelectorAll('.mode-switcher-wrap .mode-item');
+      if (modeItems.length >= 2) {
+        const gridBtn = modeItems[0];
+        if (!gridBtn.classList.contains('curr')) {
+          gridBtn.click();
+          return JSON.stringify({ ok: true, alreadyGrid: false, method: 'mode-switcher' });
+        }
+        return JSON.stringify({ ok: true, alreadyGrid: true });
+      }
+
+      return JSON.stringify({ ok: false, reason: 'boss_recommend_grid_toggle_not_found' });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_recommend_view_switch_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
+async function selectRecommendJob({
+  cdpClient,
+  targetId,
+  urlPrefix,
+  jobName
+} = {}) {
+  if (!jobName) {
+    throw new Error('boss_recommend_job_name_required');
+  }
+
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildSelectRecommendJobExpression({ jobName })
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_recommend_job_select_failed');
+  }
+
+  await randomDelay(2_000, 3_000);
+
+  return result;
+}
+
+function buildSelectRecommendJobExpression({ jobName }) {
+  return `(() => {
+    try {
+      const recFrame = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+      const recDoc = recFrame?.contentDocument;
+      if (!recFrame || !recDoc) {
+        return JSON.stringify({ ok: false, reason: 'boss_recommend_frame_unavailable' });
+      }
+
+      const items = recDoc.querySelectorAll('.job-list .job-item');
+      if (!items.length) {
+        return JSON.stringify({ ok: false, reason: 'boss_recommend_no_job_items' });
+      }
+
+      const keyword = ${JSON.stringify(jobName)};
+      let target = null;
+      const available = [];
+      for (const item of items) {
+        const text = (item.textContent || '').replace(/\\s+/g, ' ').trim();
+        available.push(text.slice(0, 80));
+        if (text.includes(keyword)) {
+          target = item;
+        }
+      }
+
+      if (!target) {
+        return JSON.stringify({ ok: false, reason: 'boss_recommend_job_not_found', available });
+      }
+
+      if (target.classList.contains('curr')) {
+        return JSON.stringify({ ok: true, alreadySelected: true, selected: (target.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80) });
+      }
+
+      target.click();
+      return JSON.stringify({ ok: true, alreadySelected: false, selected: (target.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80) });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_recommend_job_select_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
+async function clickFirstRecommendCard({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildClickFirstRecommendCardExpression()
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_recommend_first_card_click_failed');
+  }
+
+  // Use real mouse click at the computed absolute coordinates
+  if (result.x && result.y) {
+    await cdpClient.dispatchMouseClick({
+      targetId,
+      urlPrefix,
+      x: result.x,
+      y: result.y
+    });
+  }
+
+  await randomDelay(1_500, 2_500);
+
+  return result;
+}
+
+function buildClickFirstRecommendCardExpression() {
+  return `(() => {
+    try {
+      const recFrame = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+      const recDoc = recFrame?.contentDocument;
+      if (!recFrame || !recDoc) {
+        return JSON.stringify({ ok: false, reason: 'boss_recommend_frame_unavailable' });
+      }
+
+      const cards = recDoc.querySelectorAll('.card-inner, .geek-card, .candidate-card-wrap, [class*="geek-card"]');
+      if (!cards.length) {
+        return JSON.stringify({ ok: false, reason: 'boss_recommend_no_cards' });
+      }
+
+      const frameRect = recFrame.getBoundingClientRect();
+
+      // Find first card that is visible within the iframe viewport
+      let targetCard = null;
+      for (const card of cards) {
+        const cr = card.getBoundingClientRect();
+        if (cr.top >= 0 && cr.bottom <= frameRect.height && cr.height > 0) {
+          targetCard = card;
+          break;
+        }
+      }
+      if (!targetCard) {
+        targetCard = cards[0];
+      }
+
+      const cardRect = targetCard.getBoundingClientRect();
+      const absX = Math.round(frameRect.left + cardRect.left + cardRect.width / 2);
+      const absY = Math.round(frameRect.top + cardRect.top + cardRect.height / 2);
+
+      return JSON.stringify({
+        ok: true,
+        x: absX,
+        y: absY,
+        cardText: (targetCard.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 100)
+      });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_recommend_first_card_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
 module.exports = {
   getUrl,
   evaluateJson,
@@ -1559,4 +1871,9 @@ module.exports = {
   sendChatMessage,
   clickRequestResume,
   readOpenThreadMessages,
+  selectRecommendJob,
+  clickFirstRecommendCard,
+  switchRecommendToGridView,
+  inspectRecommendList,
+  clickRecommendGreetByCoords,
 };

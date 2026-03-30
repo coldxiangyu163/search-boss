@@ -195,6 +195,50 @@ class BossCliRunner {
     return this.#run(['bring-to-front', '--run-id', String(runId)]);
   }
 
+  async inspectRecommendList({ runId, limit = 10 }) {
+    return this.#run([
+      'recommend-list',
+      '--run-id',
+      String(runId),
+      '--limit',
+      String(limit)
+    ]);
+  }
+
+  async clickRecommendGreetByCoords({ runId, x, y }) {
+    return this.#run([
+      'recommend-greet-coords',
+      '--run-id',
+      String(runId),
+      '--x',
+      String(x),
+      '--y',
+      String(y)
+    ]);
+  }
+
+  async switchRecommendToGridView({ runId }) {
+    return this.#run(['recommend-switch-grid', '--run-id', String(runId)]);
+  }
+
+  async selectRecommendJob({ runId, jobName }) {
+    return this.#run([
+      'recommend-select-job',
+      '--run-id',
+      String(runId),
+      '--job-name',
+      String(jobName)
+    ]);
+  }
+
+  async clickFirstRecommendCard({ runId }) {
+    return this.#run([
+      'recommend-click-first-card',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
   async readOpenThreadMessages({ runId, limit = 20 }) {
     return this.#run([
       'chat-read-messages',

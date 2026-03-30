@@ -70,34 +70,75 @@ class SourceLoopService {
       // Non-fatal
     }
 
-    // Phase 2: Verify recommend state
-    let state;
+    // Phase 1c: Navigate to recommend page if not already there
     try {
-      state = await this.bossCliRunner.inspectRecommendState({ runId });
+      const targetInfo = await this.bossCliRunner.inspectTarget({ runId });
+      const currentUrl = targetInfo?.currentUrl || '';
+      if (!currentUrl.includes('/web/chat/recommend')) {
+        await this.bossCliRunner.navigateTo({ runId, url: 'https://www.zhipin.com/web/chat/recommend' });
+      }
     } catch (error) {
-      await this.#failRun(runId, `recommend_state_failed:${error.message}`, stats);
+      // Non-fatal: proceed and let inspectRecommendState detect the problem
+    }
+
+    // Phase 2: Wait for recommend iframe to load (poll up to 10s)
+    const stateDeadline = Date.now() + 10_000;
+    let iframeReady = false;
+    while (Date.now() < stateDeadline) {
+      try {
+        const state = await this.bossCliRunner.inspectRecommendState({ runId });
+        if (state?.ok) { iframeReady = true; break; }
+      } catch (error) {
+        // retry
+      }
+      await new Promise((r) => setTimeout(r, 1_500));
+    }
+    if (!iframeReady) {
+      await this.#failRun(runId, 'recommend_state_failed:iframe_not_loaded_after_polling', stats);
       return { ok: false, stats, reason: 'recommend_state_unavailable' };
     }
 
-    if (!state.detailOpen) {
-      await this.#failRun(runId, 'recommend_detail_not_open_at_start', stats);
-      return { ok: false, stats, reason: 'recommend_detail_not_open' };
+    // Phase 2b: Select the correct job in recommend page
+    try {
+      const selectResult = await this.bossCliRunner.selectRecommendJob({ runId, jobName: jobContext.jobName });
+      if (!selectResult.alreadySelected) {
+        await new Promise((r) => setTimeout(r, 3_000));
+      }
+    } catch (error) {
+      await this.#failRun(runId, `recommend_job_select_failed:${error.message}`, stats);
+      return { ok: false, stats, reason: 'recommend_job_select_failed' };
     }
 
-    // Phase 3: Main loop with anti-risk delays
-    let candidateIndex = 0;
-    while (stats.greeted < this.targetCount && stats.skipped < this.maxSkips) {
-      if (candidateIndex > 0) {
+    // Phase 3: Read candidate list and process each one
+    let listResult;
+    try {
+      listResult = await this.bossCliRunner.inspectRecommendList({ runId, limit: this.targetCount + this.maxSkips });
+    } catch (error) {
+      await this.#failRun(runId, `recommend_list_failed:${error.message}`, stats);
+      return { ok: false, stats, reason: 'recommend_list_unavailable' };
+    }
+
+    const candidates = listResult.candidates || [];
+    if (!candidates.length) {
+      await this.#failRun(runId, 'recommend_list_empty', stats);
+      return { ok: false, stats, reason: 'recommend_list_empty' };
+    }
+
+    for (const candidate of candidates) {
+      if (stats.greeted >= this.targetCount) break;
+      if ((stats.skipped + stats.alreadyChatting + stats.errors) >= this.maxSkips) break;
+
+      if (stats.totalEvaluated > 0) {
         const delayMs = this.candidateDelayMin + Math.random() * (this.candidateDelayMax - this.candidateDelayMin);
         await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
-      candidateIndex += 1;
 
-      const loopResult = await this.#processOneCandidate({
+      await this.#processListCandidate({
         runId,
         jobKey,
         jobRequirement,
         customRequirement,
+        candidate,
         stats
       });
 
@@ -110,18 +151,6 @@ class SourceLoopService {
         message: `checkpoint after candidate ${stats.totalEvaluated}`,
         payload: { ...stats }
       });
-
-      if (loopResult.exhausted) {
-        break;
-      }
-
-      // Move to next candidate if not exhausted
-      if (stats.greeted < this.targetCount) {
-        const advanced = await this.#advanceToNext(runId);
-        if (!advanced) {
-          break;
-        }
-      }
     }
 
     // Phase 4: Complete run
@@ -132,7 +161,8 @@ class SourceLoopService {
     };
 
     if (stats.greeted < this.targetCount) {
-      summary.reason = stats.skipped >= this.maxSkips
+      const nonGreeted = stats.skipped + stats.alreadyChatting + stats.errors;
+      summary.reason = nonGreeted >= this.maxSkips
         ? 'max_skips_reached'
         : 'candidate_pool_exhausted';
     }
@@ -153,65 +183,62 @@ class SourceLoopService {
     return { ok: true, stats: summary };
   }
 
-  async #processOneCandidate({ runId, jobKey, jobRequirement, customRequirement, stats }) {
-    // Step 1: Read current candidate detail
-    let detail;
-    try {
-      detail = await this.bossCliRunner.inspectRecommendDetail({ runId });
-    } catch (error) {
-      stats.errors += 1;
-      await this.#recordEvent(runId, {
-        eventId: `source-loop-detail-error:${runId}:${stats.totalEvaluated}`,
-        eventType: 'source_loop_error',
-        stage: 'source_loop',
-        message: `detail read failed: ${error.message}`,
-        payload: { error: error.message }
-      });
-      return { exhausted: false };
-    }
-
-    const bossEncryptGeekId = detail.bossEncryptGeekId
-      || (detail.identityHints && detail.identityHints[0])
-      || null;
-    const candidateName = detail.name || detail.selectedCardName || '';
+  async #processListCandidate({ runId, jobKey, jobRequirement, customRequirement, candidate, stats }) {
+    const bossEncryptGeekId = candidate.geekId;
+    const candidateText = candidate.text || '';
+    // Extract name from text (first recognizable name-like token after salary)
+    const candidateName = candidateText.replace(/^\d+-\d+K\s*/, '').split(/\s/)[0] || '';
 
     if (!bossEncryptGeekId) {
       stats.errors += 1;
-      await this.#recordEvent(runId, {
-        eventId: `source-loop-no-id:${runId}:${stats.totalEvaluated}`,
-        eventType: 'source_loop_error',
-        stage: 'source_loop',
-        message: 'candidate identity unresolvable',
-        payload: { candidateName }
-      });
-      return { exhausted: false };
+      return;
     }
 
-    // Step 2: LLM evaluation
+    // Already chatting detection from button text
+    if (candidate.alreadyChatting) {
+      stats.alreadyChatting += 1;
+      await this.#recordEvent(runId, {
+        eventId: `source-loop-already:${runId}:${bossEncryptGeekId}`,
+        eventType: 'candidate_already_chatting',
+        stage: 'source_loop',
+        message: `already chatting: ${candidateName}`,
+        payload: { bossEncryptGeekId, candidateName }
+      });
+      return;
+    }
+
+    // DB dedup
+    try {
+      const existing = await this.agentService.findLatestCandidateByGeekId(bossEncryptGeekId);
+      if (existing && existing.lifecycleStatus && existing.lifecycleStatus !== 'discovered') {
+        stats.alreadyChatting += 1;
+        await this.#recordEvent(runId, {
+          eventId: `source-loop-dedup:${runId}:${bossEncryptGeekId}`,
+          eventType: 'candidate_already_chatting',
+          stage: 'source_loop',
+          message: `db dedup: ${candidateName} already ${existing.lifecycleStatus}`,
+          payload: { bossEncryptGeekId, candidateName, status: existing.lifecycleStatus }
+        });
+        return;
+      }
+    } catch (error) {
+      // Non-fatal
+    }
+
+    // LLM evaluation
     let decision;
     try {
       decision = await this.llmEvaluator.evaluateCandidate({
         jobRequirement,
-        candidateDetail: {
-          name: candidateName,
-          detailText: detail.detailText || ''
-        },
+        candidateDetail: { name: candidateName, detailText: candidateText },
         customRequirement
       });
     } catch (error) {
       stats.errors += 1;
-      await this.#recordEvent(runId, {
-        eventId: `source-loop-eval-error:${runId}:${stats.totalEvaluated}`,
-        eventType: 'source_loop_error',
-        stage: 'source_loop',
-        message: `llm evaluation failed: ${error.message}`,
-        payload: { error: error.message, bossEncryptGeekId }
-      });
-      // Default to skip on LLM failure
       decision = { action: 'skip', tier: 'C', reason: `llm_error:${error.message}`, facts: {} };
     }
 
-    // Step 3: Write candidate record regardless of decision
+    // Write candidate record
     try {
       await this.agentService.upsertCandidate({
         runId,
@@ -230,23 +257,17 @@ class SourceLoopService {
         }
       });
     } catch (error) {
-      // Non-fatal: continue even if candidate write fails
-      await this.#recordEvent(runId, {
-        eventId: `source-loop-candidate-write-error:${runId}:${stats.totalEvaluated}`,
-        eventType: 'source_loop_error',
-        stage: 'source_loop',
-        message: `candidate write failed: ${error.message}`,
-        payload: { error: error.message, bossEncryptGeekId }
-      });
+      // Non-fatal
     }
 
-    // Step 4: Execute greet or skip
+    // Execute greet or skip
     if (decision.action === 'greet') {
       const greetResult = await this.#executeGreet({
         runId,
         jobKey,
         bossEncryptGeekId,
         candidateName,
+        candidate,
         stats
       });
 
@@ -259,48 +280,45 @@ class SourceLoopService {
       }
     } else {
       stats.skipped += 1;
-
       await this.#recordEvent(runId, {
         eventId: `source-loop-skip:${runId}:${bossEncryptGeekId}`,
         eventType: 'candidate_skipped',
         stage: 'source_loop',
         message: `skipped: ${decision.reason}`,
-        payload: {
-          bossEncryptGeekId,
-          candidateName,
-          tier: decision.tier,
-          reason: decision.reason
-        }
+        payload: { bossEncryptGeekId, candidateName, tier: decision.tier, reason: decision.reason }
       });
     }
-
-    return { exhausted: false };
   }
 
-  async #executeGreet({ runId, jobKey, bossEncryptGeekId, candidateName, stats }) {
-    let greetResult;
-    try {
-      greetResult = await this.bossCliRunner.clickRecommendGreet({ runId });
-    } catch (error) {
+  async #executeGreet({ runId, jobKey, bossEncryptGeekId, candidateName, candidate, stats }) {
+    // Use coordinate-based click if available (list mode), otherwise fallback to detail mode
+    if (candidate?.greetX && candidate?.greetY) {
+      try {
+        await this.bossCliRunner.clickRecommendGreetByCoords({
+          runId,
+          x: candidate.greetX,
+          y: candidate.greetY
+        });
+      } catch (error) {
+        await this.#recordEvent(runId, {
+          eventId: `source-loop-greet-error:${runId}:${bossEncryptGeekId}`,
+          eventType: 'source_loop_error',
+          stage: 'source_loop',
+          message: `greet click failed: ${error.message}`,
+          payload: { error: error.message, bossEncryptGeekId }
+        });
+        return { greeted: false, alreadyChatting: false };
+      }
+    } else {
+      // Fallback: no greet coordinates available
       await this.#recordEvent(runId, {
         eventId: `source-loop-greet-error:${runId}:${bossEncryptGeekId}`,
         eventType: 'source_loop_error',
         stage: 'source_loop',
-        message: `greet click failed: ${error.message}`,
-        payload: { error: error.message, bossEncryptGeekId }
+        message: 'no greet button coordinates',
+        payload: { bossEncryptGeekId }
       });
       return { greeted: false, alreadyChatting: false };
-    }
-
-    if (greetResult.alreadyChatting) {
-      await this.#recordEvent(runId, {
-        eventId: `source-loop-already-chatting:${runId}:${bossEncryptGeekId}`,
-        eventType: 'candidate_already_chatting',
-        stage: 'source_loop',
-        message: `already chatting: ${candidateName}`,
-        payload: { bossEncryptGeekId, candidateName }
-      });
-      return { greeted: false, alreadyChatting: true };
     }
 
     // Record greet action
@@ -314,19 +332,10 @@ class SourceLoopService {
         dedupeKey,
         jobKey,
         bossEncryptGeekId,
-        payload: {
-          candidateName,
-          source: 'deterministic_loop'
-        }
+        payload: { candidateName, source: 'deterministic_loop' }
       });
     } catch (error) {
-      await this.#recordEvent(runId, {
-        eventId: `source-loop-greet-write-error:${runId}:${bossEncryptGeekId}`,
-        eventType: 'source_loop_error',
-        stage: 'source_loop',
-        message: `greet action write failed: ${error.message}`,
-        payload: { error: error.message, bossEncryptGeekId }
-      });
+      // Non-fatal
     }
 
     await this.#recordEvent(runId, {
@@ -338,34 +347,6 @@ class SourceLoopService {
     });
 
     return { greeted: true, alreadyChatting: false };
-  }
-
-  async #advanceToNext(runId) {
-    // Check if next button is available
-    let state;
-    try {
-      state = await this.bossCliRunner.inspectRecommendState({ runId });
-    } catch (error) {
-      return false;
-    }
-
-    if (!state.nextVisible) {
-      return false;
-    }
-
-    try {
-      await this.bossCliRunner.recommendNextCandidate({ runId });
-    } catch (error) {
-      return false;
-    }
-
-    // Verify detail reopened after advance
-    try {
-      const newState = await this.bossCliRunner.inspectRecommendState({ runId });
-      return newState.detailOpen;
-    } catch (error) {
-      return false;
-    }
   }
 
   async #failRun(runId, message, stats) {
@@ -410,6 +391,18 @@ function buildJobRequirementText(jobContext) {
 
   if (jobContext.jobName) {
     parts.push(`岗位名称：${jobContext.jobName}`);
+  }
+  if (jobContext.city) {
+    parts.push(`工作城市：${jobContext.city}`);
+  }
+  if (jobContext.salary) {
+    parts.push(`薪资范围：${jobContext.salary}`);
+  }
+  if (jobContext.jdText) {
+    parts.push(`岗位描述：${jobContext.jdText.slice(0, 500)}`);
+  }
+  if (jobContext.customRequirement) {
+    parts.push(`特殊要求：${jobContext.customRequirement}`);
   }
 
   return parts.join('\n') || '(无岗位信息)';

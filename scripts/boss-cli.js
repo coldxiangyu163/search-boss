@@ -489,6 +489,66 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
     return { ok: true };
   }
 
+  if (options.command === 'recommend-list') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.inspectRecommendList({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      limit: Number(options.limit || 10)
+    });
+    return { ok: true, ...result };
+  }
+
+  if (options.command === 'recommend-greet-coords') {
+    const session = await sessionStore.loadSession(options.runId);
+    if (!options.x || !options.y) {
+      throw new Error('Missing --x or --y');
+    }
+    const result = await browserCommands.clickRecommendGreetByCoords({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      x: Number(options.x),
+      y: Number(options.y)
+    });
+    return { ok: true, ...result };
+  }
+
+  if (options.command === 'recommend-switch-grid') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.switchRecommendToGridView({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+    return { ok: true, ...result };
+  }
+
+  if (options.command === 'recommend-select-job') {
+    const session = await sessionStore.loadSession(options.runId);
+    if (!options.jobName) {
+      throw new Error('Missing value for --job-name');
+    }
+    const result = await browserCommands.selectRecommendJob({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      jobName: options.jobName
+    });
+    return { ok: true, ...result };
+  }
+
+  if (options.command === 'recommend-click-first-card') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.clickFirstRecommendCard({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+    return { ok: true, ...result };
+  }
+
   if (options.command === 'chat-read-messages') {
     const session = await sessionStore.loadSession(options.runId);
     const result = await browserCommands.readOpenThreadMessages({
