@@ -5,14 +5,20 @@ class DashboardService {
     this.sessionStore = sessionStore;
   }
 
-  async getSummary() {
+  async getSummary({ hrAccountId } = {}) {
+    const jobFilter = hrAccountId ? `where hr_account_id = ${Number(hrAccountId)}` : '';
+    const candidateFilter = hrAccountId ? `where jc.hr_account_id = ${Number(hrAccountId)}` : '';
+    const resumeFilter = hrAccountId
+      ? `where resume_state in ('requested', 'received') and hr_account_id = ${Number(hrAccountId)}`
+      : `where resume_state in ('requested', 'received')`;
+
     const [jobsResult, candidatesResult, resumeQueueResult, recruitResult] = await Promise.all([
-      this.pool.query('select count(*)::int as count from jobs'),
-      this.pool.query('select count(*)::int as count from job_candidates'),
+      this.pool.query(`select count(*)::int as count from jobs ${jobFilter}`),
+      this.pool.query(`select count(*)::int as count from job_candidates jc ${candidateFilter}`),
       this.pool.query(`
         select count(*)::int as count
         from job_candidates
-        where resume_state in ('requested', 'received')
+        ${resumeFilter}
       `),
       this.pool.query(`
         select metrics, quotas, scraped_at

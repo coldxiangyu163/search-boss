@@ -8,7 +8,14 @@ class SchedulerService {
     this._tickTimer = null;
   }
 
-  async listSchedules() {
+  async listSchedules({ hrAccountId } = {}) {
+    const values = [];
+    let whereClause = '';
+    if (hrAccountId) {
+      values.push(hrAccountId);
+      whereClause = `where hr_account_id = $${values.length}`;
+    }
+
     const result = await this.pool.query(`
       select
         id,
@@ -20,8 +27,9 @@ class SchedulerService {
         last_run_at,
         updated_at
       from scheduled_jobs
+      ${whereClause}
       order by updated_at desc, id desc
-    `);
+    `, values);
 
     return result.rows;
   }

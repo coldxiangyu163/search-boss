@@ -2,23 +2,96 @@ const { createReadStream } = require('node:fs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const express = require('express');
+const session = require('express-session');
+const PgStore = require('connect-pg-simple')(session);
+const { authMiddleware, requireRole, resolveHrScope } = require('./middleware/auth');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const RESUMES_ROOT = path.join(REPO_ROOT, 'resumes');
 
-function createApp({ services = {}, config = {} } = {}) {
+function createApp({ services = {}, config = {}, pool = null } = {}) {
   const app = express();
 
   app.use(express.json());
+
+  if (pool) {
+    app.use(session({
+      store: new PgStore({ pool, createTableIfMissing: true }),
+      secret: process.env.SESSION_SECRET || 'search-boss-dev-secret',
+      resave: false,
+      saveUninitialized: false,
+      cookie: {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        maxAge: 24 * 60 * 60 * 1000
+      }
+    }));
+  }
+
   app.use(express.static('public'));
+
+  // --- Auth routes (no auth required) ---
+  app.post('/api/auth/login', async (req, res, next) => {
+    try {
+      if (!services.auth) {
+        return res.status(501).json({ error: 'auth_not_configured' });
+      }
+
+      const result = await services.auth.login(req.body);
+      if (!result.ok) {
+        return res.status(401).json({ error: result.error });
+      }
+
+      if (req.session) {
+        req.session.userId = result.user.id;
+      }
+
+      res.json({ ok: true, user: result.user });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/auth/logout', (req, res) => {
+    if (req.session) {
+      req.session.destroy(() => {
+        res.json({ ok: true });
+      });
+    } else {
+      res.json({ ok: true });
+    }
+  });
+
+  app.get('/api/auth/me', async (req, res, next) => {
+    try {
+      if (!services.auth) {
+        return res.status(501).json({ error: 'auth_not_configured' });
+      }
+
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: 'unauthorized' });
+      }
+
+      const user = await services.auth.getMe(userId);
+      if (!user) {
+        return res.status(401).json({ error: 'user_not_found' });
+      }
+
+      res.json({ user });
+    } catch (error) {
+      next(error);
+    }
+  });
 
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok' });
   });
 
-  app.get('/api/dashboard/summary', async (_req, res, next) => {
+  app.get('/api/dashboard/summary', async (req, res, next) => {
     try {
-      const summary = await services.dashboard.getSummary();
+      const hrAccountId = req.user?.role === 'hr' ? req.user.hr_account_id : undefined;
+      const summary = await services.dashboard.getSummary({ hrAccountId });
       res.json(summary);
     } catch (error) {
       next(error);
@@ -34,9 +107,10 @@ function createApp({ services = {}, config = {} } = {}) {
     }
   });
 
-  app.get('/api/jobs', async (_req, res, next) => {
+  app.get('/api/jobs', async (req, res, next) => {
     try {
-      const items = await services.jobs.listJobs();
+      const hrAccountId = req.user?.role === 'hr' ? req.user.hr_account_id : undefined;
+      const items = await services.jobs.listJobs({ hrAccountId });
       res.json({ items });
     } catch (error) {
       next(error);
@@ -134,13 +208,15 @@ function createApp({ services = {}, config = {} } = {}) {
 
   app.get('/api/candidates', async (req, res, next) => {
     try {
+      const hrAccountId = req.user?.role === 'hr' ? req.user.hr_account_id : undefined;
       const result = await services.candidates.listCandidates({
         jobKey: req.query.jobKey,
         status: req.query.status,
         resumeState: req.query.resumeState,
         keyword: req.query.keyword,
         page: req.query.page ? Number(req.query.page) : undefined,
-        pageSize: req.query.pageSize ? Number(req.query.pageSize) : undefined
+        pageSize: req.query.pageSize ? Number(req.query.pageSize) : undefined,
+        hrAccountId
       });
 
       if (Array.isArray(result)) {
@@ -218,9 +294,10 @@ function createApp({ services = {}, config = {} } = {}) {
     res.json({ busy: holder !== null, holder });
   });
 
-  app.get('/api/schedules', async (_req, res, next) => {
+  app.get('/api/schedules', async (req, res, next) => {
     try {
-      const items = await services.scheduler.listSchedules();
+      const hrAccountId = req.user?.role === 'hr' ? req.user.hr_account_id : undefined;
+      const items = await services.scheduler.listSchedules({ hrAccountId });
       res.json({ items });
     } catch (error) {
       next(error);
@@ -435,6 +512,140 @@ function createApp({ services = {}, config = {} } = {}) {
       });
 
       res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // --- Admin routes (require auth + admin role) ---
+  app.get('/api/admin/departments', async (req, res, next) => {
+    try {
+      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const result = await pool?.query('select * from departments order by id') || { rows: [] };
+      res.json({ items: result.rows });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/admin/departments', async (req, res, next) => {
+    try {
+      if (!req.user || req.user.role !== 'enterprise_admin') {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const { name } = req.body;
+      const result = await pool?.query(
+        'insert into departments (name) values ($1) returning *',
+        [name]
+      );
+      res.json({ item: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/api/admin/users', async (req, res, next) => {
+    try {
+      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      let query = `
+        select u.id, u.name, u.email, u.phone, u.role, u.department_id,
+               u.status, d.name as department_name
+        from users u
+        left join departments d on d.id = u.department_id
+      `;
+      const values = [];
+      if (req.user.role === 'dept_admin') {
+        values.push(req.user.department_id);
+        query += ` where u.department_id = $1`;
+      }
+      query += ' order by u.id';
+      const result = await pool?.query(query, values) || { rows: [] };
+      res.json({ items: result.rows });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/admin/users', async (req, res, next) => {
+    try {
+      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const user = await services.auth.createUser(req.body);
+      res.json({ item: user });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/api/admin/hr-accounts', async (req, res, next) => {
+    try {
+      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      let query = `
+        select ha.id, ha.name, ha.status, ha.notes,
+               ha.user_id, ha.department_id, ha.manager_user_id,
+               u.name as user_name, u.email as user_email,
+               d.name as department_name
+        from hr_accounts ha
+        join users u on u.id = ha.user_id
+        left join departments d on d.id = ha.department_id
+      `;
+      const values = [];
+      if (req.user.role === 'dept_admin') {
+        values.push(req.user.department_id);
+        query += ` where ha.department_id = $1`;
+      }
+      query += ' order by ha.id';
+      const result = await pool?.query(query, values) || { rows: [] };
+      res.json({ items: result.rows });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/admin/hr-accounts', async (req, res, next) => {
+    try {
+      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const { userId, departmentId, managerUserId, name, notes } = req.body;
+      const result = await pool?.query(`
+        insert into hr_accounts (user_id, department_id, manager_user_id, name, notes)
+        values ($1, $2, $3, $4, $5)
+        returning *
+      `, [userId, departmentId || null, managerUserId || null, name, notes || null]);
+      res.json({ item: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch('/api/admin/hr-accounts/:id', async (req, res, next) => {
+    try {
+      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const { name, status, notes, managerUserId } = req.body;
+      const result = await pool?.query(`
+        update hr_accounts
+        set name = coalesce($2, name),
+            status = coalesce($3, status),
+            notes = coalesce($4, notes),
+            manager_user_id = coalesce($5, manager_user_id),
+            updated_at = now()
+        where id = $1
+        returning *
+      `, [req.params.id, name, status, notes, managerUserId]);
+      if (!result.rows[0]) {
+        return res.status(404).json({ error: 'hr_account_not_found' });
+      }
+      res.json({ item: result.rows[0] });
     } catch (error) {
       next(error);
     }

@@ -4,7 +4,14 @@ class JobService {
     this.agentService = agentService;
   }
 
-  async listJobs() {
+  async listJobs({ hrAccountId } = {}) {
+    const values = [];
+    let whereClause = '';
+    if (hrAccountId) {
+      values.push(hrAccountId);
+      whereClause = `where j.hr_account_id = $${values.length}`;
+    }
+
     const result = await this.pool.query(`
       select
         j.id,
@@ -21,9 +28,10 @@ class JobService {
         count(*) filter (where jc.resume_state = 'downloaded')::int as resume_downloaded_count
       from jobs j
       left join job_candidates jc on jc.job_id = j.id
+      ${whereClause}
       group by j.id
       order by j.updated_at desc, j.id desc
-    `);
+    `, values);
 
     return result.rows;
   }

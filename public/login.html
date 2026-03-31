@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>登录 - BOSS 寻源管理系统</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <style>
+      .login-wrapper {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        background: var(--bg-base, #f5f5f5);
+      }
+      .login-card {
+        background: var(--bg-card, #fff);
+        border-radius: 12px;
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+        padding: 40px;
+        width: 100%;
+        max-width: 400px;
+      }
+      .login-brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 32px;
+      }
+      .login-brand-mark {
+        width: 40px;
+        height: 40px;
+        border-radius: 8px;
+        background: var(--color-primary, #2563eb);
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 20px;
+        font-weight: bold;
+      }
+      .login-brand h1 {
+        font-size: 18px;
+        margin: 0;
+      }
+      .login-brand p {
+        font-size: 12px;
+        color: var(--text-muted, #999);
+        margin: 0;
+      }
+      .login-form {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .login-field label {
+        display: block;
+        font-size: 13px;
+        font-weight: 500;
+        margin-bottom: 6px;
+        color: var(--text-secondary, #666);
+      }
+      .login-field input {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid var(--border, #ddd);
+        border-radius: 6px;
+        font-size: 14px;
+        box-sizing: border-box;
+      }
+      .login-field input:focus {
+        outline: none;
+        border-color: var(--color-primary, #2563eb);
+        box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.1);
+      }
+      .login-btn {
+        width: 100%;
+        padding: 10px;
+        background: var(--color-primary, #2563eb);
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        margin-top: 8px;
+      }
+      .login-btn:hover {
+        opacity: 0.9;
+      }
+      .login-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .login-error {
+        color: #dc2626;
+        font-size: 13px;
+        text-align: center;
+        min-height: 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="login-wrapper">
+      <div class="login-card">
+        <div class="login-brand">
+          <div class="login-brand-mark">聘</div>
+          <div>
+            <h1>BOSS 寻源管理系统</h1>
+            <p>招聘运营中台</p>
+          </div>
+        </div>
+        <form class="login-form" id="login-form" onsubmit="handleLogin(event)">
+          <div class="login-field">
+            <label for="email">邮箱</label>
+            <input type="email" id="email" name="email" required placeholder="请输入邮箱" autocomplete="username" />
+          </div>
+          <div class="login-field">
+            <label for="password">密码</label>
+            <input type="password" id="password" name="password" required placeholder="请输入密码" autocomplete="current-password" />
+          </div>
+          <div class="login-error" id="login-error"></div>
+          <button type="submit" class="login-btn" id="login-btn">登录</button>
+        </form>
+      </div>
+    </div>
+    <script>
+      async function handleLogin(e) {
+        e.preventDefault();
+        const btn = document.getElementById('login-btn');
+        const errorEl = document.getElementById('login-error');
+        errorEl.textContent = '';
+        btn.disabled = true;
+        btn.textContent = '登录中...';
+
+        try {
+          const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: document.getElementById('email').value,
+              password: document.getElementById('password').value
+            })
+          });
+
+          const data = await res.json();
+          if (data.ok) {
+            window.location.href = '/';
+          } else {
+            const msgs = {
+              invalid_credentials: '邮箱或密码错误',
+              account_disabled: '账号已被禁用',
+              missing_credentials: '请输入邮箱和密码'
+            };
+            errorEl.textContent = msgs[data.error] || '登录失败';
+          }
+        } catch (err) {
+          errorEl.textContent = '网络错误，请重试';
+        } finally {
+          btn.disabled = false;
+          btn.textContent = '登录';
+        }
+      }
+    </script>
+  </body>
+</html>

@@ -5,6 +5,7 @@ const { DashboardService } = require('./services/dashboard-service');
 const { JobService } = require('./services/job-service');
 const { CandidateService } = require('./services/candidate-service');
 const { AgentService } = require('./services/agent-service');
+const { AuthService } = require('./services/auth-service');
 const { SchedulerService } = require('./services/scheduler-service');
 const { TaskLock } = require('./services/task-lock');
 const { NanobotRunner } = require('./services/nanobot-runner');
@@ -73,6 +74,7 @@ agentService.jobService = jobService;
 
 const app = createApp({
   services: {
+    auth: new AuthService({ pool }),
     dashboard: new DashboardService({ pool, bossCliRunner }),
     jobs: jobService,
     candidates: new CandidateService({ pool }),
@@ -80,7 +82,8 @@ const app = createApp({
     scheduler: schedulerService,
     taskLock
   },
-  config
+  config,
+  pool
 });
 
 const port = config.port;

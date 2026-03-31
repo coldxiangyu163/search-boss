@@ -3,7 +3,7 @@ class CandidateService {
     this.pool = pool;
   }
 
-  async listCandidates({ jobKey, status, resumeState, keyword, page = 1, pageSize = 20 } = {}) {
+  async listCandidates({ jobKey, status, resumeState, keyword, page = 1, pageSize = 20, hrAccountId } = {}) {
     const normalizedPage = Math.max(Number(page) || 1, 1);
     const normalizedPageSize = Math.min(Math.max(Number(pageSize) || 20, 1), 100);
     const offset = (normalizedPage - 1) * normalizedPageSize;
@@ -32,6 +32,11 @@ class CandidateService {
         or p.boss_encrypt_geek_id ilike $${values.length}
         or coalesce(j.job_name, '') ilike $${values.length}
       )`);
+    }
+
+    if (hrAccountId) {
+      values.push(hrAccountId);
+      conditions.push(`jc.hr_account_id = $${values.length}`);
     }
 
     const whereClause = conditions.length ? `where ${conditions.join(' and ')}` : '';

@@ -1,4 +1,5 @@
 const state = {
+  currentUser: null,
   view: 'command',
   summary: null,
   jobs: [],
@@ -110,10 +111,49 @@ const titles = {
   health: ['系统状态', '系统运行健康中心', '查看平台服务、数据库连接与自动化能力现状。']
 };
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    const res = await fetch('/api/auth/me');
+    if (res.ok) {
+      const data = await res.json();
+      state.currentUser = data.user;
+      renderUserInfo();
+    }
+  } catch (_) {
+    // auth not configured, proceed without login
+  }
   bindEvents();
   loadData();
 });
+
+function renderUserInfo() {
+  const topbarActions = document.querySelector('.topbar-actions');
+  if (!topbarActions || !state.currentUser) return;
+
+  let userEl = document.getElementById('user-info');
+  if (!userEl) {
+    userEl = document.createElement('div');
+    userEl.id = 'user-info';
+    userEl.style.cssText = 'display:flex;align-items:center;gap:8px;margin-left:12px;font-size:13px;';
+    topbarActions.appendChild(userEl);
+  }
+
+  const roleNames = {
+    enterprise_admin: '企业管理员',
+    dept_admin: '部门管理员',
+    hr: 'HR'
+  };
+  const roleName = roleNames[state.currentUser.role] || state.currentUser.role;
+  userEl.innerHTML = `
+    <span style="color:var(--text-secondary,#666)">${state.currentUser.name} (${roleName})</span>
+    <button onclick="handleLogout()" style="font-size:12px;padding:4px 8px;cursor:pointer;">退出</button>
+  `;
+}
+
+async function handleLogout() {
+  await fetch('/api/auth/logout', { method: 'POST' });
+  window.location.href = '/login.html';
+}
 
 function getTaskMeta(taskType) {
   const taskMeta = {
