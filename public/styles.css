@@ -972,3 +972,28 @@ input[type="time"]:focus {
   color: var(--text);
   font-weight: 600;
 }
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.data-table th,
+.data-table td {
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+  font-size: 13px;
+}
+.data-table th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.data-table tbody tr:hover {
+  background: #f8fbff;
+}
+
+.badge-danger {
+  background: #fef2f2;
+  color: #dc2626;
+}

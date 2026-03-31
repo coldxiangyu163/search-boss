@@ -70,7 +70,11 @@ const state = {
     loading: false,
     error: '',
     item: null
-  }
+  },
+  hrOverview: [],
+  adminDepartments: [],
+  adminUsers: [],
+  adminHrAccounts: []
 };
 
 const {
@@ -105,11 +109,59 @@ const {
 
 const titles = {
   command: ['运营总览', '今日招聘运营看板', '聚焦核心招聘指标、待办事项与系统运行情况。'],
+  'admin-overview': ['HR 概览', '全员招聘运营看板', '查看所有 HR 的业务数据与执行状态。'],
+  'admin-org': ['组织管理', '部门与人员管理', '管理部门、用户与 HR 账号。'],
   jobs: ['职位管理', '职位招聘执行情况', '统一查看职位需求、城市分布与当前转化效率。'],
   candidates: ['候选人管理', '候选人全流程跟进', '围绕人才状态、简历获取与入站行为进行管理。'],
   automation: ['自动化调度', '任务调度与执行监控', '关注自动化任务编排、执行节奏与系统承接能力。'],
   health: ['系统状态', '系统运行健康中心', '查看平台服务、数据库连接与自动化能力现状。']
 };
+
+function isAdmin() {
+  return state.currentUser && ['enterprise_admin', 'dept_admin'].includes(state.currentUser.role);
+}
+
+function getNavItems() {
+  if (isAdmin()) {
+    return [
+      { view: 'admin-overview', title: 'HR 概览', desc: '查看所有 HR 的业务数据汇总' },
+      { view: 'jobs', title: '职位管理', desc: '全局职位与转化情况' },
+      { view: 'candidates', title: '候选人管理', desc: '全局候选人跟踪' },
+      { view: 'admin-org', title: '组织管理', desc: '部门、用户与 HR 账号' },
+      { view: 'health', title: '系统状态', desc: '监控服务与运行健康度' }
+    ];
+  }
+  return [
+    { view: 'command', title: '运营总览', desc: '查看核心指标与处理进度' },
+    { view: 'jobs', title: '职位管理', desc: '统一管理职位与转化情况' },
+    { view: 'candidates', title: '候选人管理', desc: '跟踪候选人阶段与简历状态' },
+    { view: 'automation', title: '自动化调度', desc: '查看任务编排与执行情况' },
+    { view: 'health', title: '系统状态', desc: '监控服务与运行健康度' }
+  ];
+}
+
+function renderSidebarNav() {
+  const nav = document.getElementById('sidebar-nav');
+  if (!nav) return;
+  const items = getNavItems();
+  const defaultView = items[0].view;
+  if (!items.some((i) => i.view === state.view)) {
+    state.view = defaultView;
+  }
+  nav.innerHTML = items.map((item) => `
+    <button class="nav-item ${state.view === item.view ? 'is-active' : ''}" data-view="${item.view}">
+      <span class="nav-item-title">${item.title}</span>
+      <span class="nav-item-desc">${item.desc}</span>
+    </button>
+  `).join('');
+  nav.querySelectorAll('.nav-item').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.view = button.dataset.view;
+      renderSidebarNav();
+      render();
+    });
+  });
+}
 
 document.addEventListener('DOMContentLoaded', async () => {
   try {
@@ -117,11 +169,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (res.ok) {
       const data = await res.json();
       state.currentUser = data.user;
+      if (isAdmin()) {
+        state.view = 'admin-overview';
+      }
       renderUserInfo();
     }
   } catch (_) {
     // auth not configured, proceed without login
   }
+  renderSidebarNav();
   bindEvents();
   loadData();
 });
@@ -194,16 +250,6 @@ function hasSchedule(jobKey, taskType) {
 }
 
 function bindEvents() {
-  document.querySelectorAll('.nav-item').forEach((button) => {
-    button.addEventListener('click', () => {
-      state.view = button.dataset.view;
-      document.querySelectorAll('.nav-item').forEach((item) => item.classList.remove('is-active'));
-      button.classList.add('is-active');
-      render();
-    });
-  });
-
-
 }
 
 async function loadData() {
@@ -211,12 +257,22 @@ async function loadData() {
   state.candidateListError = '';
   render();
 
-  const [schedules, summary, jobs, candidates] = await Promise.all([
+  const fetches = [
     fetchJson('/api/schedules'),
     fetchJson('/api/dashboard/summary'),
     fetchJson('/api/jobs'),
     fetchCandidates()
-  ]);
+  ];
+
+  if (isAdmin()) {
+    fetches.push(fetchJson('/api/admin/dashboard/hr-overview'));
+    fetches.push(fetchJson('/api/admin/departments').catch(() => ({ items: [] })));
+    fetches.push(fetchJson('/api/admin/users').catch(() => ({ items: [] })));
+    fetches.push(fetchJson('/api/admin/hr-accounts').catch(() => ({ items: [] })));
+  }
+
+  const results = await Promise.all(fetches);
+  const [schedules, summary, jobs, candidates] = results;
 
   state.schedules = schedules.items;
   state.summary = summary;
@@ -229,6 +285,14 @@ async function loadData() {
     totalPages: candidates.items.length ? 1 : 0
   };
   state.candidateListLoading = false;
+
+  if (isAdmin()) {
+    state.hrOverview = results[4]?.items || [];
+    state.adminDepartments = results[5]?.items || [];
+    state.adminUsers = results[6]?.items || [];
+    state.adminHrAccounts = results[7]?.items || [];
+  }
+
   render();
 }
 
@@ -478,15 +542,31 @@ async function fetchJson(url, options) {
 
 function render() {
   const syncLogScrollSnapshot = getSyncLogScrollSnapshot();
-  const [eyebrow, title, description] = titles[state.view];
+  const titleEntry = titles[state.view] || titles['command'];
+  const [eyebrow, title, description] = titleEntry;
   document.getElementById('page-eyebrow').textContent = eyebrow;
   document.getElementById('page-title').textContent = title;
   document.getElementById('page-description').textContent = description;
+
+  const syncBtn = document.getElementById('sync-recruit-btn');
+  if (syncBtn) {
+    syncBtn.style.display = isAdmin() ? 'none' : '';
+  }
 
   const app = document.getElementById('app');
 
   if (!state.summary) {
     app.innerHTML = '<div class="card">加载中...</div>';
+    return;
+  }
+
+  if (state.view === 'admin-overview') {
+    app.innerHTML = renderAdminOverview();
+    return;
+  }
+
+  if (state.view === 'admin-org') {
+    app.innerHTML = renderAdminOrg();
     return;
   }
 
@@ -804,18 +884,213 @@ function formatDelta(delta) {
   return delta >= 0 ? `+${delta}` : `${delta}`;
 }
 
+function renderAdminOverview() {
+  const hrs = state.hrOverview || [];
+  const { kpis, health } = state.summary;
+
+  const totalJobs = hrs.reduce((s, h) => s + (h.job_count || 0), 0);
+  const totalCandidates = hrs.reduce((s, h) => s + (h.candidate_count || 0), 0);
+  const totalGreeted = hrs.reduce((s, h) => s + (h.greeted_today || 0), 0);
+  const totalResumes = hrs.reduce((s, h) => s + (h.resumes_today || 0), 0);
+
+  return `
+    <section class="card-grid">
+      ${metricCard('HR 人数', hrs.length, '当前活跃 HR 数')}
+      ${metricCard('在招职位', totalJobs, '全部 HR 职位合计')}
+      ${metricCard('今日打招呼', totalGreeted, '全部 HR 合计')}
+      ${metricCard('今日简历', totalResumes, '全部 HR 合计')}
+    </section>
+    <section>
+      <div class="table-card">
+        <div class="card-header">
+          <div>
+            <p class="eyebrow">HR 运营数据</p>
+            <h3 class="card-title">HR 概览表</h3>
+          </div>
+          <span class="badge">实时</span>
+        </div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>HR</th>
+              <th>BOSS 账号</th>
+              <th>浏览器状态</th>
+              <th>岗位数</th>
+              <th>候选人数</th>
+              <th>今日招呼</th>
+              <th>今日跟进</th>
+              <th>今日简历</th>
+              <th>最近任务</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${hrs.length === 0 ? '<tr><td colspan="9" style="text-align:center;color:var(--text-muted,#999)">暂无 HR 数据</td></tr>' : ''}
+            ${hrs.map((hr) => `
+              <tr>
+                <td><strong>${hr.hr_name || '-'}</strong></td>
+                <td>${hr.boss_account_name || '<span style="color:var(--text-muted,#999)">未绑定</span>'}</td>
+                <td>${renderBrowserBadge(hr.browser_status)}</td>
+                <td>${hr.job_count || 0}</td>
+                <td>${hr.candidate_count || 0}</td>
+                <td>${hr.greeted_today || 0}</td>
+                <td>${hr.followup_today || 0}</td>
+                <td>${hr.resumes_today || 0}</td>
+                <td>${renderRunStatusBadge(hr.last_run_status, hr.last_run_mode)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <section class="overview-grid" style="margin-top:16px">
+      <div class="table-card">
+        <div class="card-header">
+          <div>
+            <p class="eyebrow">系统数据</p>
+            <h3 class="card-title">全局指标</h3>
+          </div>
+        </div>
+        <div class="status-grid">
+          <div class="status-box">
+            <span class="muted">总职位数</span>
+            <strong>${kpis.jobs}</strong>
+          </div>
+          <div class="status-box">
+            <span class="muted">总候选人数</span>
+            <strong>${kpis.candidates}</strong>
+          </div>
+        </div>
+      </div>
+      <div class="table-card">
+        <div class="card-header">
+          <div>
+            <p class="eyebrow">系统状态</p>
+            <h3 class="card-title">服务健康度</h3>
+          </div>
+          <span class="badge badge-success">稳定</span>
+        </div>
+        <div class="list">
+          <div class="list-item">
+            <div>
+              <p class="list-title">接口服务</p>
+              <p class="list-desc">当前接口链路状态正常。</p>
+            </div>
+            <span class="badge badge-success">${health.api}</span>
+          </div>
+          <div class="list-item">
+            <div>
+              <p class="list-title">数据库连接</p>
+              <p class="list-desc">核心数据读写服务可用。</p>
+            </div>
+            <span class="badge badge-success">${health.database}</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderBrowserBadge(status) {
+  if (!status) return '<span class="badge">未配置</span>';
+  const map = {
+    idle: ['空闲', 'badge-success'],
+    busy: ['执行中', 'badge-warning'],
+    disabled: ['已禁用', ''],
+    error: ['异常', 'badge-danger']
+  };
+  const [label, cls] = map[status] || [status, ''];
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+
+function renderRunStatusBadge(status, mode) {
+  if (!status) return '<span style="color:var(--text-muted,#999)">无</span>';
+  const modeLabel = { source: '寻源', followup: '跟进', chat: '沟通', download: '下载', sync_jobs: '同步', status: '状态' };
+  const statusMap = {
+    running: ['执行中', 'badge-warning'],
+    completed: ['已完成', 'badge-success'],
+    failed: ['失败', 'badge-danger'],
+    pending: ['等待中', '']
+  };
+  const [label, cls] = statusMap[status] || [status, ''];
+  return `<span class="badge ${cls}">${modeLabel[mode] || mode || ''} ${label}</span>`;
+}
+
+function renderAdminOrg() {
+  const depts = state.adminDepartments || [];
+  const users = state.adminUsers || [];
+  const hrAccounts = state.adminHrAccounts || [];
+
+  return `
+    <section>
+      <div class="table-card">
+        <div class="card-header">
+          <div>
+            <p class="eyebrow">组织架构</p>
+            <h3 class="card-title">部门列表</h3>
+          </div>
+        </div>
+        <table class="data-table">
+          <thead><tr><th>ID</th><th>名称</th><th>状态</th></tr></thead>
+          <tbody>
+            ${depts.length === 0 ? '<tr><td colspan="3" style="text-align:center;color:var(--text-muted,#999)">暂无部门</td></tr>' : ''}
+            ${depts.map((d) => `<tr><td>${d.id}</td><td>${d.name}</td><td>${d.status || 'active'}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <section style="margin-top:16px">
+      <div class="table-card">
+        <div class="card-header">
+          <div>
+            <p class="eyebrow">人员管理</p>
+            <h3 class="card-title">系统用户</h3>
+          </div>
+        </div>
+        <table class="data-table">
+          <thead><tr><th>ID</th><th>姓名</th><th>邮箱</th><th>角色</th><th>部门</th><th>状态</th></tr></thead>
+          <tbody>
+            ${users.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted,#999)">暂无用户</td></tr>' : ''}
+            ${users.map((u) => {
+              const roleNames = { enterprise_admin: '企业管理员', dept_admin: '部门管理员', hr: 'HR' };
+              return `<tr><td>${u.id}</td><td>${u.name}</td><td>${u.email || '-'}</td><td>${roleNames[u.role] || u.role}</td><td>${u.department_name || '-'}</td><td>${u.status || 'active'}</td></tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <section style="margin-top:16px">
+      <div class="table-card">
+        <div class="card-header">
+          <div>
+            <p class="eyebrow">HR 账号</p>
+            <h3 class="card-title">HR 业务账号</h3>
+          </div>
+        </div>
+        <table class="data-table">
+          <thead><tr><th>ID</th><th>HR 名称</th><th>登录账号</th><th>部门</th><th>状态</th></tr></thead>
+          <tbody>
+            ${hrAccounts.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-muted,#999)">暂无 HR 账号</td></tr>' : ''}
+            ${hrAccounts.map((h) => `<tr><td>${h.id}</td><td>${h.name}</td><td>${h.user_email || '-'}</td><td>${h.department_name || '-'}</td><td>${h.status || 'active'}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
 function renderJobs() {
+  const admin = isAdmin();
   return `
     <section class="table-card">
       <div class="card-header">
         <div>
           <p class="eyebrow">职位管理</p>
           <h3 class="card-title">职位列表</h3>
-          <p class="card-subtitle">按职位查看候选人规模与关键转化数据。</p>
+          <p class="card-subtitle">${admin ? '全局职位概览，按 HR 查看候选人规模与转化数据。' : '按职位查看候选人规模与关键转化数据。'}</p>
         </div>
         <div class="jobs-header-actions">
           <span class="badge">共 ${state.jobs.length} 个职位</span>
-          <button class="button-secondary" onclick="syncJobs()">同步职位</button>
+          ${admin ? '' : '<button class="button-secondary" onclick="syncJobs()">同步职位</button>'}
         </div>
       </div>
       ${state.syncStatus ? `<div class="inline-status">${state.syncStatus}</div>` : ''}
@@ -823,6 +1098,7 @@ function renderJobs() {
         <thead>
           <tr>
             <th>职位</th>
+            ${admin ? '<th>所属 HR</th>' : ''}
             <th>城市</th>
             <th>薪资</th>
             <th>状态</th>
@@ -830,13 +1106,14 @@ function renderJobs() {
             <th>已打招呼</th>
             <th>已回复</th>
             <th>已下载简历</th>
-            <th>手动触发</th>
+            ${admin ? '' : '<th>手动触发</th>'}
           </tr>
         </thead>
         <tbody>
           ${state.jobs.map((job) => `
             <tr>
               <td>${job.job_name}<div class="muted">${job.job_key}</div></td>
+              ${admin ? `<td>${job.hr_name || '<span style="color:var(--text-muted,#999)">未分配</span>'}</td>` : ''}
               <td>${job.city || '-'}</td>
               <td>${job.salary || '-'}</td>
               <td><span class="${getJobStatusBadgeClass(job.status)}">${formatJobStatus(job.status)}</span></td>
@@ -844,7 +1121,7 @@ function renderJobs() {
               <td>${job.greeted_count}</td>
               <td>${job.responded_count}</td>
               <td>${job.resume_downloaded_count}</td>
-              <td>${renderJobActions(job)}</td>
+              ${admin ? '' : `<td>${renderJobActions(job)}</td>`}
             </tr>
           `).join('')}
         </tbody>
@@ -1102,12 +1379,14 @@ function renderCandidateTable() {
     return '<div class="empty-state">当前筛选条件下没有候选人，建议切换岗位或放宽筛选条件。</div>';
   }
 
+  const admin = isAdmin();
   return `
     <div class="table-scroll">
       <table>
         <thead>
           <tr>
             <th>候选人</th>
+            ${admin ? '<th>所属 HR</th>' : ''}
             <th>当前岗位</th>
             <th>流程阶段</th>
             <th>简历状态</th>
@@ -1124,6 +1403,7 @@ function renderCandidateTable() {
                 ${escapeHtml(candidate.name || '-')}
                 <div class="muted">${escapeHtml(candidate.boss_encrypt_geek_id || '-')}</div>
               </td>
+              ${admin ? `<td>${escapeHtml(candidate.hr_name || '未分配')}</td>` : ''}
               <td>${escapeHtml(candidate.job_name || '-')}</td>
               <td>
                 <span class="${getLifecycleBadgeClass(candidate.lifecycle_status)}">

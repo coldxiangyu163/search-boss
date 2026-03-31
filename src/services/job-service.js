@@ -4,13 +4,16 @@ class JobService {
     this.agentService = agentService;
   }
 
-  async listJobs({ hrAccountId } = {}) {
+  async listJobs({ hrAccountId, includeHrName } = {}) {
     const values = [];
     let whereClause = '';
     if (hrAccountId) {
       values.push(hrAccountId);
       whereClause = `where j.hr_account_id = $${values.length}`;
     }
+
+    const hrJoin = includeHrName ? 'left join hr_accounts ha on ha.id = j.hr_account_id' : '';
+    const hrSelect = includeHrName ? ', ha.name as hr_name' : '';
 
     const result = await this.pool.query(`
       select
@@ -26,10 +29,12 @@ class JobService {
         count(*) filter (where jc.lifecycle_status = 'greeted')::int as greeted_count,
         count(*) filter (where jc.lifecycle_status in ('responded', 'resume_requested', 'resume_received', 'resume_downloaded'))::int as responded_count,
         count(*) filter (where jc.resume_state = 'downloaded')::int as resume_downloaded_count
+        ${hrSelect}
       from jobs j
       left join job_candidates jc on jc.job_id = j.id
+      ${hrJoin}
       ${whereClause}
-      group by j.id
+      group by j.id ${includeHrName ? ', ha.name' : ''}
       order by j.updated_at desc, j.id desc
     `, values);
 

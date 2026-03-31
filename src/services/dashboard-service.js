@@ -106,6 +106,57 @@ class DashboardService {
       snapshotDate: result.rows[0]?.snapshot_date
     };
   }
+
+  async getHrOverview({ departmentId } = {}) {
+    const values = [];
+    let whereClause = '';
+    if (departmentId) {
+      values.push(departmentId);
+      whereClause = `where ha.department_id = $${values.length}`;
+    }
+
+    const result = await this.pool.query(`
+      select
+        ha.id as hr_account_id,
+        ha.name as hr_name,
+        ha.status as hr_status,
+        ba.display_name as boss_account_name,
+        bi.status as browser_status,
+        bi.cdp_endpoint,
+        (select count(*)::int from jobs where hr_account_id = ha.id) as job_count,
+        (select count(*)::int from job_candidates where hr_account_id = ha.id) as candidate_count,
+        (select count(*)::int from candidate_actions ca
+          join job_candidates jc on jc.id = ca.job_candidate_id
+          where jc.hr_account_id = ha.id
+            and ca.action_type = 'greet_sent'
+            and ca.created_at >= current_date) as greeted_today,
+        (select count(*)::int from sourcing_runs
+          where hr_account_id = ha.id
+            and mode in ('followup', 'chat')
+            and created_at >= current_date) as followup_today,
+        (select count(*)::int from candidate_attachments cat
+          join job_candidates jc on jc.id = cat.job_candidate_id
+          where jc.hr_account_id = ha.id
+            and cat.status = 'downloaded'
+            and cat.downloaded_at >= current_date) as resumes_today,
+        (select status from sourcing_runs
+          where hr_account_id = ha.id
+          order by created_at desc limit 1) as last_run_status,
+        (select mode from sourcing_runs
+          where hr_account_id = ha.id
+          order by created_at desc limit 1) as last_run_mode,
+        (select created_at from sourcing_runs
+          where hr_account_id = ha.id and status = 'failed'
+          order by created_at desc limit 1) as last_failure_at
+      from hr_accounts ha
+      left join boss_accounts ba on ba.hr_account_id = ha.id and ba.status = 'active'
+      left join browser_instances bi on bi.boss_account_id = ba.id
+      ${whereClause}
+      order by ha.id
+    `, values);
+
+    return result.rows;
+  }
 }
 
 module.exports = {

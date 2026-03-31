@@ -3,7 +3,7 @@ class CandidateService {
     this.pool = pool;
   }
 
-  async listCandidates({ jobKey, status, resumeState, keyword, page = 1, pageSize = 20, hrAccountId } = {}) {
+  async listCandidates({ jobKey, status, resumeState, keyword, page = 1, pageSize = 20, hrAccountId, includeHrName } = {}) {
     const normalizedPage = Math.max(Number(page) || 1, 1);
     const normalizedPageSize = Math.min(Math.max(Number(pageSize) || 20, 1), 100);
     const offset = (normalizedPage - 1) * normalizedPageSize;
@@ -52,6 +52,9 @@ class CandidateService {
       values
     );
 
+    const hrJoin = includeHrName ? 'left join hr_accounts ha on ha.id = jc.hr_account_id' : '';
+    const hrSelect = includeHrName ? ', ha.name as hr_name' : '';
+
     const result = await this.pool.query(
       `
         select
@@ -75,9 +78,11 @@ class CandidateService {
           jc.resume_path,
           jc.notes,
           coalesce(jc.last_inbound_at, jc.last_outbound_at, jc.updated_at) as last_activity_at
+          ${hrSelect}
         from job_candidates jc
         join jobs j on j.id = jc.job_id
         join people p on p.id = jc.person_id
+        ${hrJoin}
         ${whereClause}
         order by coalesce(jc.last_inbound_at, jc.last_outbound_at, jc.updated_at) desc, jc.id desc
         limit $${values.length + 1}

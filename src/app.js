@@ -28,6 +28,27 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
     }));
   }
 
+  if (pool) {
+    app.use(async (req, _res, next) => {
+      const userId = req.session?.userId;
+      if (userId) {
+        try {
+          const result = await pool.query(`
+            select u.id, u.role, u.department_id, u.name, u.email,
+                   ha.id as hr_account_id
+            from users u
+            left join hr_accounts ha on ha.user_id = u.id and ha.status = 'active'
+            where u.id = $1 and u.status = 'active'
+          `, [userId]);
+          if (result.rows[0]) {
+            req.user = result.rows[0];
+          }
+        } catch (_) {}
+      }
+      next();
+    });
+  }
+
   app.use(express.static('public'));
 
   // --- Auth routes (no auth required) ---
@@ -107,10 +128,24 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
     }
   });
 
+  app.get('/api/admin/dashboard/hr-overview', async (req, res, next) => {
+    try {
+      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const departmentId = req.user.role === 'dept_admin' ? req.user.department_id : undefined;
+      const items = await services.dashboard.getHrOverview({ departmentId });
+      res.json({ items });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get('/api/jobs', async (req, res, next) => {
     try {
+      const isAdmin = req.user && ['enterprise_admin', 'dept_admin'].includes(req.user.role);
       const hrAccountId = req.user?.role === 'hr' ? req.user.hr_account_id : undefined;
-      const items = await services.jobs.listJobs({ hrAccountId });
+      const items = await services.jobs.listJobs({ hrAccountId, includeHrName: isAdmin });
       res.json({ items });
     } catch (error) {
       next(error);
@@ -208,6 +243,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.get('/api/candidates', async (req, res, next) => {
     try {
+      const isAdmin = req.user && ['enterprise_admin', 'dept_admin'].includes(req.user.role);
       const hrAccountId = req.user?.role === 'hr' ? req.user.hr_account_id : undefined;
       const result = await services.candidates.listCandidates({
         jobKey: req.query.jobKey,
@@ -216,7 +252,8 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
         keyword: req.query.keyword,
         page: req.query.page ? Number(req.query.page) : undefined,
         pageSize: req.query.pageSize ? Number(req.query.pageSize) : undefined,
-        hrAccountId
+        hrAccountId,
+        includeHrName: isAdmin
       });
 
       if (Array.isArray(result)) {
