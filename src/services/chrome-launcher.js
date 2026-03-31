@@ -63,6 +63,7 @@ class ChromeLauncher {
     const running = await this.isRunning();
     if (running) {
       console.log(`[chrome-launcher] Chrome already running at ${this.cdpEndpoint}`);
+      await this._ensureBossPage();
       return { started: false, alreadyRunning: true };
     }
 
@@ -152,6 +153,7 @@ class ChromeLauncher {
 
       await this._waitForReady();
       console.log(`[chrome-launcher] Chrome started successfully on port ${this.port}`);
+      await this._ensureBossPage();
       return { started: true, alreadyRunning: false, pid: this._process?.pid };
     } catch (err) {
       console.error(`[chrome-launcher] Failed to start Chrome: ${err.message}`);
@@ -160,6 +162,59 @@ class ChromeLauncher {
         this._process = null;
       }
       throw err;
+    }
+  }
+
+  async _ensureBossPage() {
+    const bossUrl = 'https://www.zhipin.com/';
+    try {
+      const response = await fetch(`${this.cdpEndpoint}/json`);
+      if (!response.ok) return;
+      const targets = await response.json();
+      const pages = (Array.isArray(targets) ? targets : []).filter(
+        (t) => t.type === 'page'
+      );
+      const hasBoss = pages.some(
+        (t) => t.url && t.url.startsWith(bossUrl)
+      );
+      if (hasBoss) {
+        console.log('[chrome-launcher] BOSS page already open');
+        return;
+      }
+
+      const blank = pages.find((t) => t.url === 'about:blank' || t.url === 'chrome://newtab/');
+      const targetId = blank?.id || pages[0]?.id;
+      if (!targetId) {
+        console.log('[chrome-launcher] No page target to navigate, creating new tab');
+        await fetch(`${this.cdpEndpoint}/json/new?${encodeURIComponent(bossUrl)}`);
+        console.log(`[chrome-launcher] Opened ${bossUrl} in new tab`);
+        return;
+      }
+
+      const wsUrl = (blank || pages[0]).webSocketDebuggerUrl;
+      if (!wsUrl) return;
+      const ws = new WebSocket(wsUrl);
+      await new Promise((resolve, reject) => {
+        ws.addEventListener('open', resolve, { once: true });
+        ws.addEventListener('error', () => reject(new Error('ws_connect_failed')), { once: true });
+        setTimeout(() => reject(new Error('ws_connect_timeout')), 5000);
+      });
+      ws.send(JSON.stringify({
+        id: 1,
+        method: 'Page.navigate',
+        params: { url: bossUrl }
+      }));
+      await new Promise((resolve) => {
+        ws.addEventListener('message', (event) => {
+          const msg = JSON.parse(event.data);
+          if (msg.id === 1) resolve();
+        });
+        setTimeout(resolve, 5000);
+      });
+      ws.close();
+      console.log(`[chrome-launcher] Navigated to ${bossUrl}`);
+    } catch (err) {
+      console.warn(`[chrome-launcher] Failed to open BOSS page: ${err.message}`);
     }
   }
 
