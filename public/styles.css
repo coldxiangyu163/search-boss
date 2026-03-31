@@ -1121,3 +1121,110 @@ input[type="time"]:focus {
 .sync-inline-label {
   line-height: 1;
 }
+
+.boss-login-card {
+  margin-bottom: 16px;
+}
+.boss-login-card .highlight-panel {
+  border-left: 3px solid #1f5eff;
+}
+
+.live-view-container {
+  background: var(--surface, #fff);
+  border-radius: 16px;
+  width: 90vw;
+  max-width: 1100px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.2);
+}
+.live-view-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 20px 24px 12px;
+  border-bottom: 1px solid var(--border, #eee);
+}
+.live-view-header .card-title {
+  margin: 2px 0 0;
+}
+.live-view-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.live-view-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #34c759;
+  animation: live-pulse 1.5s ease-in-out infinite;
+}
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.live-view-status {
+  margin-top: 4px;
+  font-size: 12px;
+}
+.live-view-info {
+  color: var(--text-secondary, #666);
+}
+.live-view-error {
+  color: #e53e3e;
+}
+.live-view-body {
+  flex: 1;
+  overflow: auto;
+  padding: 12px;
+  background: #1a1a1a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+}
+.live-view-img-wrapper {
+  position: relative;
+  display: inline-block;
+}
+.live-view-img {
+  max-width: 100%;
+  max-height: calc(90vh - 150px);
+  border-radius: 4px;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.live-view-click-indicator {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(31, 94, 255, 0.5);
+  border: 2px solid rgba(31, 94, 255, 0.8);
+  transform: translate(-50%, -50%) scale(0);
+  pointer-events: none;
+  opacity: 0;
+}
+.live-view-click-indicator.is-active {
+  animation: click-ripple 0.5s ease-out forwards;
+}
+@keyframes click-ripple {
+  0% { transform: translate(-50%, -50%) scale(0); opacity: 1; }
+  50% { transform: translate(-50%, -50%) scale(1.5); opacity: 0.6; }
+  100% { transform: translate(-50%, -50%) scale(2); opacity: 0; }
+}
+.live-view-footer {
+  padding: 8px 24px;
+  border-top: 1px solid var(--border, #eee);
+  text-align: center;
+}
+.live-view-hint {
+  font-size: 12px;
+  color: var(--text-muted, #999);
+}

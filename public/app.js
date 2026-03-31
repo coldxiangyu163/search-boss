@@ -756,12 +756,45 @@ function applySyncTerminalStatus(terminalStatus) {
   state.syncModal.status = 'running';
 }
 
+function renderBossLoginCard() {
+  if (!state.currentUser || !state.currentUser.hrAccountId) return '';
+  return `
+    <section class="boss-login-card">
+      <div class="card highlight-panel">
+        <div class="card-header">
+          <div>
+            <p class="eyebrow">BOSS 账号</p>
+            <h3 class="card-title">浏览器登录状态</h3>
+            <p class="card-subtitle">查看当前 BOSS 直聘账号的浏览器画面，扫码登录或确认在线状态。</p>
+          </div>
+          <button class="sync-inline-btn" onclick="openHrLiveView()">
+            <span class="sync-inline-icon">&#128065;</span>
+            <span class="sync-inline-label">查看浏览器画面</span>
+          </button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function openHrLiveView() {
+  liveView.open = true;
+  liveView.instanceId = null;
+  liveView.error = '';
+  liveView.pageUrl = '';
+  liveView.pageTitle = '';
+  liveView.useHrEndpoint = true;
+  renderLiveViewModal();
+  startLiveViewPolling();
+}
+
 function renderCommandCenter() {
   const { kpis, queues, health, bossRecruitData } = state.summary;
   const boss = bossRecruitData || {};
   const hasRecruitData = Boolean(bossRecruitData);
 
   return `
+    ${renderBossLoginCard()}
     <section class="card-grid">
       ${metricCard('我看过', boss.viewed?.value ?? '-', boss.viewed ? `较昨日 ${formatDelta(boss.viewed.delta)}` : 'BOSS 数据未同步')}
       ${metricCard('看过我', boss.viewedMe?.value ?? '-', boss.viewedMe ? `较昨日 ${formatDelta(boss.viewedMe.delta)}` : 'BOSS 数据未同步')}
@@ -1322,6 +1355,7 @@ function renderSysAdminBossAndBrowser(bossAccounts, browserInstances, hrOptions,
                 <td>
                   <button class="btn-sm" onclick='editBrowserInstance(${JSON.stringify(bi).replace(/'/g, "&#39;")})'>编辑</button>
                   <button class="btn-sm" onclick="checkBrowserInstance(${bi.id})">检测</button>
+                  <button class="btn-sm" onclick="openLiveView(${bi.id})">实时画面</button>
                   <button class="btn-sm btn-danger" onclick="deleteBrowserInstance(${bi.id})">删除</button>
                 </td>
               </tr>`;
@@ -1722,6 +1756,179 @@ async function deleteBrowserInstance(id) {
     await fetchJson('/api/admin/browser-instances/' + id, { method: 'DELETE' });
     await loadData();
   } catch (err) { alert(err.message); }
+}
+
+const liveView = {
+  open: false,
+  instanceId: null,
+  timer: null,
+  error: '',
+  pageUrl: '',
+  pageTitle: '',
+  useHrEndpoint: false
+};
+
+function openLiveView(instanceId) {
+  liveView.open = true;
+  liveView.instanceId = instanceId;
+  liveView.error = '';
+  liveView.pageUrl = '';
+  liveView.pageTitle = '';
+  liveView.useHrEndpoint = false;
+  renderLiveViewModal();
+  startLiveViewPolling();
+}
+
+function closeLiveView() {
+  stopLiveViewPolling();
+  liveView.open = false;
+  liveView.instanceId = null;
+  liveView.error = '';
+  const modal = document.getElementById('live-view-modal');
+  if (modal) modal.remove();
+}
+
+function startLiveViewPolling() {
+  stopLiveViewPolling();
+  refreshLiveView();
+  liveView.timer = window.setInterval(refreshLiveView, 1500);
+}
+
+function stopLiveViewPolling() {
+  if (liveView.timer) {
+    window.clearInterval(liveView.timer);
+    liveView.timer = null;
+  }
+}
+
+async function refreshLiveView() {
+  if (!liveView.open || (!liveView.instanceId && !liveView.useHrEndpoint)) return;
+  const img = document.getElementById('live-view-img');
+  if (!img) return;
+
+  try {
+    const screenshotUrl = liveView.useHrEndpoint
+      ? '/api/browser/screenshot'
+      : `/api/admin/browser-instances/${liveView.instanceId}/screenshot`;
+    const response = await fetch(screenshotUrl);
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      liveView.error = data.message || '截图失败';
+      updateLiveViewStatus();
+      return;
+    }
+    liveView.error = '';
+    liveView.pageUrl = decodeURIComponent(response.headers.get('X-Page-Url') || '');
+    liveView.pageTitle = decodeURIComponent(response.headers.get('X-Page-Title') || '');
+    liveView.viewportWidth = Number(response.headers.get('X-Viewport-Width')) || 0;
+    liveView.viewportHeight = Number(response.headers.get('X-Viewport-Height')) || 0;
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const oldSrc = img.src;
+    img.src = url;
+    if (oldSrc && oldSrc.startsWith('blob:')) {
+      URL.revokeObjectURL(oldSrc);
+    }
+    updateLiveViewStatus();
+  } catch (err) {
+    liveView.error = '网络错误: ' + err.message;
+    updateLiveViewStatus();
+  }
+}
+
+function updateLiveViewStatus() {
+  const statusEl = document.getElementById('live-view-status');
+  if (!statusEl) return;
+  if (liveView.error) {
+    statusEl.innerHTML = `<span class="live-view-error">${escapeHtml(liveView.error)}</span>`;
+  } else {
+    const title = liveView.pageTitle || '加载中...';
+    statusEl.innerHTML = `<span class="live-view-info">${escapeHtml(title)}</span>`;
+  }
+}
+
+function renderLiveViewModal() {
+  let modal = document.getElementById('live-view-modal');
+  if (modal) modal.remove();
+
+  modal = document.createElement('div');
+  modal.id = 'live-view-modal';
+  modal.className = 'modal-overlay';
+  modal.style.display = 'flex';
+  modal.onclick = (e) => { if (e.target === modal) closeLiveView(); };
+  const modalTitle = liveView.useHrEndpoint ? '我的 BOSS 浏览器' : `实例 #${liveView.instanceId}`;
+  modal.innerHTML = `
+    <div class="live-view-container">
+      <div class="live-view-header">
+        <div>
+          <p class="eyebrow">浏览器实时画面</p>
+          <h3 class="card-title">${modalTitle}</h3>
+          <div id="live-view-status" class="live-view-status">
+            <span class="live-view-info">连接中...</span>
+          </div>
+        </div>
+        <div class="live-view-actions">
+          <span class="live-view-dot"></span>
+          <button class="button-secondary" onclick="closeLiveView()">关闭</button>
+        </div>
+      </div>
+      <div class="live-view-body" id="live-view-body">
+        <div class="live-view-img-wrapper">
+          <img id="live-view-img" class="live-view-img" alt="浏览器画面加载中..." />
+          <div id="live-view-click-indicator" class="live-view-click-indicator"></div>
+        </div>
+      </div>
+      <div class="live-view-footer">
+        <span class="live-view-hint">点击画面可操作远程浏览器</span>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  const img = document.getElementById('live-view-img');
+  if (img) {
+    img.style.cursor = 'crosshair';
+    img.addEventListener('click', handleLiveViewClick);
+  }
+}
+
+async function handleLiveViewClick(event) {
+  const img = event.target;
+  const rect = img.getBoundingClientRect();
+  const ratioX = event.clientX - rect.left;
+  const ratioY = event.clientY - rect.top;
+
+  const targetWidth = liveView.viewportWidth || img.naturalWidth;
+  const targetHeight = liveView.viewportHeight || img.naturalHeight;
+  const pageX = (ratioX / rect.width) * targetWidth;
+  const pageY = (ratioY / rect.height) * targetHeight;
+
+  showClickIndicator(ratioX, ratioY);
+
+  const clickUrl = liveView.useHrEndpoint
+    ? '/api/browser/click'
+    : `/api/admin/browser-instances/${liveView.instanceId}/click`;
+
+  try {
+    await fetch(clickUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ x: Math.round(pageX), y: Math.round(pageY) })
+    });
+    setTimeout(refreshLiveView, 300);
+  } catch (err) {
+    console.error('click failed:', err);
+  }
+}
+
+function showClickIndicator(x, y) {
+  const indicator = document.getElementById('live-view-click-indicator');
+  if (!indicator) return;
+  indicator.style.left = x + 'px';
+  indicator.style.top = y + 'px';
+  indicator.classList.remove('is-active');
+  void indicator.offsetWidth;
+  indicator.classList.add('is-active');
 }
 
 function renderJobs() {

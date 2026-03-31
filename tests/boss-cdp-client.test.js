@@ -301,3 +301,51 @@ test('connectWebSocket queues messages that arrive before waitForMessage is call
     global.WebSocket = originalWebSocket;
   }
 });
+
+test('BossCdpClient captureAnyScreenshot returns base64 data from first page target', async () => {
+  const screenshotData = 'iVBORw0KGgoAAAANSUhEUg==';
+  const targets = [
+    { id: 'page-1', type: 'page', url: 'https://www.zhipin.com/web/user/safe/verify-slider', title: 'BOSS直聘', webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/page-1' }
+  ];
+  let sentCommand = null;
+  const sentCommands = [];
+
+  const client = new BossCdpClient({
+    endpoint: 'http://127.0.0.1:9222',
+    requestImpl: async (url) => {
+      if (url.endsWith('/json')) {
+        return { ok: true, json: async () => targets };
+      }
+      return { ok: false };
+    },
+    connectImpl: async () => ({
+      send(msg) {
+        sentCommand = JSON.parse(msg);
+        sentCommands.push(sentCommand);
+      },
+      waitForMessage() {
+        if (sentCommand.method === 'Page.captureScreenshot') {
+          return Promise.resolve(JSON.stringify({
+            id: sentCommand.id,
+            result: { data: screenshotData }
+          }));
+        }
+        return Promise.resolve(JSON.stringify({
+          id: sentCommand.id,
+          result: { result: { type: 'string', value: '{"width":1024,"height":768,"dpr":1}' } }
+        }));
+      },
+      close() { return Promise.resolve(); }
+    })
+  });
+
+  const result = await client.captureAnyScreenshot({ format: 'jpeg', quality: 70 });
+
+  assert.equal(result.data, screenshotData);
+  assert.equal(result.format, 'jpeg');
+  assert.equal(result.url, targets[0].url);
+  assert.equal(result.title, targets[0].title);
+  assert.equal(sentCommands[0].method, 'Page.captureScreenshot');
+  assert.equal(result.viewport.width, 1024);
+  assert.equal(result.viewport.height, 768);
+});

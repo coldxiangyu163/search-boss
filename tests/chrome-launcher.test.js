@@ -1,7 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const os = require('node:os');
 
-const { ChromeLauncher } = require('../src/services/chrome-launcher');
+const { ChromeLauncher, needsVirtualDisplay, findFreeDisplay } = require('../src/services/chrome-launcher');
 
 test('ChromeLauncher constructor parses port from cdpEndpoint', () => {
   const launcher = new ChromeLauncher({ cdpEndpoint: 'http://127.0.0.1:9333' });
@@ -50,4 +51,42 @@ test('ChromeLauncher ensureRunning skips launch when already running', async () 
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('needsVirtualDisplay returns false on non-linux', () => {
+  if (os.platform() !== 'linux') {
+    assert.equal(needsVirtualDisplay(), false);
+  }
+});
+
+test('needsVirtualDisplay returns false when DISPLAY is set on linux', () => {
+  const origPlatform = Object.getOwnPropertyDescriptor(os, 'platform');
+  const origDisplay = process.env.DISPLAY;
+  try {
+    os.platform = () => 'linux';
+    process.env.DISPLAY = ':0';
+    // needsVirtualDisplay checks os.platform() at module level,
+    // but the function reads it at call time — so this works
+    // only if we also patch at the right level. Since we exported
+    // the function, we can test the logic directly.
+    // On non-linux CI this will just confirm false.
+    if (os.platform() === 'linux') {
+      assert.equal(needsVirtualDisplay(), false);
+    }
+  } finally {
+    if (origDisplay === undefined) {
+      delete process.env.DISPLAY;
+    } else {
+      process.env.DISPLAY = origDisplay;
+    }
+    if (origPlatform) {
+      Object.defineProperty(os, 'platform', origPlatform);
+    }
+  }
+});
+
+test('findFreeDisplay returns a number in expected range', () => {
+  const display = findFreeDisplay(99, 199);
+  assert.equal(typeof display, 'number');
+  assert.ok(display >= 99 && display <= 199);
 });

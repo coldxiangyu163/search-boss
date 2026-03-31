@@ -147,6 +147,83 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
     }
   });
 
+  app.get('/api/browser/screenshot', async (req, res, next) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: 'unauthorized' });
+      }
+      const hrAccountId = req.user.hr_account_id || req.user.hrAccountId;
+      if (!hrAccountId) {
+        return res.status(400).json({ error: 'no_hr_account', message: '当前用户未绑定 HR 账号' });
+      }
+      const bi = await pool?.query(`
+        select bi.id, bi.cdp_endpoint
+        from browser_instances bi
+        join boss_accounts ba on ba.id = bi.boss_account_id
+        where ba.hr_account_id = $1
+          and ba.status = 'active'
+          and bi.status in ('idle', 'busy')
+        order by bi.last_seen_at desc nulls last
+        limit 1
+      `, [hrAccountId]);
+      if (!bi.rows[0]) {
+        return res.status(404).json({ error: 'no_browser_instance', message: '未找到可用的浏览器实例' });
+      }
+      const endpoint = bi.rows[0].cdp_endpoint;
+      const { BossCdpClient } = require('./services/boss-cdp-client');
+      const client = new BossCdpClient({ endpoint });
+      try {
+        const result = await client.captureAnyScreenshot({ format: 'jpeg', quality: 70 });
+        const buffer = Buffer.from(result.data, 'base64');
+        res.set({
+          'Content-Type': 'image/jpeg',
+          'Content-Length': buffer.length,
+          'Cache-Control': 'no-store',
+          'X-Page-Url': encodeURIComponent(result.url || ''),
+          'X-Page-Title': encodeURIComponent(result.title || ''),
+          'X-Viewport-Width': String(result.viewport?.width || 0),
+          'X-Viewport-Height': String(result.viewport?.height || 0)
+        });
+        res.send(buffer);
+      } catch (err) {
+        res.status(502).json({ error: 'screenshot_failed', message: err.message });
+      }
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/browser/click', async (req, res, next) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: 'unauthorized' });
+      }
+      const hrAccountId = req.user.hr_account_id || req.user.hrAccountId;
+      if (!hrAccountId) {
+        return res.status(400).json({ error: 'no_hr_account', message: '当前用户未绑定 HR 账号' });
+      }
+      const { x, y } = req.body;
+      if (x === undefined || y === undefined) {
+        return res.status(400).json({ error: 'missing_coordinates' });
+      }
+      const bi = await pool?.query(`
+        select bi.id, bi.cdp_endpoint
+        from browser_instances bi
+        join boss_accounts ba on ba.id = bi.boss_account_id
+        where ba.hr_account_id = $1
+          and ba.status = 'active'
+          and bi.status in ('idle', 'busy')
+        order by bi.last_seen_at desc nulls last
+        limit 1
+      `, [hrAccountId]);
+      if (!bi.rows[0]) {
+        return res.status(404).json({ error: 'no_browser_instance', message: '未找到可用的浏览器实例' });
+      }
+      const { BossCdpClient } = require('./services/boss-cdp-client');
+      const client = new BossCdpClient({ endpoint: bi.rows[0].cdp_endpoint });
+      const result = await client.clickOnAnyPage({ x, y });
+      res.json(result);
+    } catch (error) { next(error); }
+  });
+
   app.get('/api/jobs', async (req, res, next) => {
     try {
       const admin = req.user && isAdminRole(req.user);
@@ -1061,6 +1138,53 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
       }
       await pool?.query('delete from browser_instances where id = $1', [req.params.id]);
       res.json({ ok: true });
+    } catch (error) { next(error); }
+  });
+
+  app.get('/api/admin/browser-instances/:id/screenshot', async (req, res, next) => {
+    try {
+      if (!req.user || !isAdminRole(req.user)) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const bi = await pool?.query('select * from browser_instances where id = $1', [req.params.id]);
+      if (!bi.rows[0]) return res.status(404).json({ error: 'not_found' });
+      const endpoint = bi.rows[0].cdp_endpoint;
+      const { BossCdpClient } = require('./services/boss-cdp-client');
+      const client = new BossCdpClient({ endpoint });
+      try {
+        const result = await client.captureAnyScreenshot({ format: 'jpeg', quality: 70 });
+        const buffer = Buffer.from(result.data, 'base64');
+        res.set({
+          'Content-Type': 'image/jpeg',
+          'Content-Length': buffer.length,
+          'Cache-Control': 'no-store',
+          'X-Page-Url': encodeURIComponent(result.url || ''),
+          'X-Page-Title': encodeURIComponent(result.title || ''),
+          'X-Viewport-Width': String(result.viewport?.width || 0),
+          'X-Viewport-Height': String(result.viewport?.height || 0)
+        });
+        res.send(buffer);
+      } catch (err) {
+        res.status(502).json({ error: 'screenshot_failed', message: err.message });
+      }
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/admin/browser-instances/:id/click', async (req, res, next) => {
+    try {
+      if (!req.user || !isAdminRole(req.user)) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const { x, y } = req.body;
+      if (x === undefined || y === undefined) {
+        return res.status(400).json({ error: 'missing_coordinates' });
+      }
+      const bi = await pool?.query('select * from browser_instances where id = $1', [req.params.id]);
+      if (!bi.rows[0]) return res.status(404).json({ error: 'not_found' });
+      const { BossCdpClient } = require('./services/boss-cdp-client');
+      const client = new BossCdpClient({ endpoint: bi.rows[0].cdp_endpoint });
+      const result = await client.clickOnAnyPage({ x, y });
+      res.json(result);
     } catch (error) { next(error); }
   });
 

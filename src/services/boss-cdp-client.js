@@ -119,7 +119,7 @@ class BossCdpClient {
             throw new Error(message.error.message || 'boss_cdp_evaluate_failed');
           }
 
-          return message.result?.result || null;
+          return message.result?.result ?? message.result ?? null;
         }
       } catch (err) {
         lastError = err;
@@ -138,6 +138,104 @@ class BossCdpClient {
     }
 
     throw lastError;
+  }
+
+  async captureScreenshot({ targetId, urlPrefix, format = 'jpeg', quality = 70 } = {}) {
+    const target = await this.resolveBossTarget({
+      targetId,
+      urlPrefix: urlPrefix || 'https://www.zhipin.com/'
+    });
+
+    const result = await this.sendCommand({
+      targetId: target.id,
+      urlPrefix,
+      method: 'Page.captureScreenshot',
+      params: { format, quality }
+    });
+
+    if (!result?.data) {
+      throw new Error('boss_screenshot_empty');
+    }
+
+    return { data: result.data, format };
+  }
+
+  async captureAnyScreenshot({ endpoint, format = 'jpeg', quality = 70 } = {}) {
+    const cdpEndpoint = endpoint || this.endpoint;
+    const response = await this.requestImpl(`${cdpEndpoint}/json`);
+    if (!response.ok) {
+      throw new Error('boss_cdp_list_targets_failed');
+    }
+    const targets = await response.json();
+    const pages = (Array.isArray(targets) ? targets : []).filter(
+      (t) => t.type === 'page' && t.url !== 'about:blank' && !t.url.startsWith('devtools://')
+    );
+    if (!pages.length) {
+      throw new Error('boss_no_page_target');
+    }
+    const target = pages[0];
+    const result = await this.sendCommand({
+      targetId: target.id,
+      method: 'Page.captureScreenshot',
+      params: { format, quality }
+    });
+    if (!result?.data) {
+      throw new Error('boss_screenshot_empty');
+    }
+
+    let viewport = null;
+    try {
+      const sizeResult = await this.sendCommand({
+        targetId: target.id,
+        method: 'Runtime.evaluate',
+        params: {
+          expression: 'JSON.stringify({ width: window.innerWidth, height: window.innerHeight, dpr: window.devicePixelRatio })',
+          returnByValue: true
+        }
+      });
+      viewport = JSON.parse(sizeResult?.value || '{}');
+    } catch {
+      // viewport info is best-effort
+    }
+
+    return { data: result.data, format, url: target.url, title: target.title, viewport };
+  }
+
+  async clickOnAnyPage({ x, y, endpoint } = {}) {
+    const normalizedX = Number(x);
+    const normalizedY = Number(y);
+    if (!Number.isFinite(normalizedX) || !Number.isFinite(normalizedY)) {
+      throw new Error('boss_mouse_coordinates_required');
+    }
+
+    const cdpEndpoint = endpoint || this.endpoint;
+    const response = await this.requestImpl(`${cdpEndpoint}/json`);
+    if (!response.ok) {
+      throw new Error('boss_cdp_list_targets_failed');
+    }
+    const targets = await response.json();
+    const pages = (Array.isArray(targets) ? targets : []).filter(
+      (t) => t.type === 'page' && t.url !== 'about:blank' && !t.url.startsWith('devtools://')
+    );
+    if (!pages.length) {
+      throw new Error('boss_no_page_target');
+    }
+    const target = pages[0];
+
+    const mouseEvents = [
+      { type: 'mouseMoved', button: 'none' },
+      { type: 'mousePressed', button: 'left', clickCount: 1 },
+      { type: 'mouseReleased', button: 'left', clickCount: 1 }
+    ];
+    for (const evt of mouseEvents) {
+      await this.sendCommand({
+        targetId: target.id,
+        method: 'Input.dispatchMouseEvent',
+        params: { ...evt, x: normalizedX, y: normalizedY }
+      });
+    }
+
+    return { ok: true, x: normalizedX, y: normalizedY, url: target.url };
   }
 
   async bringToFront({ targetId, urlPrefix } = {}) {

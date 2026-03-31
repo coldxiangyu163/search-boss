@@ -1,4 +1,4 @@
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const path = require('node:path');
 const os = require('node:os');
 
@@ -8,6 +8,32 @@ const DEFAULT_CHROME_PATHS = {
   linux: '/usr/bin/google-chrome'
 };
 
+function needsVirtualDisplay() {
+  if (os.platform() !== 'linux') return false;
+  if (process.env.DISPLAY) return false;
+  return true;
+}
+
+function isXvfbInstalled() {
+  try {
+    execFileSync('which', ['Xvfb'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function findFreeDisplay(start = 99, end = 199) {
+  for (let n = start; n <= end; n++) {
+    try {
+      execFileSync('test', ['-e', `/tmp/.X11-unix/X${n}`], { stdio: 'ignore' });
+    } catch {
+      return n;
+    }
+  }
+  return start;
+}
+
 class ChromeLauncher {
   constructor({ cdpEndpoint, chromePath, userDataDir, downloadDir } = {}) {
     this.cdpEndpoint = cdpEndpoint || 'http://127.0.0.1:9222';
@@ -15,6 +41,7 @@ class ChromeLauncher {
     this.userDataDir = userDataDir || path.join(os.homedir(), '.chrome-boss-profile');
     this.downloadDir = downloadDir || path.join(os.homedir(), '.chrome-boss-downloads');
     this._process = null;
+    this._xvfbProcess = null;
 
     const parsed = new URL(this.cdpEndpoint);
     this.host = parsed.hostname;
@@ -40,7 +67,52 @@ class ChromeLauncher {
     }
 
     console.log(`[chrome-launcher] Chrome not detected at ${this.cdpEndpoint}, starting...`);
+    this._ensureDisplay();
     return this._launch();
+  }
+
+  _ensureDisplay() {
+    if (!needsVirtualDisplay()) {
+      if (os.platform() === 'linux' && process.env.DISPLAY) {
+        console.log(`[chrome-launcher] DISPLAY=${process.env.DISPLAY}, skipping Xvfb`);
+      }
+      return;
+    }
+
+    if (!isXvfbInstalled()) {
+      console.warn('[chrome-launcher] No DISPLAY and Xvfb not installed — Chrome may fail to start');
+      console.warn('[chrome-launcher] Install with: sudo apt install -y xvfb');
+      return;
+    }
+
+    const displayNum = findFreeDisplay();
+    const display = `:${displayNum}`;
+    console.log(`[chrome-launcher] No DISPLAY detected, starting Xvfb on ${display}`);
+
+    this._xvfbProcess = spawn('Xvfb', [
+      display,
+      '-screen', '0', '1920x1080x24',
+      '-ac',
+      '-nolisten', 'tcp'
+    ], {
+      stdio: 'ignore',
+      detached: true
+    });
+
+    this._xvfbProcess.unref();
+
+    this._xvfbProcess.on('error', (err) => {
+      console.error(`[chrome-launcher] Xvfb error: ${err.message}`);
+      this._xvfbProcess = null;
+    });
+
+    this._xvfbProcess.on('exit', (code) => {
+      console.log(`[chrome-launcher] Xvfb exited with code ${code}`);
+      this._xvfbProcess = null;
+    });
+
+    process.env.DISPLAY = display;
+    console.log(`[chrome-launcher] Xvfb started, DISPLAY=${display} (pid ${this._xvfbProcess.pid})`);
   }
 
   async _launch() {
@@ -54,10 +126,15 @@ class ChromeLauncher {
       '--disable-renderer-backgrounding'
     ];
 
+    if (os.platform() === 'linux') {
+      args.push('--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage');
+    }
+
     try {
       this._process = spawn(this.chromePath, args, {
         stdio: 'ignore',
-        detached: true
+        detached: true,
+        env: { ...process.env }
       });
 
       this._process.unref();
@@ -98,4 +175,4 @@ class ChromeLauncher {
   }
 }
 
-module.exports = { ChromeLauncher };
+module.exports = { ChromeLauncher, needsVirtualDisplay, isXvfbInstalled, findFreeDisplay };
