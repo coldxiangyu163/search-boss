@@ -12,7 +12,7 @@ class AuthService {
 
     const result = await this.pool.query(`
       select u.id, u.name, u.email, u.role, u.department_id,
-             u.password_hash, u.status,
+             u.password_hash, u.status, u.expires_at, u.max_hr_accounts,
              ha.id as hr_account_id
       from users u
       left join hr_accounts ha on ha.user_id = u.id and ha.status = 'active'
@@ -29,6 +29,10 @@ class AuthService {
       return { ok: false, error: 'account_disabled' };
     }
 
+    if (user.expires_at && new Date(user.expires_at) < new Date()) {
+      return { ok: false, error: 'account_expired' };
+    }
+
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) {
       return { ok: false, error: 'invalid_credentials' };
@@ -42,7 +46,9 @@ class AuthService {
         email: user.email,
         role: user.role,
         departmentId: user.department_id,
-        hrAccountId: user.hr_account_id
+        hrAccountId: user.hr_account_id,
+        expiresAt: user.expires_at,
+        maxHrAccounts: user.max_hr_accounts
       }
     };
   }
@@ -50,6 +56,7 @@ class AuthService {
   async getMe(userId) {
     const result = await this.pool.query(`
       select u.id, u.name, u.email, u.role, u.department_id,
+             u.expires_at, u.max_hr_accounts,
              d.name as department_name,
              ha.id as hr_account_id, ha.name as hr_account_name
       from users u
@@ -62,6 +69,10 @@ class AuthService {
     const user = result.rows[0];
     if (!user) return null;
 
+    if (user.expires_at && new Date(user.expires_at) < new Date()) {
+      return null;
+    }
+
     return {
       id: user.id,
       name: user.name,
@@ -70,7 +81,9 @@ class AuthService {
       departmentId: user.department_id,
       departmentName: user.department_name,
       hrAccountId: user.hr_account_id,
-      hrAccountName: user.hr_account_name
+      hrAccountName: user.hr_account_name,
+      expiresAt: user.expires_at,
+      maxHrAccounts: user.max_hr_accounts
     };
   }
 

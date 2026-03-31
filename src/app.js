@@ -4,7 +4,7 @@ const path = require('node:path');
 const express = require('express');
 const session = require('express-session');
 const PgStore = require('connect-pg-simple')(session);
-const { authMiddleware, requireRole, resolveHrScope } = require('./middleware/auth');
+const { authMiddleware, requireRole, resolveHrScope, isSystemAdmin, isAdminRole } = require('./middleware/auth');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const RESUMES_ROOT = path.join(REPO_ROOT, 'resumes');
@@ -35,13 +35,19 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
         try {
           const result = await pool.query(`
             select u.id, u.role, u.department_id, u.name, u.email,
+                   u.expires_at, u.max_hr_accounts,
                    ha.id as hr_account_id
             from users u
             left join hr_accounts ha on ha.user_id = u.id and ha.status = 'active'
             where u.id = $1 and u.status = 'active'
           `, [userId]);
-          if (result.rows[0]) {
-            req.user = result.rows[0];
+          const user = result.rows[0];
+          if (user) {
+            if (user.expires_at && new Date(user.expires_at) < new Date()) {
+              req.session.destroy(() => {});
+            } else {
+              req.user = user;
+            }
           }
         } catch (_) {}
       }
@@ -130,10 +136,10 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.get('/api/admin/dashboard/hr-overview', async (req, res, next) => {
     try {
-      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+      if (!req.user || !isAdminRole(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
-      const departmentId = req.user.role === 'dept_admin' ? req.user.department_id : undefined;
+      const departmentId = isSystemAdmin(req.user) ? undefined : req.user.department_id;
       const items = await services.dashboard.getHrOverview({ departmentId });
       res.json({ items });
     } catch (error) {
@@ -143,9 +149,9 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.get('/api/jobs', async (req, res, next) => {
     try {
-      const isAdmin = req.user && ['enterprise_admin', 'dept_admin'].includes(req.user.role);
+      const admin = req.user && isAdminRole(req.user);
       const hrAccountId = req.user?.role === 'hr' ? req.user.hr_account_id : undefined;
-      const items = await services.jobs.listJobs({ hrAccountId, includeHrName: isAdmin });
+      const items = await services.jobs.listJobs({ hrAccountId, includeHrName: admin });
       res.json({ items });
     } catch (error) {
       next(error);
@@ -243,7 +249,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.get('/api/candidates', async (req, res, next) => {
     try {
-      const isAdmin = req.user && ['enterprise_admin', 'dept_admin'].includes(req.user.role);
+      const admin = req.user && isAdminRole(req.user);
       const hrAccountId = req.user?.role === 'hr' ? req.user.hr_account_id : undefined;
       const result = await services.candidates.listCandidates({
         jobKey: req.query.jobKey,
@@ -253,7 +259,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
         page: req.query.page ? Number(req.query.page) : undefined,
         pageSize: req.query.pageSize ? Number(req.query.pageSize) : undefined,
         hrAccountId,
-        includeHrName: isAdmin
+        includeHrName: admin
       });
 
       if (Array.isArray(result)) {
@@ -561,7 +567,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
   // --- Admin routes (require auth + admin role) ---
   app.get('/api/admin/departments', async (req, res, next) => {
     try {
-      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+      if (!req.user || !isAdminRole(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
       const result = await pool?.query('select * from departments order by id') || { rows: [] };
@@ -573,7 +579,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.post('/api/admin/departments', async (req, res, next) => {
     try {
-      if (!req.user || req.user.role !== 'enterprise_admin') {
+      if (!req.user || !isSystemAdmin(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
       const { name } = req.body;
@@ -589,7 +595,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.patch('/api/admin/departments/:id', async (req, res, next) => {
     try {
-      if (!req.user || req.user.role !== 'enterprise_admin') {
+      if (!req.user || !isSystemAdmin(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
       const { name, status } = req.body;
@@ -612,14 +618,20 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.delete('/api/admin/departments/:id', async (req, res, next) => {
     try {
-      if (!req.user || req.user.role !== 'enterprise_admin') {
+      if (!req.user || !isSystemAdmin(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
       const hasUsers = await pool?.query(
         'select count(*) from users where department_id = $1', [req.params.id]
       );
       if (parseInt(hasUsers.rows[0].count) > 0) {
-        return res.status(400).json({ error: 'department_has_users', message: '该部门下还有用户，无法删除' });
+        return res.status(400).json({ error: 'department_has_users', message: '该部门下还有用户，无法删除，请先移除或转移该部门下的所有用户' });
+      }
+      const hasHr = await pool?.query(
+        'select count(*) from hr_accounts where department_id = $1', [req.params.id]
+      );
+      if (parseInt(hasHr.rows[0].count) > 0) {
+        return res.status(400).json({ error: 'department_has_hr_accounts', message: '该部门下还有HR账号，无法删除，请先移除或转移该部门下的HR账号' });
       }
       await pool?.query('delete from departments where id = $1', [req.params.id]);
       res.json({ ok: true });
@@ -630,17 +642,18 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.get('/api/admin/users', async (req, res, next) => {
     try {
-      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+      if (!req.user || !isAdminRole(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
       let query = `
         select u.id, u.name, u.email, u.phone, u.role, u.department_id,
-               u.status, d.name as department_name
+               u.status, u.expires_at, u.max_hr_accounts,
+               d.name as department_name
         from users u
         left join departments d on d.id = u.department_id
       `;
       const values = [];
-      if (req.user.role === 'dept_admin') {
+      if (!isSystemAdmin(req.user)) {
         values.push(req.user.department_id);
         query += ` where u.department_id = $1`;
       }
@@ -654,8 +667,19 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.post('/api/admin/users', async (req, res, next) => {
     try {
-      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+      if (!req.user || !isAdminRole(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
+      }
+      if (!isSystemAdmin(req.user)) {
+        if (['system_admin', 'enterprise_admin'].includes(req.body.role)) {
+          return res.status(403).json({ error: 'forbidden', message: '无权创建该角色的用户' });
+        }
+        if (req.body.departmentId && String(req.body.departmentId) !== String(req.user.department_id)) {
+          return res.status(403).json({ error: 'forbidden', message: '只能在自己的部门下创建用户' });
+        }
+        if (!req.body.departmentId) {
+          req.body.departmentId = req.user.department_id;
+        }
       }
       const user = await services.auth.createUser(req.body);
       res.json({ item: user });
@@ -666,22 +690,54 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.patch('/api/admin/users/:id', async (req, res, next) => {
     try {
-      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+      if (!req.user || !isAdminRole(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
+      if (!isSystemAdmin(req.user)) {
+        const target = await pool?.query('select department_id, role from users where id = $1', [req.params.id]);
+        if (!target?.rows[0] || String(target.rows[0].department_id) !== String(req.user.department_id)) {
+          return res.status(403).json({ error: 'forbidden', message: '只能编辑自己部门的用户' });
+        }
+        if (['system_admin', 'enterprise_admin'].includes(target.rows[0].role)) {
+          return res.status(403).json({ error: 'forbidden', message: '无权编辑该角色的用户' });
+        }
+      }
       const { name, email, phone, role, departmentId, status } = req.body;
+      if (!isSystemAdmin(req.user) && role && ['system_admin', 'enterprise_admin'].includes(role)) {
+        return res.status(403).json({ error: 'forbidden', message: '无权设置该角色' });
+      }
+      const fields = ['name', 'email', 'phone', 'role', 'department_id', 'status'];
+      const vals = [name, email, phone, role, departmentId, status];
+      const setClauses = fields.map((f, i) => `${f} = coalesce($${i + 2}, ${f})`).join(', ');
       const result = await pool?.query(`
         update users
-        set name = coalesce($2, name),
-            email = coalesce($3, email),
-            phone = coalesce($4, phone),
-            role = coalesce($5, role),
-            department_id = coalesce($6, department_id),
-            status = coalesce($7, status),
+        set ${setClauses}, updated_at = now()
+        where id = $1
+        returning id, name, email, phone, role, department_id, status, expires_at, max_hr_accounts
+      `, [req.params.id, ...vals]);
+      if (!result.rows[0]) {
+        return res.status(404).json({ error: 'user_not_found' });
+      }
+      res.json({ item: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch('/api/admin/users/:id/limits', async (req, res, next) => {
+    try {
+      if (!req.user || !isSystemAdmin(req.user)) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const { expiresAt, maxHrAccounts } = req.body;
+      const result = await pool?.query(`
+        update users
+        set expires_at = $2,
+            max_hr_accounts = coalesce($3, max_hr_accounts),
             updated_at = now()
         where id = $1
-        returning id, name, email, phone, role, department_id, status
-      `, [req.params.id, name, email, phone, role, departmentId, status]);
+        returning id, name, email, role, department_id, status, expires_at, max_hr_accounts
+      `, [req.params.id, expiresAt || null, maxHrAccounts]);
       if (!result.rows[0]) {
         return res.status(404).json({ error: 'user_not_found' });
       }
@@ -693,7 +749,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.post('/api/admin/users/:id/reset-password', async (req, res, next) => {
     try {
-      if (!req.user || req.user.role !== 'enterprise_admin') {
+      if (!req.user || !isSystemAdmin(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
       const { password } = req.body;
@@ -711,7 +767,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.delete('/api/admin/users/:id', async (req, res, next) => {
     try {
-      if (!req.user || req.user.role !== 'enterprise_admin') {
+      if (!req.user || !isSystemAdmin(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
       if (String(req.params.id) === String(req.user.id)) {
@@ -723,6 +779,12 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
       if (parseInt(hasHr.rows[0].count) > 0) {
         return res.status(400).json({ error: 'user_has_hr_account', message: '该用户关联了HR账号，请先解除关联' });
       }
+      const isManager = await pool?.query(
+        'select count(*) from hr_accounts where manager_user_id = $1', [req.params.id]
+      );
+      if (parseInt(isManager.rows[0].count) > 0) {
+        return res.status(400).json({ error: 'user_is_hr_manager', message: '该用户是其他HR账号的管理者，请先变更管理者' });
+      }
       await pool?.query('delete from users where id = $1', [req.params.id]);
       res.json({ ok: true });
     } catch (error) {
@@ -732,7 +794,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.get('/api/admin/hr-accounts', async (req, res, next) => {
     try {
-      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+      if (!req.user || !isAdminRole(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
       let query = `
@@ -745,7 +807,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
         left join departments d on d.id = ha.department_id
       `;
       const values = [];
-      if (req.user.role === 'dept_admin') {
+      if (!isSystemAdmin(req.user)) {
         values.push(req.user.department_id);
         query += ` where ha.department_id = $1`;
       }
@@ -759,10 +821,28 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.post('/api/admin/hr-accounts', async (req, res, next) => {
     try {
-      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+      if (!req.user || !isAdminRole(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
       const { userId, departmentId, managerUserId, name, notes } = req.body;
+      if (!isSystemAdmin(req.user)) {
+        const deptId = departmentId || req.user.department_id;
+        if (String(deptId) !== String(req.user.department_id)) {
+          return res.status(403).json({ error: 'forbidden', message: '只能在自己的部门下创建HR账号' });
+        }
+        if (req.user.max_hr_accounts > 0) {
+          const countResult = await pool?.query(
+            'select count(*) from hr_accounts where department_id = $1',
+            [req.user.department_id]
+          );
+          if (parseInt(countResult.rows[0].count) >= req.user.max_hr_accounts) {
+            return res.status(400).json({
+              error: 'hr_account_limit_reached',
+              message: `HR账号数量已达上限（${req.user.max_hr_accounts}个），请联系系统管理员`
+            });
+          }
+        }
+      }
       const result = await pool?.query(`
         insert into hr_accounts (user_id, department_id, manager_user_id, name, notes)
         values ($1, $2, $3, $4, $5)
@@ -776,8 +856,14 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.patch('/api/admin/hr-accounts/:id', async (req, res, next) => {
     try {
-      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+      if (!req.user || !isAdminRole(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
+      }
+      if (!isSystemAdmin(req.user)) {
+        const ha = await pool?.query('select department_id from hr_accounts where id = $1', [req.params.id]);
+        if (!ha?.rows[0] || String(ha.rows[0].department_id) !== String(req.user.department_id)) {
+          return res.status(403).json({ error: 'forbidden', message: '只能编辑自己部门的HR账号' });
+        }
       }
       const { name, status, notes, managerUserId } = req.body;
       const result = await pool?.query(`
@@ -801,14 +887,38 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.delete('/api/admin/hr-accounts/:id', async (req, res, next) => {
     try {
-      if (!req.user || req.user.role !== 'enterprise_admin') {
+      if (!req.user || !isSystemAdmin(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
+      }
+      const hasBoss = await pool?.query(
+        'select count(*) from boss_accounts where hr_account_id = $1', [req.params.id]
+      );
+      if (parseInt(hasBoss.rows[0].count) > 0) {
+        return res.status(400).json({ error: 'hr_account_has_boss_accounts', message: '该HR账号下还有BOSS账号，请先删除关联的BOSS账号' });
       }
       const hasJobs = await pool?.query(
         'select count(*) from jobs where hr_account_id = $1', [req.params.id]
       );
       if (parseInt(hasJobs.rows[0].count) > 0) {
         return res.status(400).json({ error: 'hr_account_has_jobs', message: '该HR账号下还有职位数据，无法删除' });
+      }
+      const hasRuns = await pool?.query(
+        'select count(*) from sourcing_runs where hr_account_id = $1', [req.params.id]
+      );
+      if (parseInt(hasRuns.rows[0].count) > 0) {
+        return res.status(400).json({ error: 'hr_account_has_runs', message: '该HR账号下还有执行记录，无法删除' });
+      }
+      const hasCandidates = await pool?.query(
+        'select count(*) from job_candidates where hr_account_id = $1', [req.params.id]
+      );
+      if (parseInt(hasCandidates.rows[0].count) > 0) {
+        return res.status(400).json({ error: 'hr_account_has_candidates', message: '该HR账号下还有候选人数据，无法删除' });
+      }
+      const hasSchedules = await pool?.query(
+        'select count(*) from scheduled_jobs where hr_account_id = $1', [req.params.id]
+      );
+      if (parseInt(hasSchedules.rows[0].count) > 0) {
+        return res.status(400).json({ error: 'hr_account_has_schedules', message: '该HR账号下还有调度任务，无法删除' });
       }
       await pool?.query('delete from hr_accounts where id = $1', [req.params.id]);
       res.json({ ok: true });
@@ -820,7 +930,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
   // --- BOSS accounts ---
   app.get('/api/admin/boss-accounts', async (req, res, next) => {
     try {
-      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+      if (!req.user || !isAdminRole(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
       const result = await pool?.query(`
@@ -835,7 +945,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.post('/api/admin/boss-accounts', async (req, res, next) => {
     try {
-      if (!req.user || req.user.role !== 'enterprise_admin') {
+      if (!req.user || !isSystemAdmin(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
       const { hrAccountId, bossLoginName, displayName } = req.body;
@@ -849,7 +959,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.patch('/api/admin/boss-accounts/:id', async (req, res, next) => {
     try {
-      if (!req.user || req.user.role !== 'enterprise_admin') {
+      if (!req.user || !isSystemAdmin(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
       const { bossLoginName, displayName, status } = req.body;
@@ -868,7 +978,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.delete('/api/admin/boss-accounts/:id', async (req, res, next) => {
     try {
-      if (!req.user || req.user.role !== 'enterprise_admin') {
+      if (!req.user || !isSystemAdmin(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
       const hasBi = await pool?.query('select count(*) from browser_instances where boss_account_id = $1', [req.params.id]);
@@ -883,7 +993,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
   // --- Browser instances ---
   app.get('/api/admin/browser-instances', async (req, res, next) => {
     try {
-      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+      if (!req.user || !isAdminRole(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
       const result = await pool?.query(`
@@ -900,7 +1010,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.post('/api/admin/browser-instances', async (req, res, next) => {
     try {
-      if (!req.user || req.user.role !== 'enterprise_admin') {
+      if (!req.user || !isSystemAdmin(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
       const { bossAccountId, instanceName, cdpEndpoint, userDataDir, downloadDir, debugPort, host } = req.body;
@@ -917,7 +1027,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.patch('/api/admin/browser-instances/:id', async (req, res, next) => {
     try {
-      if (!req.user || req.user.role !== 'enterprise_admin') {
+      if (!req.user || !isSystemAdmin(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
       const { instanceName, cdpEndpoint, userDataDir, downloadDir, debugPort, host, status } = req.body;
@@ -940,8 +1050,14 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.delete('/api/admin/browser-instances/:id', async (req, res, next) => {
     try {
-      if (!req.user || req.user.role !== 'enterprise_admin') {
+      if (!req.user || !isSystemAdmin(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
+      }
+      const hasRuns = await pool?.query(
+        'select count(*) from sourcing_runs where browser_instance_id = $1', [req.params.id]
+      );
+      if (parseInt(hasRuns.rows[0].count) > 0) {
+        return res.status(400).json({ error: 'browser_instance_has_runs', message: '该浏览器实例还有关联的执行记录，无法删除' });
       }
       await pool?.query('delete from browser_instances where id = $1', [req.params.id]);
       res.json({ ok: true });
@@ -950,7 +1066,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.post('/api/admin/browser-instances/:id/check', async (req, res, next) => {
     try {
-      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+      if (!req.user || !isAdminRole(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
       const bi = await pool?.query('select * from browser_instances where id = $1', [req.params.id]);

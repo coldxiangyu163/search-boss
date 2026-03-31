@@ -112,7 +112,7 @@ const {
 const titles = {
   command: ['运营总览', '今日招聘运营看板', '聚焦核心招聘指标、待办事项与系统运行情况。'],
   'admin-overview': ['HR 概览', '全员招聘运营看板', '查看所有 HR 的业务数据与执行状态。'],
-  'admin-org': ['组织管理', '部门与人员管理', '管理部门、用户与 HR 账号。'],
+  'admin-org': ['组织管理', '组织与权限管理', '管理部门、用户、HR 账号与企业管理员配额。'],
   jobs: ['职位管理', '职位招聘执行情况', '统一查看职位需求、城市分布与当前转化效率。'],
   candidates: ['候选人管理', '候选人全流程跟进', '围绕人才状态、简历获取与入站行为进行管理。'],
   automation: ['自动化调度', '任务调度与执行监控', '关注自动化任务编排、执行节奏与系统承接能力。'],
@@ -120,16 +120,26 @@ const titles = {
 };
 
 function isAdmin() {
-  return state.currentUser && ['enterprise_admin', 'dept_admin'].includes(state.currentUser.role);
+  return state.currentUser && ['system_admin', 'enterprise_admin', 'dept_admin'].includes(state.currentUser.role);
+}
+
+function isSysAdmin() {
+  return state.currentUser && state.currentUser.role === 'system_admin';
 }
 
 function getNavItems() {
+  if (isSysAdmin()) {
+    return [
+      { view: 'admin-org', title: '组织管理', desc: '部门、用户与 HR 账号' },
+      { view: 'health', title: '系统状态', desc: '监控服务与运行健康度' }
+    ];
+  }
   if (isAdmin()) {
     return [
-      { view: 'admin-overview', title: 'HR 概览', desc: '查看所有 HR 的业务数据汇总' },
-      { view: 'jobs', title: '职位管理', desc: '全局职位与转化情况' },
-      { view: 'candidates', title: '候选人管理', desc: '全局候选人跟踪' },
-      { view: 'admin-org', title: '组织管理', desc: '部门、用户与 HR 账号' },
+      { view: 'admin-overview', title: 'HR 概览', desc: '查看本部门 HR 业务数据' },
+      { view: 'jobs', title: '职位管理', desc: '部门职位与转化情况' },
+      { view: 'candidates', title: '候选人管理', desc: '部门候选人跟踪' },
+      { view: 'admin-org', title: 'HR 管理', desc: '管理本部门 HR 账号' },
       { view: 'health', title: '系统状态', desc: '监控服务与运行健康度' }
     ];
   }
@@ -197,13 +207,17 @@ function renderUserInfo() {
   }
 
   const roleNames = {
+    system_admin: '系统管理员',
     enterprise_admin: '企业管理员',
     dept_admin: '部门管理员',
     hr: 'HR'
   };
   const roleName = roleNames[state.currentUser.role] || state.currentUser.role;
+  const expiryInfo = state.currentUser.expiresAt
+    ? ` | 有效期至 ${new Date(state.currentUser.expiresAt).toLocaleDateString()}`
+    : '';
   userEl.innerHTML = `
-    <span style="color:var(--text-secondary,#666)">${state.currentUser.name} (${roleName})</span>
+    <span style="color:var(--text-secondary,#666)">${state.currentUser.name} (${roleName}${expiryInfo})</span>
     <button onclick="handleLogout()" style="font-size:12px;padding:4px 8px;cursor:pointer;">退出</button>
   `;
 }
@@ -437,8 +451,9 @@ async function syncRecruitData() {
     return;
   }
 
+  const label = button.querySelector('.sync-inline-label');
   button.disabled = true;
-  button.textContent = '同步中...';
+  if (label) label.textContent = '同步中...';
 
   try {
     await fetchJson('/api/dashboard/sync-recruit-data', { method: 'POST' });
@@ -448,7 +463,7 @@ async function syncRecruitData() {
     render();
   } finally {
     button.disabled = false;
-    button.textContent = '同步BOSS数据';
+    if (label) label.textContent = '同步数据';
   }
 }
 
@@ -553,11 +568,6 @@ function render() {
   document.getElementById('page-eyebrow').textContent = eyebrow;
   document.getElementById('page-title').textContent = title;
   document.getElementById('page-description').textContent = description;
-
-  const syncBtn = document.getElementById('sync-recruit-btn');
-  if (syncBtn) {
-    syncBtn.style.display = isAdmin() ? 'none' : '';
-  }
 
   const app = document.getElementById('app');
 
@@ -765,8 +775,12 @@ function renderCommandCenter() {
             <div>
               <p class="eyebrow">BOSS 招聘数据中心</p>
               <h3 class="card-title">今日核心指标</h3>
-              <p class="card-subtitle">${hasRecruitData ? `数据来源：BOSS 直聘，采集于 ${formatDateTime(boss.scrapedAt)}` : '尚未同步 BOSS 招聘数据，点击顶部「同步BOSS数据」获取。'}</p>
+              <p class="card-subtitle">${hasRecruitData ? `数据来源：BOSS 直聘，采集于 ${formatDateTime(boss.scrapedAt)}` : '尚未同步 BOSS 招聘数据，点击右侧按钮获取。'}</p>
             </div>
+            <button class="sync-inline-btn" id="sync-recruit-btn" onclick="syncRecruitData()">
+              <span class="sync-inline-icon">&#8635;</span>
+              <span class="sync-inline-label">同步数据</span>
+            </button>
           </div>
           <div class="status-grid">
             <div class="status-box">
@@ -1027,12 +1041,16 @@ function renderAdminOrg() {
   const hrAccounts = state.adminHrAccounts || [];
   const bossAccounts = state.adminBossAccounts || [];
   const browserInstances = state.adminBrowserInstances || [];
-  const roleNames = { enterprise_admin: '企业管理员', dept_admin: '部门管理员', hr: 'HR' };
+  const roleNames = { system_admin: '系统管理员', enterprise_admin: '企业管理员', dept_admin: '部门管理员', hr: 'HR' };
   const deptOptions = depts.filter((d) => d.status === 'active').map((d) => `<option value="${d.id}">${d.name}</option>`).join('');
   const hrOptions = hrAccounts.filter((h) => h.status === 'active').map((h) => `<option value="${h.id}">${h.name}</option>`).join('');
   const baOptions = bossAccounts.filter((b) => b.status === 'active').map((b) => `<option value="${b.id}">${b.display_name || b.boss_login_name || 'BOSS#' + b.id}</option>`).join('');
+  const sys = isSysAdmin();
 
-  return `
+  let html = '';
+
+  if (sys) {
+    html += `
     <section>
       <div class="table-card">
         <div class="card-header">
@@ -1057,7 +1075,47 @@ function renderAdminOrg() {
           </tbody>
         </table>
       </div>
-    </section>
+    </section>`;
+
+    const enterpriseAdmins = users.filter((u) => u.role === 'enterprise_admin');
+    html += `
+    <section style="margin-top:16px">
+      <div class="table-card">
+        <div class="card-header">
+          <div>
+            <p class="eyebrow">企业管理</p>
+            <h3 class="card-title">企业管理员</h3>
+            <p class="card-subtitle">设置每个企业管理员的有效期和可添加的 HR 账号数量上限。</p>
+          </div>
+        </div>
+        <table class="data-table">
+          <thead><tr><th>ID</th><th>姓名</th><th>邮箱</th><th>部门</th><th>状态</th><th>有效期</th><th>HR上限</th><th>已用HR数</th><th>操作</th></tr></thead>
+          <tbody>
+            ${enterpriseAdmins.length === 0 ? '<tr><td colspan="9" style="text-align:center;color:var(--text-muted,#999)">暂无企业管理员</td></tr>' : ''}
+            ${enterpriseAdmins.map((u) => {
+              const hrCount = hrAccounts.filter((h) => String(h.department_id) === String(u.department_id)).length;
+              const expired = u.expires_at && new Date(u.expires_at) < new Date();
+              const expiryText = u.expires_at ? new Date(u.expires_at).toLocaleDateString() : '永久';
+              const expiryClass = expired ? 'badge-danger' : 'badge-success';
+              return `<tr>
+                <td>${u.id}</td><td>${u.name}</td><td>${u.email || '-'}</td>
+                <td>${u.department_name || '-'}</td>
+                <td><span class="badge ${u.status === 'active' ? 'badge-success' : 'badge-danger'}">${u.status === 'active' ? '启用' : '停用'}</span></td>
+                <td><span class="badge ${expiryClass}">${expiryText}</span></td>
+                <td>${u.max_hr_accounts || '不限'}</td>
+                <td>${hrCount}</td>
+                <td>
+                  <button class="btn-sm" onclick='showLimitsModal(${JSON.stringify({ id: u.id, name: u.name, expires_at: u.expires_at, max_hr_accounts: u.max_hr_accounts }).replace(/'/g, "&#39;")})'>配额设置</button>
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>`;
+  }
+
+  html += `
     <section style="margin-top:16px">
       <div class="table-card">
         <div class="card-header">
@@ -1065,21 +1123,21 @@ function renderAdminOrg() {
             <p class="eyebrow">人员管理</p>
             <h3 class="card-title">系统用户</h3>
           </div>
-          <button class="button-primary" onclick="showModal('user-modal')">新增用户</button>
+          ${sys ? '<button class="button-primary" onclick="showModal(\'user-modal\')">新增用户</button>' : ''}
         </div>
         <table class="data-table">
-          <thead><tr><th>ID</th><th>姓名</th><th>邮箱</th><th>角色</th><th>部门</th><th>状态</th><th>操作</th></tr></thead>
+          <thead><tr><th>ID</th><th>姓名</th><th>邮箱</th><th>角色</th><th>部门</th><th>状态</th>${sys ? '<th>操作</th>' : ''}</tr></thead>
           <tbody>
-            ${users.length === 0 ? '<tr><td colspan="7" style="text-align:center;color:var(--text-muted,#999)">暂无用户</td></tr>' : ''}
+            ${users.length === 0 ? `<tr><td colspan="${sys ? 7 : 6}" style="text-align:center;color:var(--text-muted,#999)">暂无用户</td></tr>` : ''}
             ${users.map((u) => `<tr>
               <td>${u.id}</td><td>${u.name}</td><td>${u.email || '-'}</td>
               <td>${roleNames[u.role] || u.role}</td><td>${u.department_name || '-'}</td>
               <td><span class="badge ${u.status === 'active' ? 'badge-success' : 'badge-danger'}">${u.status === 'active' ? '启用' : '停用'}</span></td>
-              <td>
+              ${sys ? `<td>
                 <button class="btn-sm" onclick='editUser(${JSON.stringify(u).replace(/'/g, "&#39;")})'>编辑</button>
                 <button class="btn-sm" onclick="resetPassword(${u.id}, '${u.name.replace(/'/g, "\\'")}')">重置密码</button>
                 <button class="btn-sm btn-danger" onclick="deleteUser(${u.id}, '${u.name.replace(/'/g, "\\'")}')">删除</button>
-              </td>
+              </td>` : ''}
             </tr>`).join('')}
           </tbody>
         </table>
@@ -1104,7 +1162,7 @@ function renderAdminOrg() {
               <td><span class="badge ${h.status === 'active' ? 'badge-success' : 'badge-danger'}">${h.status === 'active' ? '启用' : '停用'}</span></td>
               <td>
                 <button class="btn-sm" onclick='editHrAccount(${JSON.stringify(h).replace(/'/g, "&#39;")})'>编辑</button>
-                <button class="btn-sm btn-danger" onclick="deleteHrAccount(${h.id}, '${h.name.replace(/'/g, "\\'")}')">删除</button>
+                ${sys ? `<button class="btn-sm btn-danger" onclick="deleteHrAccount(${h.id}, '${h.name.replace(/'/g, "\\'")}')">删除</button>` : ''}
               </td>
             </tr>`).join('')}
           </tbody>
@@ -1112,7 +1170,7 @@ function renderAdminOrg() {
       </div>
     </section>
 
-    <div id="dept-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('dept-modal')">
+    ${sys ? `<div id="dept-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('dept-modal')">
       <div class="modal-content">
         <h3 id="dept-modal-title">新增部门</h3>
         <form onsubmit="return submitDept(event)">
@@ -1131,9 +1189,9 @@ function renderAdminOrg() {
           </div>
         </form>
       </div>
-    </div>
+    </div>` : ''}
 
-    <div id="user-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('user-modal')">
+    ${sys ? `<div id="user-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('user-modal')">
       <div class="modal-content">
         <h3 id="user-modal-title">新增用户</h3>
         <form onsubmit="return submitUser(event)">
@@ -1157,7 +1215,7 @@ function renderAdminOrg() {
           </div>
         </form>
       </div>
-    </div>
+    </div>` : ''}
 
     <div id="hr-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('hr-modal')">
       <div class="modal-content">
@@ -1186,6 +1244,31 @@ function renderAdminOrg() {
       </div>
     </div>
 
+    <div id="limits-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('limits-modal')">
+      <div class="modal-content">
+        <h3 id="limits-modal-title">配额设置</h3>
+        <form onsubmit="return submitLimits(event)">
+          <input type="hidden" id="limits-user-id" value="">
+          <div class="form-group"><label>有效期</label><input type="date" id="limits-expires-at"></div>
+          <div class="form-group"><label>HR 账号上限（0 表示不限）</label><input type="number" id="limits-max-hr" min="0" value="0"></div>
+          <div class="modal-actions">
+            <button type="button" class="button-secondary" onclick="closeModal('limits-modal')">取消</button>
+            <button type="submit" class="button-primary">确定</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+
+  if (sys) {
+    html += renderSysAdminBossAndBrowser(bossAccounts, browserInstances, hrOptions, baOptions);
+  }
+
+  return html;
+}
+
+function renderSysAdminBossAndBrowser(bossAccounts, browserInstances, hrOptions, baOptions) {
+  return `
     <section style="margin-top:16px">
       <div class="table-card">
         <div class="card-header">
@@ -1294,8 +1377,34 @@ function renderAdminOrg() {
   `;
 }
 
+function showLimitsModal(u) {
+  document.getElementById('limits-modal-title').textContent = '配额设置 - ' + u.name;
+  document.getElementById('limits-user-id').value = u.id;
+  document.getElementById('limits-expires-at').value = u.expires_at ? u.expires_at.split('T')[0] : '';
+  document.getElementById('limits-max-hr').value = u.max_hr_accounts || 0;
+  document.getElementById('limits-modal').style.display = 'flex';
+}
+
+async function submitLimits(e) {
+  e.preventDefault();
+  const userId = document.getElementById('limits-user-id').value;
+  const expiresAt = document.getElementById('limits-expires-at').value || null;
+  const maxHrAccounts = parseInt(document.getElementById('limits-max-hr').value) || 0;
+  try {
+    await fetchJson('/api/admin/users/' + userId + '/limits', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expiresAt, maxHrAccounts })
+    });
+    closeModal('limits-modal');
+    await loadData();
+  } catch (err) { alert(err.message); }
+  return false;
+}
+
 function showModal(id) {
   const modal = document.getElementById(id);
+  if (!modal) return;
   if (id === 'dept-modal' && !document.getElementById('dept-edit-id').value) {
     document.getElementById('dept-modal-title').textContent = '新增部门';
     document.getElementById('dept-edit-id').value = '';

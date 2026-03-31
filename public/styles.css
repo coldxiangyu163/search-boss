@@ -1088,3 +1088,36 @@ input[type="time"]:focus {
 .button-primary:hover {
   opacity: 0.9;
 }
+
+.sync-inline-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(31, 94, 255, 0.18);
+  color: #1f5eff;
+  background: rgba(31, 94, 255, 0.06);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
+  flex-shrink: 0;
+}
+.sync-inline-btn:hover {
+  background: rgba(31, 94, 255, 0.12);
+  border-color: rgba(31, 94, 255, 0.32);
+  box-shadow: 0 2px 8px rgba(31, 94, 255, 0.12);
+}
+.sync-inline-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.sync-inline-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+.sync-inline-label {
+  line-height: 1;
+}

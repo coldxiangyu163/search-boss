@@ -7,6 +7,7 @@ function authMiddleware(pool) {
 
     const result = await pool.query(`
       select u.id, u.role, u.department_id, u.name, u.email,
+             u.expires_at, u.max_hr_accounts,
              ha.id as hr_account_id
       from users u
       left join hr_accounts ha on ha.user_id = u.id and ha.status = 'active'
@@ -17,7 +18,12 @@ function authMiddleware(pool) {
       return res.status(401).json({ error: 'user_not_found' });
     }
 
-    req.user = result.rows[0];
+    const user = result.rows[0];
+    if (user.expires_at && new Date(user.expires_at) < new Date()) {
+      return res.status(403).json({ error: 'account_expired', message: '账号已过期，请联系系统管理员' });
+    }
+
+    req.user = user;
     next();
   };
 }
@@ -38,8 +44,12 @@ function resolveHrScope(req) {
   const user = req.user;
   if (!user) return null;
 
-  if (user.role === 'enterprise_admin') {
+  if (user.role === 'system_admin') {
     return { scope: 'all' };
+  }
+
+  if (user.role === 'enterprise_admin') {
+    return { scope: 'department', departmentId: user.department_id };
   }
 
   if (user.role === 'dept_admin') {
@@ -53,4 +63,12 @@ function resolveHrScope(req) {
   return null;
 }
 
-module.exports = { authMiddleware, requireRole, resolveHrScope };
+function isSystemAdmin(user) {
+  return user && user.role === 'system_admin';
+}
+
+function isAdminRole(user) {
+  return user && ['system_admin', 'enterprise_admin', 'dept_admin'].includes(user.role);
+}
+
+module.exports = { authMiddleware, requireRole, resolveHrScope, isSystemAdmin, isAdminRole };

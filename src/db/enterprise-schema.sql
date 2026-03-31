@@ -19,8 +19,10 @@ create table if not exists users (
   email text unique,
   phone text unique,
   password_hash text not null,
-  role text not null check (role in ('enterprise_admin', 'dept_admin', 'hr')),
+  role text not null check (role in ('system_admin', 'enterprise_admin', 'dept_admin', 'hr')),
   status text not null default 'active',
+  expires_at timestamptz,
+  max_hr_accounts integer not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -83,3 +85,19 @@ alter table job_candidates
 
 alter table scheduled_jobs
   add column if not exists hr_account_id bigint references hr_accounts(id);
+
+-- Phase 3: system_admin role & enterprise admin limits
+alter table users
+  add column if not exists expires_at timestamptz;
+
+alter table users
+  add column if not exists max_hr_accounts integer not null default 0;
+
+-- Update role constraint to include system_admin
+do $$
+begin
+  alter table users drop constraint if exists users_role_check;
+  alter table users add constraint users_role_check
+    check (role in ('system_admin', 'enterprise_admin', 'dept_admin', 'hr'));
+exception when others then null;
+end $$;

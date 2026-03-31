@@ -350,8 +350,13 @@ test('resolveHrScope returns correct scope per role', () => {
   const { resolveHrScope } = require('../src/middleware/auth');
 
   assert.deepEqual(
-    resolveHrScope({ user: { role: 'enterprise_admin' } }),
+    resolveHrScope({ user: { role: 'system_admin' } }),
     { scope: 'all' }
+  );
+
+  assert.deepEqual(
+    resolveHrScope({ user: { role: 'enterprise_admin', department_id: 3 } }),
+    { scope: 'department', departmentId: 3 }
   );
 
   assert.deepEqual(

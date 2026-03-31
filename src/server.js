@@ -17,6 +17,7 @@ const { SourceLoopService } = require('./services/source-loop-service');
 const { FollowupLoopService } = require('./services/followup-loop-service');
 const { LlmEvaluator } = require('./services/llm-evaluator');
 const { BrowserInstanceManager } = require('./services/browser-instance-manager');
+const { ChromeLauncher } = require('./services/chrome-launcher');
 
 const nanobotRunner = new NanobotRunner({
   configPath: config.nanobotConfigPath
@@ -94,7 +95,25 @@ const app = createApp({
 
 const port = config.port;
 
-app.listen(port, () => {
-  console.log(`search-boss listening on ${port}`);
-  schedulerService.startTicker();
-});
+async function start() {
+  if (config.chromeAutoStart) {
+    const launcher = new ChromeLauncher({
+      cdpEndpoint: config.bossCdpEndpoint,
+      chromePath: config.chromePath,
+      userDataDir: config.chromeUserDataDir,
+      downloadDir: config.chromeDownloadDir
+    });
+    try {
+      await launcher.ensureRunning();
+    } catch (err) {
+      console.error(`[startup] Chrome auto-start failed: ${err.message}`);
+    }
+  }
+
+  app.listen(port, () => {
+    console.log(`search-boss listening on ${port}`);
+    schedulerService.startTicker();
+  });
+}
+
+start();
