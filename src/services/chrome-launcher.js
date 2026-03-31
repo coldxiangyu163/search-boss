@@ -123,7 +123,8 @@ class ChromeLauncher {
       '--no-default-browser-check',
       '--disable-background-timer-throttling',
       '--disable-backgrounding-occluded-windows',
-      '--disable-renderer-backgrounding'
+      '--disable-renderer-backgrounding',
+      '--disable-features=CalculateNativeWinOcclusion'
     ];
 
     if (os.platform() === 'linux') {

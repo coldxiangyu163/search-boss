@@ -339,7 +339,7 @@ test('BossCdpClient captureAnyScreenshot returns base64 data from first page tar
     })
   });
 
-  const result = await client.captureAnyScreenshot({ format: 'jpeg', quality: 70 });
+  const result = await client.captureAnyScreenshot({ format: 'jpeg', quality: 70, includeViewport: true });
 
   assert.equal(result.data, screenshotData);
   assert.equal(result.format, 'jpeg');

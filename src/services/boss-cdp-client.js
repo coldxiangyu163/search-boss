@@ -160,7 +160,7 @@ class BossCdpClient {
     return { data: result.data, format };
   }
 
-  async captureAnyScreenshot({ endpoint, format = 'jpeg', quality = 70 } = {}) {
+  async _resolveFirstPage({ endpoint } = {}) {
     const cdpEndpoint = endpoint || this.endpoint;
     const response = await this.requestImpl(`${cdpEndpoint}/json`);
     if (!response.ok) {
@@ -173,32 +173,51 @@ class BossCdpClient {
     if (!pages.length) {
       throw new Error('boss_no_page_target');
     }
-    const target = pages[0];
-    const result = await this.sendCommand({
-      targetId: target.id,
-      method: 'Page.captureScreenshot',
-      params: { format, quality }
-    });
-    if (!result?.data) {
-      throw new Error('boss_screenshot_empty');
-    }
+    return pages[0];
+  }
 
-    let viewport = null;
+  async _sendRaw(connection, method, params, timeoutMs = 15000) {
+    const messageId = this.nextMessageId;
+    this.nextMessageId += 1;
+    await connection.send(JSON.stringify({ id: messageId, method, params }));
+    while (true) {
+      const raw = await Promise.race([
+        connection.waitForMessage(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('boss_cdp_command_timeout')), timeoutMs))
+      ]);
+      const msg = JSON.parse(raw);
+      if (msg.id !== messageId) continue;
+      if (msg.error) throw new Error(msg.error.message || 'boss_cdp_command_failed');
+      return msg.result?.result ?? msg.result ?? null;
+    }
+  }
+
+  async captureAnyScreenshot({ endpoint, format = 'jpeg', quality = 60, includeViewport = false } = {}) {
+    const target = await this._resolveFirstPage({ endpoint });
+    const connection = await this.connectImpl(target.webSocketDebuggerUrl);
     try {
-      const sizeResult = await this.sendCommand({
-        targetId: target.id,
-        method: 'Runtime.evaluate',
-        params: {
-          expression: 'JSON.stringify({ width: window.innerWidth, height: window.innerHeight, dpr: window.devicePixelRatio })',
-          returnByValue: true
-        }
-      });
-      viewport = JSON.parse(sizeResult?.value || '{}');
-    } catch {
-      // viewport info is best-effort
-    }
+      const result = await this._sendRaw(connection, 'Page.captureScreenshot', { format, quality });
+      if (!result?.data) {
+        throw new Error('boss_screenshot_empty');
+      }
 
-    return { data: result.data, format, url: target.url, title: target.title, viewport };
+      let viewport = null;
+      if (includeViewport) {
+        try {
+          const sizeResult = await this._sendRaw(connection, 'Runtime.evaluate', {
+            expression: 'JSON.stringify({width:window.innerWidth,height:window.innerHeight,dpr:window.devicePixelRatio})',
+            returnByValue: true
+          });
+          viewport = JSON.parse(sizeResult?.value || '{}');
+        } catch {
+          // best-effort
+        }
+      }
+
+      return { data: result.data, format, url: target.url, title: target.title, viewport };
+    } finally {
+      await connection.close().catch(() => {});
+    }
   }
 
   async clickOnAnyPage({ x, y, endpoint } = {}) {
@@ -208,34 +227,16 @@ class BossCdpClient {
       throw new Error('boss_mouse_coordinates_required');
     }
 
-    const cdpEndpoint = endpoint || this.endpoint;
-    const response = await this.requestImpl(`${cdpEndpoint}/json`);
-    if (!response.ok) {
-      throw new Error('boss_cdp_list_targets_failed');
+    const target = await this._resolveFirstPage({ endpoint });
+    const connection = await this.connectImpl(target.webSocketDebuggerUrl);
+    try {
+      await this._sendRaw(connection, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: normalizedX, y: normalizedY, button: 'none' });
+      await this._sendRaw(connection, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: normalizedX, y: normalizedY, button: 'left', clickCount: 1 });
+      await this._sendRaw(connection, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: normalizedX, y: normalizedY, button: 'left', clickCount: 1 });
+      return { ok: true, x: normalizedX, y: normalizedY, url: target.url };
+    } finally {
+      await connection.close().catch(() => {});
     }
-    const targets = await response.json();
-    const pages = (Array.isArray(targets) ? targets : []).filter(
-      (t) => t.type === 'page' && t.url !== 'about:blank' && !t.url.startsWith('devtools://')
-    );
-    if (!pages.length) {
-      throw new Error('boss_no_page_target');
-    }
-    const target = pages[0];
-
-    const mouseEvents = [
-      { type: 'mouseMoved', button: 'none' },
-      { type: 'mousePressed', button: 'left', clickCount: 1 },
-      { type: 'mouseReleased', button: 'left', clickCount: 1 }
-    ];
-    for (const evt of mouseEvents) {
-      await this.sendCommand({
-        targetId: target.id,
-        method: 'Input.dispatchMouseEvent',
-        params: { ...evt, x: normalizedX, y: normalizedY }
-      });
-    }
-
-    return { ok: true, x: normalizedX, y: normalizedY, url: target.url };
   }
 
   async bringToFront({ targetId, urlPrefix } = {}) {

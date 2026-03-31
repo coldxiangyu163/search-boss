@@ -173,17 +173,21 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
       const { BossCdpClient } = require('./services/boss-cdp-client');
       const client = new BossCdpClient({ endpoint });
       try {
-        const result = await client.captureAnyScreenshot({ format: 'jpeg', quality: 70 });
+        const includeViewport = req.query.viewport === '1';
+        const result = await client.captureAnyScreenshot({ format: 'jpeg', quality: 60, includeViewport });
         const buffer = Buffer.from(result.data, 'base64');
-        res.set({
+        const headers = {
           'Content-Type': 'image/jpeg',
           'Content-Length': buffer.length,
           'Cache-Control': 'no-store',
           'X-Page-Url': encodeURIComponent(result.url || ''),
-          'X-Page-Title': encodeURIComponent(result.title || ''),
-          'X-Viewport-Width': String(result.viewport?.width || 0),
-          'X-Viewport-Height': String(result.viewport?.height || 0)
-        });
+          'X-Page-Title': encodeURIComponent(result.title || '')
+        };
+        if (result.viewport) {
+          headers['X-Viewport-Width'] = String(result.viewport.width || 0);
+          headers['X-Viewport-Height'] = String(result.viewport.height || 0);
+        }
+        res.set(headers);
         res.send(buffer);
       } catch (err) {
         res.status(502).json({ error: 'screenshot_failed', message: err.message });
@@ -1152,17 +1156,21 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
       const { BossCdpClient } = require('./services/boss-cdp-client');
       const client = new BossCdpClient({ endpoint });
       try {
-        const result = await client.captureAnyScreenshot({ format: 'jpeg', quality: 70 });
+        const includeViewport = req.query.viewport === '1';
+        const result = await client.captureAnyScreenshot({ format: 'jpeg', quality: 60, includeViewport });
         const buffer = Buffer.from(result.data, 'base64');
-        res.set({
+        const headers = {
           'Content-Type': 'image/jpeg',
           'Content-Length': buffer.length,
           'Cache-Control': 'no-store',
           'X-Page-Url': encodeURIComponent(result.url || ''),
-          'X-Page-Title': encodeURIComponent(result.title || ''),
-          'X-Viewport-Width': String(result.viewport?.width || 0),
-          'X-Viewport-Height': String(result.viewport?.height || 0)
-        });
+          'X-Page-Title': encodeURIComponent(result.title || '')
+        };
+        if (result.viewport) {
+          headers['X-Viewport-Width'] = String(result.viewport.width || 0);
+          headers['X-Viewport-Height'] = String(result.viewport.height || 0);
+        }
+        res.set(headers);
         res.send(buffer);
       } catch (err) {
         res.status(502).json({ error: 'screenshot_failed', message: err.message });

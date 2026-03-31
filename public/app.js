@@ -1762,9 +1762,14 @@ const liveView = {
   open: false,
   instanceId: null,
   timer: null,
+  boostTimer: null,
+  pollInterval: 800,
+  fetching: false,
   error: '',
   pageUrl: '',
   pageTitle: '',
+  viewportWidth: 0,
+  viewportHeight: 0,
   useHrEndpoint: false
 };
 
@@ -1774,6 +1779,8 @@ function openLiveView(instanceId) {
   liveView.error = '';
   liveView.pageUrl = '';
   liveView.pageTitle = '';
+  liveView.viewportWidth = 0;
+  liveView.viewportHeight = 0;
   liveView.useHrEndpoint = false;
   renderLiveViewModal();
   startLiveViewPolling();
@@ -1781,17 +1788,24 @@ function openLiveView(instanceId) {
 
 function closeLiveView() {
   stopLiveViewPolling();
+  if (liveView.boostTimer) {
+    clearTimeout(liveView.boostTimer);
+    liveView.boostTimer = null;
+  }
   liveView.open = false;
   liveView.instanceId = null;
   liveView.error = '';
+  liveView.viewportWidth = 0;
+  liveView.viewportHeight = 0;
   const modal = document.getElementById('live-view-modal');
   if (modal) modal.remove();
 }
 
-function startLiveViewPolling() {
+function startLiveViewPolling(intervalMs) {
   stopLiveViewPolling();
+  liveView.pollInterval = intervalMs || 800;
   refreshLiveView();
-  liveView.timer = window.setInterval(refreshLiveView, 1500);
+  liveView.timer = window.setInterval(refreshLiveView, liveView.pollInterval);
 }
 
 function stopLiveViewPolling() {
@@ -1801,15 +1815,29 @@ function stopLiveViewPolling() {
   }
 }
 
+function boostLiveViewPolling() {
+  if (!liveView.open) return;
+  startLiveViewPolling(400);
+  if (liveView.boostTimer) clearTimeout(liveView.boostTimer);
+  liveView.boostTimer = setTimeout(() => {
+    if (liveView.open) startLiveViewPolling(800);
+    liveView.boostTimer = null;
+  }, 3000);
+}
+
 async function refreshLiveView() {
   if (!liveView.open || (!liveView.instanceId && !liveView.useHrEndpoint)) return;
+  if (liveView.fetching) return;
   const img = document.getElementById('live-view-img');
   if (!img) return;
 
+  liveView.fetching = true;
   try {
-    const screenshotUrl = liveView.useHrEndpoint
+    const needViewport = !liveView.viewportWidth;
+    const base = liveView.useHrEndpoint
       ? '/api/browser/screenshot'
       : `/api/admin/browser-instances/${liveView.instanceId}/screenshot`;
+    const screenshotUrl = needViewport ? base + '?viewport=1' : base;
     const response = await fetch(screenshotUrl);
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
@@ -1820,8 +1848,12 @@ async function refreshLiveView() {
     liveView.error = '';
     liveView.pageUrl = decodeURIComponent(response.headers.get('X-Page-Url') || '');
     liveView.pageTitle = decodeURIComponent(response.headers.get('X-Page-Title') || '');
-    liveView.viewportWidth = Number(response.headers.get('X-Viewport-Width')) || 0;
-    liveView.viewportHeight = Number(response.headers.get('X-Viewport-Height')) || 0;
+    const vw = Number(response.headers.get('X-Viewport-Width'));
+    const vh = Number(response.headers.get('X-Viewport-Height'));
+    if (vw && vh) {
+      liveView.viewportWidth = vw;
+      liveView.viewportHeight = vh;
+    }
     const blob = await response.blob();
     const url = URL.createObjectURL(blob);
     const oldSrc = img.src;
@@ -1833,6 +1865,8 @@ async function refreshLiveView() {
   } catch (err) {
     liveView.error = '网络错误: ' + err.message;
     updateLiveViewStatus();
+  } finally {
+    liveView.fetching = false;
   }
 }
 
@@ -1915,7 +1949,8 @@ async function handleLiveViewClick(event) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ x: Math.round(pageX), y: Math.round(pageY) })
     });
-    setTimeout(refreshLiveView, 300);
+    refreshLiveView();
+    boostLiveViewPolling();
   } catch (err) {
     console.error('click failed:', err);
   }
