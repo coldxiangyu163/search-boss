@@ -169,9 +169,9 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
     }
   });
 
-  app.post('/api/jobs/sync', async (_req, res, next) => {
+  app.post('/api/jobs/sync', async (req, res, next) => {
     try {
-      const result = await services.jobs.triggerSync();
+      const result = await services.jobs.triggerSync({ hrAccountId: req.user?.hr_account_id });
       res.json(result);
     } catch (error) {
       next(error);
@@ -343,7 +343,10 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.post('/api/schedules', async (req, res, next) => {
     try {
-      const item = await services.scheduler.upsertSchedule(req.body);
+      const item = await services.scheduler.upsertSchedule({
+        ...req.body,
+        hrAccountId: req.user?.hr_account_id
+      });
       res.json({ item });
     } catch (error) {
       next(error);
@@ -381,7 +384,8 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
     try {
       const result = await services.scheduler.triggerJobTask(
         req.params.jobKey,
-        req.params.taskType
+        req.params.taskType,
+        { hrAccountId: req.user?.hr_account_id }
       );
       res.json(result);
     } catch (error) {

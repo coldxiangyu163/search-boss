@@ -29,7 +29,7 @@ class AgentService {
     });
   }
 
-  async createRun({ runKey, jobKey, mode }) {
+  async createRun({ runKey, jobKey, mode, hrAccountId }) {
     let jobId = null;
 
     if (jobKey) {
@@ -50,19 +50,39 @@ class AgentService {
       throw new Error('job_not_found');
     }
 
+    const resolvedHrAccountId = hrAccountId || await this._resolveDefaultHrAccountId();
+
     const runResult = await this.pool.query(
       `
-        insert into sourcing_runs (run_key, job_id, mode, status)
-        values ($1, $2, $3, 'pending')
+        insert into sourcing_runs (run_key, job_id, mode, status, hr_account_id)
+        values ($1, $2, $3, 'pending', $4)
         on conflict (run_key) do update
         set mode = excluded.mode,
+            hr_account_id = coalesce(sourcing_runs.hr_account_id, excluded.hr_account_id),
             updated_at = now()
         returning id, run_key as "runKey", status
       `,
-      [runKey, jobId, mode]
+      [runKey, jobId, mode, resolvedHrAccountId]
     );
 
     return runResult.rows[0];
+  }
+
+  async _resolveDefaultHrAccountId() {
+    const result = await this.pool.query(
+      'select id from hr_accounts where status = $1 order by id limit 1',
+      ['active']
+    );
+    return result.rows[0]?.id || null;
+  }
+
+  async _resolveHrAccountIdFromRun(runId) {
+    if (!runId) return null;
+    const result = await this.pool.query(
+      'select hr_account_id from sourcing_runs where id = $1 limit 1',
+      [runId]
+    );
+    return result.rows[0]?.hr_account_id || await this._resolveDefaultHrAccountId();
   }
 
   async recordRunEvent({
@@ -257,6 +277,7 @@ class AgentService {
     }
 
     const lifecycleStatus = normalizeCandidateStatus(status);
+    const runHrAccountId = runId ? await this._resolveHrAccountIdFromRun(runId) : null;
     const candidateResult = await this.pool.query(
       `
         insert into job_candidates (
@@ -265,9 +286,10 @@ class AgentService {
           lifecycle_status,
           source_run_id,
           last_outbound_at,
-          workflow_metadata
+          workflow_metadata,
+          hr_account_id
         )
-        values ($1, $2, $3, $4, case when $3 = 'greeted' then $5::timestamptz else null end, $6)
+        values ($1, $2, $3, $4, case when $3 = 'greeted' then $5::timestamptz else null end, $6, $7)
         on conflict (job_id, person_id) do update
         set lifecycle_status = case
               when job_candidates.lifecycle_status in ('resume_received', 'resume_downloaded') then job_candidates.lifecycle_status
@@ -279,10 +301,11 @@ class AgentService {
               else job_candidates.last_outbound_at
             end,
             workflow_metadata = excluded.workflow_metadata,
+            hr_account_id = coalesce(job_candidates.hr_account_id, excluded.hr_account_id),
             updated_at = now()
         returning id
       `,
-      [jobId, personId, lifecycleStatus, runId || null, occurredAt || new Date().toISOString(), metadata]
+      [jobId, personId, lifecycleStatus, runId || null, occurredAt || new Date().toISOString(), metadata, runHrAccountId]
     );
 
     await this.insertRunEvent({

@@ -34,7 +34,7 @@ class SchedulerService {
     return result.rows;
   }
 
-  async upsertSchedule({ jobKey, taskType, cronExpression, payload = {}, enabled = true }) {
+  async upsertSchedule({ jobKey, taskType, cronExpression, payload = {}, enabled = true, hrAccountId }) {
     const result = await this.pool.query(
       `
         insert into scheduled_jobs (
@@ -42,17 +42,19 @@ class SchedulerService {
           task_type,
           cron_expression,
           payload,
-          enabled
+          enabled,
+          hr_account_id
         )
-        values ($1, $2, $3, $4, $5)
+        values ($1, $2, $3, $4, $5, $6)
         on conflict (job_key, task_type) do update
         set cron_expression = excluded.cron_expression,
             payload = excluded.payload,
             enabled = excluded.enabled,
+            hr_account_id = coalesce(scheduled_jobs.hr_account_id, excluded.hr_account_id),
             updated_at = now()
         returning *
       `,
-      [jobKey, taskType, cronExpression, payload, enabled]
+      [jobKey, taskType, cronExpression, payload, enabled, hrAccountId || null]
     );
 
     return result.rows[0];
@@ -179,13 +181,14 @@ class SchedulerService {
     });
   }
 
-  async triggerJobTask(jobKey, taskType) {
+  async triggerJobTask(jobKey, taskType, { hrAccountId } = {}) {
     const schedule = await this.#findScheduleByJobTask(jobKey, taskType, { required: false });
 
     return this.#startJobTask({
       jobKey,
       taskType,
-      schedule
+      schedule,
+      hrAccountId
     });
   }
 
@@ -228,13 +231,15 @@ class SchedulerService {
     return schedule;
   }
 
-  async #startJobTask({ jobKey, taskType, schedule = null }) {
+  async #startJobTask({ jobKey, taskType, schedule = null, hrAccountId }) {
     const scheduledJobId = schedule?.id || null;
+    const resolvedHrAccountId = hrAccountId || schedule?.hr_account_id || null;
     const startedAt = new Date().toISOString();
     const run = await this.agentService.createRun({
       runKey: `${taskType}:${jobKey}:${Date.now()}`,
       jobKey,
-      mode: taskType
+      mode: taskType,
+      hrAccountId: resolvedHrAccountId
     });
 
     if (this.taskLock && !this.taskLock.tryAcquire({ runId: run.id, jobKey, taskType })) {

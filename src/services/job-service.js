@@ -72,8 +72,13 @@ class JobService {
     return result.rows[0] || null;
   }
 
-  async upsertJobsBatch({ runId, eventId, sequence, occurredAt, jobs = [] }) {
+  async upsertJobsBatch({ runId, eventId, sequence, occurredAt, jobs = [], hrAccountId }) {
     const syncedAt = occurredAt || new Date().toISOString();
+
+    let resolvedHrAccountId = hrAccountId || null;
+    if (!resolvedHrAccountId && runId) {
+      resolvedHrAccountId = await this._resolveHrAccountIdFromRun(runId);
+    }
 
     for (const job of jobs) {
       const metadata = job.metadata || {};
@@ -90,9 +95,10 @@ class JobService {
             source,
             jd_text,
             sync_metadata,
-            last_synced_at
+            last_synced_at,
+            hr_account_id
           )
-          values ($1, $2, $3, $4, $5, $6, 'boss', $7, coalesce($8, '{}'::jsonb), $9)
+          values ($1, $2, $3, $4, $5, $6, 'boss', $7, coalesce($8, '{}'::jsonb), $9, $10)
           on conflict (boss_encrypt_job_id) do update
           set boss_encrypt_job_id = excluded.boss_encrypt_job_id,
               job_key = excluded.job_key,
@@ -104,6 +110,7 @@ class JobService {
               jd_text = excluded.jd_text,
               sync_metadata = excluded.sync_metadata,
               last_synced_at = excluded.last_synced_at,
+              hr_account_id = coalesce(jobs.hr_account_id, excluded.hr_account_id),
               updated_at = now()
           returning id
         `,
@@ -116,7 +123,8 @@ class JobService {
           job.status || 'open',
           job.jdText || job.jd_text || null,
           metadata,
-          syncedAt
+          syncedAt,
+          resolvedHrAccountId || null
         ]
       );
     }
@@ -168,25 +176,26 @@ class JobService {
     return result.rows[0] || null;
   }
 
-  async triggerSync() {
+  async triggerSync({ hrAccountId } = {}) {
     if (!this.agentService) {
       throw new Error('agent_service_not_configured');
     }
 
     return {
       ok: true,
-      ...(await this.#startSyncRun())
+      ...(await this.#startSyncRun({ hrAccountId }))
     };
   }
 
-  async #startSyncRun() {
+  async #startSyncRun({ hrAccountId } = {}) {
     const timestamp = new Date().toISOString();
     const runKey = `sync_jobs:__all__:${timestamp}`;
     const jobKey = await this.#resolveSyncAnchorJobKey();
     const run = await this.agentService.createRun({
       runKey,
       jobKey,
-      mode: 'sync_jobs'
+      mode: 'sync_jobs',
+      hrAccountId
     });
 
     await this.agentService.recordRunEvent({
@@ -290,6 +299,24 @@ class JobService {
     );
 
     return result.rows[0]?.job_key || null;
+  }
+
+  async _resolveHrAccountIdFromRun(runId) {
+    if (!runId) return null;
+    try {
+      const result = await this.pool.query(
+        'select hr_account_id from sourcing_runs where id = $1 limit 1',
+        [runId]
+      );
+      if (result.rows[0]?.hr_account_id) return result.rows[0].hr_account_id;
+      const fallback = await this.pool.query(
+        'select id from hr_accounts where status = $1 order by id limit 1',
+        ['active']
+      );
+      return fallback.rows[0]?.id || null;
+    } catch (_) {
+      return null;
+    }
   }
 }
 

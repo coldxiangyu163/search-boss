@@ -1420,6 +1420,10 @@ test('JobService triggerSync creates sync run and calls nanobot', async () => {
         return { rows: [], rowCount: 1 };
       }
 
+      if (sql.includes('hr_accounts') && sql.includes('status')) {
+        return { rows: [{ id: 1 }], rowCount: 1 };
+      }
+
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -1515,9 +1519,9 @@ test('JobService upsertJobsBatch writes agent synced jobs into jobs table and re
 
   assert.equal(result.ok, true);
   assert.equal(result.syncedCount, 2);
-  assert.equal(queryCalls.length, 2);
-  assert.match(queryCalls[0].sql, /insert into jobs/i);
-  assert.deepEqual(queryCalls[0].params.slice(0, 7), [
+  assert.equal(queryCalls.length, 4);
+  assert.match(queryCalls[2].sql, /insert into jobs/i);
+  assert.deepEqual(queryCalls[2].params.slice(0, 7), [
     '健康顾问_B0047007',
     'enc-1',
     '健康顾问（B0047007）',
@@ -1526,7 +1530,7 @@ test('JobService upsertJobsBatch writes agent synced jobs into jobs table and re
     'open',
     '负责客户跟进和健康产品咨询'
   ]);
-  assert.deepEqual(queryCalls[0].params[7], {
+  assert.deepEqual(queryCalls[2].params[7], {
     bossBrandName: '百融云创',
     experienceRequirement: '经验不限'
   });
@@ -1676,6 +1680,9 @@ test('JobService triggerSync returns immediately and completes run asynchronousl
         return { rows: jobsBatchSynced ? [{ id: 1 }] : [] };
       }
 
+      if (sql.includes('hr_accounts') && sql.includes('status')) {
+        return { rows: [{ id: 1 }], rowCount: 1 };
+      }
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -1751,6 +1758,9 @@ test('JobService triggerSync marks run failed when nanobot exits without jobs ba
         return { rows: [] };
       }
 
+      if (sql.includes('hr_accounts') && sql.includes('status')) {
+        return { rows: [{ id: 1 }], rowCount: 1 };
+      }
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -1815,6 +1825,9 @@ test('JobService triggerSync treats nanobot stdout jobs_batch_synced marker as p
         return { rows: [] };
       }
 
+      if (sql.includes('hr_accounts') && sql.includes('status')) {
+        return { rows: [{ id: 1 }], rowCount: 1 };
+      }
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -1881,6 +1894,9 @@ test('JobService triggerSync does not emit duplicate completion when skill alrea
         return { rows: [{ id: 1 }] };
       }
 
+      if (sql.includes('hr_accounts') && sql.includes('status')) {
+        return { rows: [{ id: 1 }], rowCount: 1 };
+      }
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -1943,6 +1959,9 @@ test('JobService triggerSync marks run failed when nanobot fails asynchronously'
         return { rows: [], rowCount: 1 };
       }
 
+      if (sql.includes('hr_accounts') && sql.includes('status')) {
+        return { rows: [{ id: 1 }], rowCount: 1 };
+      }
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -2002,6 +2021,9 @@ test('JobService triggerSync records stream events from nanobot output', async (
         return { rows: [], rowCount: 1 };
       }
 
+      if (sql.includes('hr_accounts') && sql.includes('status')) {
+        return { rows: [{ id: 1 }], rowCount: 1 };
+      }
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -3782,6 +3804,9 @@ test('AgentService upsertCandidate records candidate_upserted event after databa
           return { rows: [], rowCount: 1 };
         }
 
+        if (sql.includes('select hr_account_id') && sql.includes('from sourcing_runs')) {
+          return { rows: [{ hr_account_id: 1 }], rowCount: 1 };
+        }
         throw new Error(`Unexpected query: ${sql}`);
       }
     }
@@ -3845,6 +3870,9 @@ test('AgentService upsertCandidate falls back to run-bound job when jobKey chang
           return { rows: [], rowCount: 1 };
         }
 
+        if (sql.includes('select hr_account_id') && sql.includes('from sourcing_runs')) {
+          return { rows: [{ hr_account_id: 1 }], rowCount: 1 };
+        }
         throw new Error(`Unexpected query: ${sql}`);
       }
     }
@@ -4031,6 +4059,9 @@ test('JobService triggerSync creates sync run when local jobs table is empty aft
         return { rows: [] };
       }
 
+      if (sql.includes('hr_accounts') && sql.includes('status')) {
+        return { rows: [{ id: 1 }], rowCount: 1 };
+      }
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -4069,6 +4100,9 @@ test('AgentService createRun allows sync_jobs mode without a job key', async () 
         return { rows: [{ id: 77, runKey: params[0], status: 'pending' }] };
       }
 
+      if (sql.includes('hr_accounts') && sql.includes('status')) {
+        return { rows: [{ id: 1 }], rowCount: 1 };
+      }
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -4083,8 +4117,8 @@ test('AgentService createRun allows sync_jobs mode without a job key', async () 
   });
 
   assert.equal(result.id, 77);
-  assert.equal(queryCalls.length, 1);
-  assert.equal(queryCalls[0].params[1], null);
+  assert.equal(queryCalls.length, 2);
+  assert.equal(queryCalls[1].params[1], null);
 });
 
 test('AgentService completeRun generates terminal event when eventId is omitted', async () => {
