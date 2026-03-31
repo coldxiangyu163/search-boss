@@ -1019,6 +1019,8 @@ function renderAdminOrg() {
   const depts = state.adminDepartments || [];
   const users = state.adminUsers || [];
   const hrAccounts = state.adminHrAccounts || [];
+  const roleNames = { enterprise_admin: '企业管理员', dept_admin: '部门管理员', hr: 'HR' };
+  const deptOptions = depts.filter((d) => d.status === 'active').map((d) => `<option value="${d.id}">${d.name}</option>`).join('');
 
   return `
     <section>
@@ -1028,12 +1030,20 @@ function renderAdminOrg() {
             <p class="eyebrow">组织架构</p>
             <h3 class="card-title">部门列表</h3>
           </div>
+          <button class="button-primary" onclick="showModal('dept-modal')">新增部门</button>
         </div>
         <table class="data-table">
-          <thead><tr><th>ID</th><th>名称</th><th>状态</th></tr></thead>
+          <thead><tr><th>ID</th><th>名称</th><th>状态</th><th>操作</th></tr></thead>
           <tbody>
-            ${depts.length === 0 ? '<tr><td colspan="3" style="text-align:center;color:var(--text-muted,#999)">暂无部门</td></tr>' : ''}
-            ${depts.map((d) => `<tr><td>${d.id}</td><td>${d.name}</td><td>${d.status || 'active'}</td></tr>`).join('')}
+            ${depts.length === 0 ? '<tr><td colspan="4" style="text-align:center;color:var(--text-muted,#999)">暂无部门</td></tr>' : ''}
+            ${depts.map((d) => `<tr>
+              <td>${d.id}</td><td>${d.name}</td>
+              <td><span class="badge ${d.status === 'active' ? 'badge-success' : 'badge-danger'}">${d.status === 'active' ? '启用' : '停用'}</span></td>
+              <td>
+                <button class="btn-sm" onclick="editDept(${d.id}, '${d.name.replace(/'/g, "\\'")}', '${d.status || 'active'}')">编辑</button>
+                <button class="btn-sm btn-danger" onclick="deleteDept(${d.id}, '${d.name.replace(/'/g, "\\'")}')">删除</button>
+              </td>
+            </tr>`).join('')}
           </tbody>
         </table>
       </div>
@@ -1045,15 +1055,22 @@ function renderAdminOrg() {
             <p class="eyebrow">人员管理</p>
             <h3 class="card-title">系统用户</h3>
           </div>
+          <button class="button-primary" onclick="showModal('user-modal')">新增用户</button>
         </div>
         <table class="data-table">
-          <thead><tr><th>ID</th><th>姓名</th><th>邮箱</th><th>角色</th><th>部门</th><th>状态</th></tr></thead>
+          <thead><tr><th>ID</th><th>姓名</th><th>邮箱</th><th>角色</th><th>部门</th><th>状态</th><th>操作</th></tr></thead>
           <tbody>
-            ${users.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted,#999)">暂无用户</td></tr>' : ''}
-            ${users.map((u) => {
-              const roleNames = { enterprise_admin: '企业管理员', dept_admin: '部门管理员', hr: 'HR' };
-              return `<tr><td>${u.id}</td><td>${u.name}</td><td>${u.email || '-'}</td><td>${roleNames[u.role] || u.role}</td><td>${u.department_name || '-'}</td><td>${u.status || 'active'}</td></tr>`;
-            }).join('')}
+            ${users.length === 0 ? '<tr><td colspan="7" style="text-align:center;color:var(--text-muted,#999)">暂无用户</td></tr>' : ''}
+            ${users.map((u) => `<tr>
+              <td>${u.id}</td><td>${u.name}</td><td>${u.email || '-'}</td>
+              <td>${roleNames[u.role] || u.role}</td><td>${u.department_name || '-'}</td>
+              <td><span class="badge ${u.status === 'active' ? 'badge-success' : 'badge-danger'}">${u.status === 'active' ? '启用' : '停用'}</span></td>
+              <td>
+                <button class="btn-sm" onclick='editUser(${JSON.stringify(u).replace(/'/g, "&#39;")})'>编辑</button>
+                <button class="btn-sm" onclick="resetPassword(${u.id}, '${u.name.replace(/'/g, "\\'")}')">重置密码</button>
+                <button class="btn-sm btn-danger" onclick="deleteUser(${u.id}, '${u.name.replace(/'/g, "\\'")}')">删除</button>
+              </td>
+            </tr>`).join('')}
           </tbody>
         </table>
       </div>
@@ -1064,18 +1081,290 @@ function renderAdminOrg() {
           <div>
             <p class="eyebrow">HR 账号</p>
             <h3 class="card-title">HR 业务账号</h3>
+            <p class="card-subtitle">HR 账号关联系统用户，用于数据隔离与权限管理。</p>
           </div>
+          <button class="button-primary" onclick="showModal('hr-modal')">新增HR账号</button>
         </div>
         <table class="data-table">
-          <thead><tr><th>ID</th><th>HR 名称</th><th>登录账号</th><th>部门</th><th>状态</th></tr></thead>
+          <thead><tr><th>ID</th><th>HR 名称</th><th>登录账号</th><th>部门</th><th>状态</th><th>操作</th></tr></thead>
           <tbody>
-            ${hrAccounts.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-muted,#999)">暂无 HR 账号</td></tr>' : ''}
-            ${hrAccounts.map((h) => `<tr><td>${h.id}</td><td>${h.name}</td><td>${h.user_email || '-'}</td><td>${h.department_name || '-'}</td><td>${h.status || 'active'}</td></tr>`).join('')}
+            ${hrAccounts.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted,#999)">暂无 HR 账号</td></tr>' : ''}
+            ${hrAccounts.map((h) => `<tr>
+              <td>${h.id}</td><td>${h.name}</td><td>${h.user_email || '-'}</td><td>${h.department_name || '-'}</td>
+              <td><span class="badge ${h.status === 'active' ? 'badge-success' : 'badge-danger'}">${h.status === 'active' ? '启用' : '停用'}</span></td>
+              <td>
+                <button class="btn-sm" onclick='editHrAccount(${JSON.stringify(h).replace(/'/g, "&#39;")})'>编辑</button>
+                <button class="btn-sm btn-danger" onclick="deleteHrAccount(${h.id}, '${h.name.replace(/'/g, "\\'")}')">删除</button>
+              </td>
+            </tr>`).join('')}
           </tbody>
         </table>
       </div>
     </section>
+
+    <div id="dept-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('dept-modal')">
+      <div class="modal-content">
+        <h3 id="dept-modal-title">新增部门</h3>
+        <form onsubmit="return submitDept(event)">
+          <input type="hidden" id="dept-edit-id" value="">
+          <div class="form-group">
+            <label>部门名称</label>
+            <input type="text" id="dept-name" required placeholder="请输入部门名称">
+          </div>
+          <div class="form-group" id="dept-status-group" style="display:none">
+            <label>状态</label>
+            <select id="dept-status"><option value="active">启用</option><option value="inactive">停用</option></select>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="button-secondary" onclick="closeModal('dept-modal')">取消</button>
+            <button type="submit" class="button-primary">确定</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="user-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('user-modal')">
+      <div class="modal-content">
+        <h3 id="user-modal-title">新增用户</h3>
+        <form onsubmit="return submitUser(event)">
+          <input type="hidden" id="user-edit-id" value="">
+          <div class="form-group"><label>姓名</label><input type="text" id="user-name" required placeholder="请输入姓名"></div>
+          <div class="form-group"><label>邮箱</label><input type="email" id="user-email" required placeholder="请输入邮箱"></div>
+          <div class="form-group"><label>手机号</label><input type="text" id="user-phone" placeholder="选填"></div>
+          <div class="form-group">
+            <label>角色</label>
+            <select id="user-role"><option value="hr">HR</option><option value="dept_admin">部门管理员</option><option value="enterprise_admin">企业管理员</option></select>
+          </div>
+          <div class="form-group"><label>所属部门</label><select id="user-dept"><option value="">不分配</option>${deptOptions}</select></div>
+          <div class="form-group" id="user-password-group"><label>密码</label><input type="password" id="user-password" placeholder="至少6位" minlength="6"></div>
+          <div class="form-group" id="user-status-group" style="display:none">
+            <label>状态</label>
+            <select id="user-status"><option value="active">启用</option><option value="inactive">停用</option></select>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="button-secondary" onclick="closeModal('user-modal')">取消</button>
+            <button type="submit" class="button-primary">确定</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="hr-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('hr-modal')">
+      <div class="modal-content">
+        <h3 id="hr-modal-title">新增HR账号</h3>
+        <form onsubmit="return submitHrAccount(event)">
+          <input type="hidden" id="hr-edit-id" value="">
+          <div class="form-group"><label>HR 名称</label><input type="text" id="hr-name" required placeholder="请输入HR名称"></div>
+          <div class="form-group">
+            <label>关联用户</label>
+            <select id="hr-user-id" required>
+              <option value="">请选择用户</option>
+              ${users.filter((u) => u.role === 'hr' && u.status === 'active').map((u) => `<option value="${u.id}">${u.name} (${u.email})</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group"><label>所属部门</label><select id="hr-dept"><option value="">不分配</option>${deptOptions}</select></div>
+          <div class="form-group"><label>备注</label><input type="text" id="hr-notes" placeholder="选填"></div>
+          <div class="form-group" id="hr-status-group" style="display:none">
+            <label>状态</label>
+            <select id="hr-status"><option value="active">启用</option><option value="inactive">停用</option></select>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="button-secondary" onclick="closeModal('hr-modal')">取消</button>
+            <button type="submit" class="button-primary">确定</button>
+          </div>
+        </form>
+      </div>
+    </div>
   `;
+}
+
+function showModal(id) {
+  const modal = document.getElementById(id);
+  if (id === 'dept-modal' && !document.getElementById('dept-edit-id').value) {
+    document.getElementById('dept-modal-title').textContent = '新增部门';
+    document.getElementById('dept-edit-id').value = '';
+    document.getElementById('dept-name').value = '';
+    document.getElementById('dept-status-group').style.display = 'none';
+  }
+  if (id === 'user-modal' && !document.getElementById('user-edit-id').value) {
+    document.getElementById('user-modal-title').textContent = '新增用户';
+    document.getElementById('user-edit-id').value = '';
+    document.getElementById('user-name').value = '';
+    document.getElementById('user-email').value = '';
+    document.getElementById('user-phone').value = '';
+    document.getElementById('user-role').value = 'hr';
+    document.getElementById('user-dept').value = '';
+    document.getElementById('user-password').value = '';
+    document.getElementById('user-password-group').style.display = '';
+    document.getElementById('user-status-group').style.display = 'none';
+  }
+  if (id === 'hr-modal' && !document.getElementById('hr-edit-id').value) {
+    document.getElementById('hr-modal-title').textContent = '新增HR账号';
+    document.getElementById('hr-edit-id').value = '';
+    document.getElementById('hr-name').value = '';
+    document.getElementById('hr-user-id').value = '';
+    document.getElementById('hr-dept').value = '';
+    document.getElementById('hr-notes').value = '';
+    document.getElementById('hr-status-group').style.display = 'none';
+  }
+  modal.style.display = 'flex';
+}
+
+function closeModal(id) {
+  document.getElementById(id).style.display = 'none';
+}
+
+async function submitDept(e) {
+  e.preventDefault();
+  const id = document.getElementById('dept-edit-id').value;
+  const name = document.getElementById('dept-name').value.trim();
+  const status = document.getElementById('dept-status').value;
+  if (!name) return false;
+  try {
+    if (id) {
+      await fetchJson('/api/admin/departments/' + id, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, status })
+      });
+    } else {
+      await fetchJson('/api/admin/departments', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+    }
+    closeModal('dept-modal');
+    await loadData();
+  } catch (err) { alert(err.message); }
+  return false;
+}
+
+function editDept(id, name, status) {
+  document.getElementById('dept-modal-title').textContent = '编辑部门';
+  document.getElementById('dept-edit-id').value = id;
+  document.getElementById('dept-name').value = name;
+  document.getElementById('dept-status').value = status;
+  document.getElementById('dept-status-group').style.display = '';
+  showModal('dept-modal');
+}
+
+async function deleteDept(id, name) {
+  if (!confirm('确定删除部门「' + name + '」？')) return;
+  try {
+    await fetchJson('/api/admin/departments/' + id, { method: 'DELETE' });
+    await loadData();
+  } catch (err) { alert(err.message); }
+}
+
+async function submitUser(e) {
+  e.preventDefault();
+  const id = document.getElementById('user-edit-id').value;
+  const name = document.getElementById('user-name').value.trim();
+  const email = document.getElementById('user-email').value.trim();
+  const phone = document.getElementById('user-phone').value.trim();
+  const role = document.getElementById('user-role').value;
+  const departmentId = document.getElementById('user-dept').value || null;
+  const password = document.getElementById('user-password').value;
+  const status = document.getElementById('user-status').value;
+  if (!name || !email) return false;
+  try {
+    if (id) {
+      await fetchJson('/api/admin/users/' + id, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, phone: phone || null, role, departmentId, status })
+      });
+    } else {
+      if (!password || password.length < 6) { alert('密码不能少于6位'); return false; }
+      await fetchJson('/api/admin/users', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, phone: phone || null, password, role, departmentId })
+      });
+    }
+    closeModal('user-modal');
+    await loadData();
+  } catch (err) { alert(err.message); }
+  return false;
+}
+
+function editUser(u) {
+  document.getElementById('user-modal-title').textContent = '编辑用户';
+  document.getElementById('user-edit-id').value = u.id;
+  document.getElementById('user-name').value = u.name;
+  document.getElementById('user-email').value = u.email || '';
+  document.getElementById('user-phone').value = u.phone || '';
+  document.getElementById('user-role').value = u.role;
+  document.getElementById('user-dept').value = u.department_id || '';
+  document.getElementById('user-password-group').style.display = 'none';
+  document.getElementById('user-status-group').style.display = '';
+  document.getElementById('user-status').value = u.status || 'active';
+  showModal('user-modal');
+}
+
+async function resetPassword(userId, name) {
+  const pw = prompt('请输入「' + name + '」的新密码（至少6位）：');
+  if (!pw) return;
+  if (pw.length < 6) { alert('密码不能少于6位'); return; }
+  try {
+    await fetchJson('/api/admin/users/' + userId + '/reset-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw })
+    });
+    alert('密码已重置');
+  } catch (err) { alert(err.message); }
+}
+
+async function deleteUser(id, name) {
+  if (!confirm('确定删除用户「' + name + '」？')) return;
+  try {
+    await fetchJson('/api/admin/users/' + id, { method: 'DELETE' });
+    await loadData();
+  } catch (err) { alert(err.message); }
+}
+
+async function submitHrAccount(e) {
+  e.preventDefault();
+  const id = document.getElementById('hr-edit-id').value;
+  const name = document.getElementById('hr-name').value.trim();
+  const userId = document.getElementById('hr-user-id').value;
+  const departmentId = document.getElementById('hr-dept').value || null;
+  const notes = document.getElementById('hr-notes').value.trim();
+  const status = document.getElementById('hr-status').value;
+  if (!name || !userId) return false;
+  try {
+    if (id) {
+      await fetchJson('/api/admin/hr-accounts/' + id, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, status, notes: notes || null })
+      });
+    } else {
+      await fetchJson('/api/admin/hr-accounts', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, departmentId, name, notes: notes || null })
+      });
+    }
+    closeModal('hr-modal');
+    await loadData();
+  } catch (err) { alert(err.message); }
+  return false;
+}
+
+function editHrAccount(h) {
+  document.getElementById('hr-modal-title').textContent = '编辑HR账号';
+  document.getElementById('hr-edit-id').value = h.id;
+  document.getElementById('hr-name').value = h.name;
+  document.getElementById('hr-user-id').value = h.user_id || '';
+  document.getElementById('hr-dept').value = h.department_id || '';
+  document.getElementById('hr-notes').value = h.notes || '';
+  document.getElementById('hr-status-group').style.display = '';
+  document.getElementById('hr-status').value = h.status || 'active';
+  showModal('hr-modal');
+}
+
+async function deleteHrAccount(id, name) {
+  if (!confirm('确定删除HR账号「' + name + '」？')) return;
+  try {
+    await fetchJson('/api/admin/hr-accounts/' + id, { method: 'DELETE' });
+    await loadData();
+  } catch (err) { alert(err.message); }
 }
 
 function renderJobs() {

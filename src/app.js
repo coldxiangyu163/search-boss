@@ -587,6 +587,47 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
     }
   });
 
+  app.patch('/api/admin/departments/:id', async (req, res, next) => {
+    try {
+      if (!req.user || req.user.role !== 'enterprise_admin') {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const { name, status } = req.body;
+      const result = await pool?.query(`
+        update departments
+        set name = coalesce($2, name),
+            status = coalesce($3, status),
+            updated_at = now()
+        where id = $1
+        returning *
+      `, [req.params.id, name, status]);
+      if (!result.rows[0]) {
+        return res.status(404).json({ error: 'department_not_found' });
+      }
+      res.json({ item: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete('/api/admin/departments/:id', async (req, res, next) => {
+    try {
+      if (!req.user || req.user.role !== 'enterprise_admin') {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const hasUsers = await pool?.query(
+        'select count(*) from users where department_id = $1', [req.params.id]
+      );
+      if (parseInt(hasUsers.rows[0].count) > 0) {
+        return res.status(400).json({ error: 'department_has_users', message: '该部门下还有用户，无法删除' });
+      }
+      await pool?.query('delete from departments where id = $1', [req.params.id]);
+      res.json({ ok: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get('/api/admin/users', async (req, res, next) => {
     try {
       if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
@@ -618,6 +659,72 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
       }
       const user = await services.auth.createUser(req.body);
       res.json({ item: user });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch('/api/admin/users/:id', async (req, res, next) => {
+    try {
+      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const { name, email, phone, role, departmentId, status } = req.body;
+      const result = await pool?.query(`
+        update users
+        set name = coalesce($2, name),
+            email = coalesce($3, email),
+            phone = coalesce($4, phone),
+            role = coalesce($5, role),
+            department_id = coalesce($6, department_id),
+            status = coalesce($7, status),
+            updated_at = now()
+        where id = $1
+        returning id, name, email, phone, role, department_id, status
+      `, [req.params.id, name, email, phone, role, departmentId, status]);
+      if (!result.rows[0]) {
+        return res.status(404).json({ error: 'user_not_found' });
+      }
+      res.json({ item: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/admin/users/:id/reset-password', async (req, res, next) => {
+    try {
+      if (!req.user || req.user.role !== 'enterprise_admin') {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const { password } = req.body;
+      if (!password || password.length < 6) {
+        return res.status(400).json({ error: 'password_too_short', message: '密码不能少于6位' });
+      }
+      const bcrypt = require('bcryptjs');
+      const hash = await bcrypt.hash(password, 10);
+      await pool?.query('update users set password_hash = $2, updated_at = now() where id = $1', [req.params.id, hash]);
+      res.json({ ok: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete('/api/admin/users/:id', async (req, res, next) => {
+    try {
+      if (!req.user || req.user.role !== 'enterprise_admin') {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      if (String(req.params.id) === String(req.user.id)) {
+        return res.status(400).json({ error: 'cannot_delete_self', message: '不能删除自己的账号' });
+      }
+      const hasHr = await pool?.query(
+        'select count(*) from hr_accounts where user_id = $1', [req.params.id]
+      );
+      if (parseInt(hasHr.rows[0].count) > 0) {
+        return res.status(400).json({ error: 'user_has_hr_account', message: '该用户关联了HR账号，请先解除关联' });
+      }
+      await pool?.query('delete from users where id = $1', [req.params.id]);
+      res.json({ ok: true });
     } catch (error) {
       next(error);
     }
@@ -687,6 +794,24 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
         return res.status(404).json({ error: 'hr_account_not_found' });
       }
       res.json({ item: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete('/api/admin/hr-accounts/:id', async (req, res, next) => {
+    try {
+      if (!req.user || req.user.role !== 'enterprise_admin') {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const hasJobs = await pool?.query(
+        'select count(*) from jobs where hr_account_id = $1', [req.params.id]
+      );
+      if (parseInt(hasJobs.rows[0].count) > 0) {
+        return res.status(400).json({ error: 'hr_account_has_jobs', message: '该HR账号下还有职位数据，无法删除' });
+      }
+      await pool?.query('delete from hr_accounts where id = $1', [req.params.id]);
+      res.json({ ok: true });
     } catch (error) {
       next(error);
     }
