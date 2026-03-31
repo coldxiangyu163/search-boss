@@ -74,7 +74,9 @@ const state = {
   hrOverview: [],
   adminDepartments: [],
   adminUsers: [],
-  adminHrAccounts: []
+  adminHrAccounts: [],
+  adminBossAccounts: [],
+  adminBrowserInstances: []
 };
 
 const {
@@ -269,6 +271,8 @@ async function loadData() {
     fetches.push(fetchJson('/api/admin/departments').catch(() => ({ items: [] })));
     fetches.push(fetchJson('/api/admin/users').catch(() => ({ items: [] })));
     fetches.push(fetchJson('/api/admin/hr-accounts').catch(() => ({ items: [] })));
+    fetches.push(fetchJson('/api/admin/boss-accounts').catch(() => ({ items: [] })));
+    fetches.push(fetchJson('/api/admin/browser-instances').catch(() => ({ items: [] })));
   }
 
   const results = await Promise.all(fetches);
@@ -291,6 +295,8 @@ async function loadData() {
     state.adminDepartments = results[5]?.items || [];
     state.adminUsers = results[6]?.items || [];
     state.adminHrAccounts = results[7]?.items || [];
+    state.adminBossAccounts = results[8]?.items || [];
+    state.adminBrowserInstances = results[9]?.items || [];
   }
 
   render();
@@ -1019,8 +1025,12 @@ function renderAdminOrg() {
   const depts = state.adminDepartments || [];
   const users = state.adminUsers || [];
   const hrAccounts = state.adminHrAccounts || [];
+  const bossAccounts = state.adminBossAccounts || [];
+  const browserInstances = state.adminBrowserInstances || [];
   const roleNames = { enterprise_admin: '企业管理员', dept_admin: '部门管理员', hr: 'HR' };
   const deptOptions = depts.filter((d) => d.status === 'active').map((d) => `<option value="${d.id}">${d.name}</option>`).join('');
+  const hrOptions = hrAccounts.filter((h) => h.status === 'active').map((h) => `<option value="${h.id}">${h.name}</option>`).join('');
+  const baOptions = bossAccounts.filter((b) => b.status === 'active').map((b) => `<option value="${b.id}">${b.display_name || b.boss_login_name || 'BOSS#' + b.id}</option>`).join('');
 
   return `
     <section>
@@ -1175,6 +1185,112 @@ function renderAdminOrg() {
         </form>
       </div>
     </div>
+
+    <section style="margin-top:16px">
+      <div class="table-card">
+        <div class="card-header">
+          <div>
+            <p class="eyebrow">BOSS 账号</p>
+            <h3 class="card-title">BOSS 直聘账号</h3>
+            <p class="card-subtitle">每个 HR 账号对应一个 BOSS 直聘登录账号。</p>
+          </div>
+          <button class="button-primary" onclick="showModal('ba-modal')">新增BOSS账号</button>
+        </div>
+        <table class="data-table">
+          <thead><tr><th>ID</th><th>BOSS 登录名</th><th>显示名</th><th>关联 HR</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody>
+            ${bossAccounts.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:var(--text-muted,#999)">暂无 BOSS 账号</td></tr>' : ''}
+            ${bossAccounts.map((b) => `<tr>
+              <td>${b.id}</td><td>${b.boss_login_name || '-'}</td><td>${b.display_name || '-'}</td>
+              <td>${b.hr_account_name || '-'}</td>
+              <td><span class="badge ${b.status === 'active' ? 'badge-success' : 'badge-danger'}">${b.status === 'active' ? '启用' : '停用'}</span></td>
+              <td>
+                <button class="btn-sm" onclick='editBossAccount(${JSON.stringify(b).replace(/'/g, "&#39;")})'>编辑</button>
+                <button class="btn-sm btn-danger" onclick="deleteBossAccount(${b.id})">删除</button>
+              </td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <section style="margin-top:16px">
+      <div class="table-card">
+        <div class="card-header">
+          <div>
+            <p class="eyebrow">浏览器实例</p>
+            <h3 class="card-title">Chrome 浏览器实例</h3>
+            <p class="card-subtitle">每个 BOSS 账号绑定独立的 Chrome 实例，通过 CDP 端口控制。</p>
+          </div>
+          <button class="button-primary" onclick="showModal('bi-modal')">新增浏览器实例</button>
+        </div>
+        <table class="data-table">
+          <thead><tr><th>ID</th><th>名称</th><th>CDP 端点</th><th>BOSS 账号</th><th>HR</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody>
+            ${browserInstances.length === 0 ? '<tr><td colspan="7" style="text-align:center;color:var(--text-muted,#999)">暂无浏览器实例</td></tr>' : ''}
+            ${browserInstances.map((bi) => {
+              const statusCls = { idle: 'badge-success', busy: 'badge-warning', offline: 'badge-danger' }[bi.status] || '';
+              const statusText = { idle: '空闲', busy: '忙碌', offline: '离线' }[bi.status] || bi.status;
+              return `<tr>
+                <td>${bi.id}</td><td>${bi.instance_name || '-'}</td>
+                <td><code style="font-size:12px">${bi.cdp_endpoint}</code></td>
+                <td>${bi.boss_display_name || bi.boss_login_name || '-'}</td>
+                <td>${bi.hr_account_name || '-'}</td>
+                <td><span class="badge ${statusCls}">${statusText}</span></td>
+                <td>
+                  <button class="btn-sm" onclick='editBrowserInstance(${JSON.stringify(bi).replace(/'/g, "&#39;")})'>编辑</button>
+                  <button class="btn-sm" onclick="checkBrowserInstance(${bi.id})">检测</button>
+                  <button class="btn-sm btn-danger" onclick="deleteBrowserInstance(${bi.id})">删除</button>
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <div id="ba-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('ba-modal')">
+      <div class="modal-content">
+        <h3 id="ba-modal-title">新增BOSS账号</h3>
+        <form onsubmit="return submitBossAccount(event)">
+          <input type="hidden" id="ba-edit-id" value="">
+          <div class="form-group"><label>关联HR账号</label><select id="ba-hr" required><option value="">请选择</option>${hrOptions}</select></div>
+          <div class="form-group"><label>BOSS 登录名</label><input type="text" id="ba-login" placeholder="BOSS直聘登录账号"></div>
+          <div class="form-group"><label>显示名称</label><input type="text" id="ba-display" placeholder="便于识别的名称"></div>
+          <div class="form-group" id="ba-status-group" style="display:none">
+            <label>状态</label>
+            <select id="ba-status"><option value="active">启用</option><option value="inactive">停用</option></select>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="button-secondary" onclick="closeModal('ba-modal')">取消</button>
+            <button type="submit" class="button-primary">确定</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="bi-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('bi-modal')">
+      <div class="modal-content">
+        <h3 id="bi-modal-title">新增浏览器实例</h3>
+        <form onsubmit="return submitBrowserInstance(event)">
+          <input type="hidden" id="bi-edit-id" value="">
+          <div class="form-group"><label>关联BOSS账号</label><select id="bi-ba" required><option value="">请选择</option>${baOptions}</select></div>
+          <div class="form-group"><label>实例名称</label><input type="text" id="bi-name" placeholder="如：Chrome-HR1"></div>
+          <div class="form-group"><label>CDP 端点</label><input type="text" id="bi-cdp" required placeholder="http://127.0.0.1:9222"></div>
+          <div class="form-group"><label>用户数据目录</label><input type="text" id="bi-userdata" required placeholder="/path/to/chrome-profile"></div>
+          <div class="form-group"><label>下载目录</label><input type="text" id="bi-download" required placeholder="/path/to/downloads"></div>
+          <div class="form-group"><label>调试端口</label><input type="number" id="bi-port" placeholder="9222"></div>
+          <div class="form-group"><label>主机</label><input type="text" id="bi-host" placeholder="localhost" value="localhost"></div>
+          <div class="form-group" id="bi-status-group" style="display:none">
+            <label>状态</label>
+            <select id="bi-status"><option value="idle">空闲</option><option value="offline">离线</option></select>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="button-secondary" onclick="closeModal('bi-modal')">取消</button>
+            <button type="submit" class="button-primary">确定</button>
+          </div>
+        </form>
+      </div>
+    </div>
   `;
 }
 
@@ -1206,6 +1322,28 @@ function showModal(id) {
     document.getElementById('hr-dept').value = '';
     document.getElementById('hr-notes').value = '';
     document.getElementById('hr-status-group').style.display = 'none';
+  }
+  if (id === 'ba-modal' && !document.getElementById('ba-edit-id').value) {
+    document.getElementById('ba-modal-title').textContent = '新增BOSS账号';
+    document.getElementById('ba-edit-id').value = '';
+    document.getElementById('ba-hr').value = '';
+    document.getElementById('ba-hr').disabled = false;
+    document.getElementById('ba-login').value = '';
+    document.getElementById('ba-display').value = '';
+    document.getElementById('ba-status-group').style.display = 'none';
+  }
+  if (id === 'bi-modal' && !document.getElementById('bi-edit-id').value) {
+    document.getElementById('bi-modal-title').textContent = '新增浏览器实例';
+    document.getElementById('bi-edit-id').value = '';
+    document.getElementById('bi-ba').value = '';
+    document.getElementById('bi-ba').disabled = false;
+    document.getElementById('bi-name').value = '';
+    document.getElementById('bi-cdp').value = '';
+    document.getElementById('bi-userdata').value = '';
+    document.getElementById('bi-download').value = '';
+    document.getElementById('bi-port').value = '';
+    document.getElementById('bi-host').value = 'localhost';
+    document.getElementById('bi-status-group').style.display = 'none';
   }
   modal.style.display = 'flex';
 }
@@ -1363,6 +1501,116 @@ async function deleteHrAccount(id, name) {
   if (!confirm('确定删除HR账号「' + name + '」？')) return;
   try {
     await fetchJson('/api/admin/hr-accounts/' + id, { method: 'DELETE' });
+    await loadData();
+  } catch (err) { alert(err.message); }
+}
+
+async function submitBossAccount(e) {
+  e.preventDefault();
+  const id = document.getElementById('ba-edit-id').value;
+  const hrAccountId = document.getElementById('ba-hr').value;
+  const bossLoginName = document.getElementById('ba-login').value.trim();
+  const displayName = document.getElementById('ba-display').value.trim();
+  const status = document.getElementById('ba-status').value;
+  try {
+    if (id) {
+      await fetchJson('/api/admin/boss-accounts/' + id, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bossLoginName, displayName, status })
+      });
+    } else {
+      await fetchJson('/api/admin/boss-accounts', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hrAccountId, bossLoginName, displayName })
+      });
+    }
+    closeModal('ba-modal');
+    await loadData();
+  } catch (err) { alert(err.message); }
+  return false;
+}
+
+function editBossAccount(b) {
+  document.getElementById('ba-modal-title').textContent = '编辑BOSS账号';
+  document.getElementById('ba-edit-id').value = b.id;
+  document.getElementById('ba-hr').value = b.hr_account_id || '';
+  document.getElementById('ba-hr').disabled = true;
+  document.getElementById('ba-login').value = b.boss_login_name || '';
+  document.getElementById('ba-display').value = b.display_name || '';
+  document.getElementById('ba-status-group').style.display = '';
+  document.getElementById('ba-status').value = b.status || 'active';
+  showModal('ba-modal');
+}
+
+async function deleteBossAccount(id) {
+  if (!confirm('确定删除该BOSS账号？')) return;
+  try {
+    await fetchJson('/api/admin/boss-accounts/' + id, { method: 'DELETE' });
+    await loadData();
+  } catch (err) { alert(err.message); }
+}
+
+async function submitBrowserInstance(e) {
+  e.preventDefault();
+  const id = document.getElementById('bi-edit-id').value;
+  const bossAccountId = document.getElementById('bi-ba').value;
+  const instanceName = document.getElementById('bi-name').value.trim();
+  const cdpEndpoint = document.getElementById('bi-cdp').value.trim();
+  const userDataDir = document.getElementById('bi-userdata').value.trim();
+  const downloadDir = document.getElementById('bi-download').value.trim();
+  const debugPort = document.getElementById('bi-port').value || null;
+  const host = document.getElementById('bi-host').value.trim() || 'localhost';
+  const status = document.getElementById('bi-status').value;
+  try {
+    if (id) {
+      await fetchJson('/api/admin/browser-instances/' + id, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instanceName, cdpEndpoint, userDataDir, downloadDir, debugPort, host, status })
+      });
+    } else {
+      await fetchJson('/api/admin/browser-instances', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bossAccountId, instanceName, cdpEndpoint, userDataDir, downloadDir, debugPort, host })
+      });
+    }
+    closeModal('bi-modal');
+    await loadData();
+  } catch (err) { alert(err.message); }
+  return false;
+}
+
+function editBrowserInstance(bi) {
+  document.getElementById('bi-modal-title').textContent = '编辑浏览器实例';
+  document.getElementById('bi-edit-id').value = bi.id;
+  document.getElementById('bi-ba').value = bi.boss_account_id || '';
+  document.getElementById('bi-ba').disabled = true;
+  document.getElementById('bi-name').value = bi.instance_name || '';
+  document.getElementById('bi-cdp').value = bi.cdp_endpoint || '';
+  document.getElementById('bi-userdata').value = bi.user_data_dir || '';
+  document.getElementById('bi-download').value = bi.download_dir || '';
+  document.getElementById('bi-port').value = bi.debug_port || '';
+  document.getElementById('bi-host').value = bi.host || 'localhost';
+  document.getElementById('bi-status-group').style.display = '';
+  document.getElementById('bi-status').value = bi.status || 'idle';
+  showModal('bi-modal');
+}
+
+async function checkBrowserInstance(id) {
+  try {
+    const result = await fetchJson('/api/admin/browser-instances/' + id + '/check', { method: 'POST' });
+    if (result.ok) {
+      alert('浏览器在线: ' + result.browser);
+    } else {
+      alert('浏览器离线: ' + result.message);
+    }
+    await loadData();
+  } catch (err) { alert(err.message); }
+}
+
+async function deleteBrowserInstance(id) {
+  if (!confirm('确定删除该浏览器实例？')) return;
+  try {
+    await fetchJson('/api/admin/browser-instances/' + id, { method: 'DELETE' });
     await loadData();
   } catch (err) { alert(err.message); }
 }

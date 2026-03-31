@@ -19,7 +19,8 @@ class FollowupLoopService {
     this.threadDelayMax = threadDelayMax;
   }
 
-  async run({ runId, jobKey, mode = 'followup', maxThreads: overrideMaxThreads } = {}) {
+  async run({ runId, jobKey, mode = 'followup', maxThreads: overrideMaxThreads, bossCliRunner: runnerOverride } = {}) {
+    if (runnerOverride) this.bossCliRunner = runnerOverride;
     const effectiveMaxThreads = overrideMaxThreads || this.maxThreads;
     const stats = {
       processed: 0,

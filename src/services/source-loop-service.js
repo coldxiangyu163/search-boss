@@ -47,8 +47,9 @@ class SourceLoopService {
     this.candidateDelayMax = candidateDelayMax;
   }
 
-  async run({ runId, jobKey, targetCount: overrideTargetCount } = {}) {
+  async run({ runId, jobKey, targetCount: overrideTargetCount, bossCliRunner: runnerOverride } = {}) {
     const effectiveTargetCount = overrideTargetCount || this.targetCount;
+    if (runnerOverride) this.bossCliRunner = runnerOverride;
     const stats = {
       greeted: 0,
       skipped: 0,

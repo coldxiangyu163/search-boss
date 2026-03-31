@@ -817,6 +817,157 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
     }
   });
 
+  // --- BOSS accounts ---
+  app.get('/api/admin/boss-accounts', async (req, res, next) => {
+    try {
+      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const result = await pool?.query(`
+        select ba.*, ha.name as hr_account_name
+        from boss_accounts ba
+        left join hr_accounts ha on ha.id = ba.hr_account_id
+        order by ba.id
+      `) || { rows: [] };
+      res.json({ items: result.rows });
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/admin/boss-accounts', async (req, res, next) => {
+    try {
+      if (!req.user || req.user.role !== 'enterprise_admin') {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const { hrAccountId, bossLoginName, displayName } = req.body;
+      const result = await pool?.query(`
+        insert into boss_accounts (hr_account_id, boss_login_name, display_name)
+        values ($1, $2, $3) returning *
+      `, [hrAccountId, bossLoginName || null, displayName || null]);
+      res.json({ item: result.rows[0] });
+    } catch (error) { next(error); }
+  });
+
+  app.patch('/api/admin/boss-accounts/:id', async (req, res, next) => {
+    try {
+      if (!req.user || req.user.role !== 'enterprise_admin') {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const { bossLoginName, displayName, status } = req.body;
+      const result = await pool?.query(`
+        update boss_accounts
+        set boss_login_name = coalesce($2, boss_login_name),
+            display_name = coalesce($3, display_name),
+            status = coalesce($4, status),
+            updated_at = now()
+        where id = $1 returning *
+      `, [req.params.id, bossLoginName, displayName, status]);
+      if (!result.rows[0]) return res.status(404).json({ error: 'not_found' });
+      res.json({ item: result.rows[0] });
+    } catch (error) { next(error); }
+  });
+
+  app.delete('/api/admin/boss-accounts/:id', async (req, res, next) => {
+    try {
+      if (!req.user || req.user.role !== 'enterprise_admin') {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const hasBi = await pool?.query('select count(*) from browser_instances where boss_account_id = $1', [req.params.id]);
+      if (parseInt(hasBi.rows[0].count) > 0) {
+        return res.status(400).json({ error: 'has_browser_instances', message: '该BOSS账号下还有浏览器实例，请先删除' });
+      }
+      await pool?.query('delete from boss_accounts where id = $1', [req.params.id]);
+      res.json({ ok: true });
+    } catch (error) { next(error); }
+  });
+
+  // --- Browser instances ---
+  app.get('/api/admin/browser-instances', async (req, res, next) => {
+    try {
+      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const result = await pool?.query(`
+        select bi.*, ba.boss_login_name, ba.display_name as boss_display_name,
+               ba.hr_account_id, ha.name as hr_account_name
+        from browser_instances bi
+        left join boss_accounts ba on ba.id = bi.boss_account_id
+        left join hr_accounts ha on ha.id = ba.hr_account_id
+        order by bi.id
+      `) || { rows: [] };
+      res.json({ items: result.rows });
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/admin/browser-instances', async (req, res, next) => {
+    try {
+      if (!req.user || req.user.role !== 'enterprise_admin') {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const { bossAccountId, instanceName, cdpEndpoint, userDataDir, downloadDir, debugPort, host } = req.body;
+      if (!cdpEndpoint || !userDataDir || !downloadDir) {
+        return res.status(400).json({ error: 'missing_fields', message: 'cdpEndpoint, userDataDir, downloadDir 必填' });
+      }
+      const result = await pool?.query(`
+        insert into browser_instances (boss_account_id, instance_name, cdp_endpoint, user_data_dir, download_dir, debug_port, host)
+        values ($1, $2, $3, $4, $5, $6, $7) returning *
+      `, [bossAccountId, instanceName || null, cdpEndpoint, userDataDir, downloadDir, debugPort || null, host || 'localhost']);
+      res.json({ item: result.rows[0] });
+    } catch (error) { next(error); }
+  });
+
+  app.patch('/api/admin/browser-instances/:id', async (req, res, next) => {
+    try {
+      if (!req.user || req.user.role !== 'enterprise_admin') {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const { instanceName, cdpEndpoint, userDataDir, downloadDir, debugPort, host, status } = req.body;
+      const result = await pool?.query(`
+        update browser_instances
+        set instance_name = coalesce($2, instance_name),
+            cdp_endpoint = coalesce($3, cdp_endpoint),
+            user_data_dir = coalesce($4, user_data_dir),
+            download_dir = coalesce($5, download_dir),
+            debug_port = coalesce($6, debug_port),
+            host = coalesce($7, host),
+            status = coalesce($8, status),
+            updated_at = now()
+        where id = $1 returning *
+      `, [req.params.id, instanceName, cdpEndpoint, userDataDir, downloadDir, debugPort, host, status]);
+      if (!result.rows[0]) return res.status(404).json({ error: 'not_found' });
+      res.json({ item: result.rows[0] });
+    } catch (error) { next(error); }
+  });
+
+  app.delete('/api/admin/browser-instances/:id', async (req, res, next) => {
+    try {
+      if (!req.user || req.user.role !== 'enterprise_admin') {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      await pool?.query('delete from browser_instances where id = $1', [req.params.id]);
+      res.json({ ok: true });
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/admin/browser-instances/:id/check', async (req, res, next) => {
+    try {
+      if (!req.user || !['enterprise_admin', 'dept_admin'].includes(req.user.role)) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const bi = await pool?.query('select * from browser_instances where id = $1', [req.params.id]);
+      if (!bi.rows[0]) return res.status(404).json({ error: 'not_found' });
+      const endpoint = bi.rows[0].cdp_endpoint;
+      try {
+        const resp = await fetch(`${endpoint}/json/version`);
+        const data = await resp.json();
+        await pool?.query('update browser_instances set last_seen_at = now(), status = $2 where id = $1', [req.params.id, 'idle']);
+        res.json({ ok: true, browser: data.Browser || 'unknown', status: 'online' });
+      } catch {
+        await pool?.query("update browser_instances set status = 'offline' where id = $1", [req.params.id]);
+        res.json({ ok: false, status: 'offline', message: '无法连接到浏览器 CDP: ' + endpoint });
+      }
+    } catch (error) { next(error); }
+  });
+
   app.use((error, _req, res, _next) => {
     if (error.message === 'boss_encrypt_geek_id_missing') {
       res.status(400).json({

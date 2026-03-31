@@ -5,13 +5,14 @@ const { DeterministicJobSyncService } = require('./deterministic-job-sync-servic
 const { NanobotExecutionService } = require('./nanobot-execution-service');
 
 class AgentService {
-  constructor({ pool, nanobotRunner = null, bossCliRunner = null, bossContextStore = null, jobService = null, runOrchestrator = null, deterministicContextService = null }) {
+  constructor({ pool, nanobotRunner = null, bossCliRunner = null, bossContextStore = null, jobService = null, runOrchestrator = null, deterministicContextService = null, browserInstanceManager = null }) {
     this.pool = pool;
     this.nanobotRunner = nanobotRunner;
     this.bossCliRunner = bossCliRunner;
     this.bossContextStore = bossContextStore;
     this.jobService = jobService;
     this.runOrchestrator = runOrchestrator;
+    this.browserInstanceManager = browserInstanceManager;
     this.deterministicContextService = deterministicContextService || new DeterministicContextService({
       bossCliRunner: this.bossCliRunner,
       bossContextStore: this.bossContextStore,
@@ -27,6 +28,15 @@ class AgentService {
       nanobotRunner: this.nanobotRunner,
       recordRunEvent: (payload) => this.recordRunEvent(payload)
     });
+  }
+
+  async _resolveRunnerForRun(runId) {
+    if (!this.browserInstanceManager) {
+      return { runner: this.bossCliRunner, instanceId: null };
+    }
+    const run = await this.pool.query('select hr_account_id from sourcing_runs where id = $1', [runId]);
+    const hrAccountId = run.rows[0]?.hr_account_id;
+    return this.browserInstanceManager.acquireRunner({ hrAccountId });
   }
 
   async createRun({ runKey, jobKey, mode, hrAccountId }) {
@@ -1261,9 +1271,17 @@ class AgentService {
     if (this.runOrchestrator?.runJobSync) {
       return this.runOrchestrator.runJobSync({ runId });
     }
-    if (this.bossCliRunner && this.jobService) {
+
+    const { runner, instanceId } = await this._resolveRunnerForRun(runId);
+    const hasRunner = runner || this.bossCliRunner;
+
+    if (hasRunner && this.jobService) {
       try {
-        return await this._runDeterministicJobSync({ runId });
+        if (instanceId) {
+          await this.browserInstanceManager.markInstanceBusy(instanceId, runId);
+        }
+        const result = await this._runDeterministicJobSync({ runId, bossCliRunner: runner || this.bossCliRunner });
+        return result;
       } catch (error) {
         if (!this.nanobotRunner) {
           throw error;
@@ -1278,6 +1296,10 @@ class AgentService {
           message: 'boss cli sync fallback to nanobot',
           payload: { reason: error.message }
         });
+      } finally {
+        if (instanceId) {
+          await this.browserInstanceManager.releaseInstance(instanceId).catch(() => {});
+        }
       }
     }
 
@@ -1289,8 +1311,14 @@ class AgentService {
     return this._runNanobotWithStreaming({ runId, message });
   }
 
-  async _runDeterministicJobSync({ runId }) {
-    return this.deterministicJobSyncService.run({ runId });
+  async _runDeterministicJobSync({ runId, bossCliRunner }) {
+    const runner = bossCliRunner || this.bossCliRunner;
+    const syncService = new DeterministicJobSyncService({
+      bossCliRunner: runner,
+      upsertJobsBatch: (payload) => this.jobService.upsertJobsBatch(payload),
+      recordRunEvent: (payload) => this.recordRunEvent(payload)
+    });
+    return syncService.run({ runId });
   }
 
 

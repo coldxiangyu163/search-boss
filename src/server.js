@@ -16,6 +16,7 @@ const { DeterministicContextService } = require('./services/deterministic-contex
 const { SourceLoopService } = require('./services/source-loop-service');
 const { FollowupLoopService } = require('./services/followup-loop-service');
 const { LlmEvaluator } = require('./services/llm-evaluator');
+const { BrowserInstanceManager } = require('./services/browser-instance-manager');
 
 const nanobotRunner = new NanobotRunner({
   configPath: config.nanobotConfigPath
@@ -24,11 +25,16 @@ const nanobotRunner = new NanobotRunner({
 const bossCliRunner = config.bossCliEnabled
   ? new BossCliRunner()
   : null;
+
+const browserInstanceManager = new BrowserInstanceManager({
+  pool,
+  fallbackRunner: bossCliRunner
+});
 const bossContextStore = config.bossCliEnabled
   ? new BossContextStore({ contextDir: config.bossCliSessionDir })
   : null;
 
-const agentService = new AgentService({ pool, nanobotRunner, bossCliRunner, bossContextStore });
+const agentService = new AgentService({ pool, nanobotRunner, bossCliRunner, bossContextStore, browserInstanceManager });
 agentService.deterministicContextService = new DeterministicContextService({
   bossCliRunner,
   bossContextStore,
@@ -68,7 +74,7 @@ const followupLoopService = (config.sourceLoopEnabled && bossCliRunner && llmEva
   : null;
 
 const taskLock = new TaskLock();
-const schedulerService = new SchedulerService({ pool, agentService, sourceLoopService, followupLoopService, taskLock });
+const schedulerService = new SchedulerService({ pool, agentService, sourceLoopService, followupLoopService, taskLock, browserInstanceManager });
 const jobService = new JobService({ pool, agentService });
 agentService.jobService = jobService;
 

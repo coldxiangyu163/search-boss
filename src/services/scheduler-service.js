@@ -1,10 +1,11 @@
 class SchedulerService {
-  constructor({ pool, agentService, sourceLoopService = null, followupLoopService = null, taskLock = null }) {
+  constructor({ pool, agentService, sourceLoopService = null, followupLoopService = null, taskLock = null, browserInstanceManager = null }) {
     this.pool = pool;
     this.agentService = agentService;
     this.sourceLoopService = sourceLoopService;
     this.followupLoopService = followupLoopService;
     this.taskLock = taskLock;
+    this.browserInstanceManager = browserInstanceManager;
     this._tickTimer = null;
   }
 
@@ -314,10 +315,26 @@ class SchedulerService {
 
   async #executeJobTask({ runId, jobKey, taskType, scheduledJobId = null, scheduledRunId = null, schedule = null }) {
     const schedulePayload = schedule?.payload || {};
+    let resolvedInstance = null;
     try {
+      let runnerOverride = null;
+      if (this.browserInstanceManager) {
+        const run = await this.pool.query('select hr_account_id from sourcing_runs where id = $1', [runId]);
+        const hrAccountId = run.rows[0]?.hr_account_id;
+        if (hrAccountId) {
+          const { runner, instanceId } = await this.browserInstanceManager.acquireRunner({ hrAccountId });
+          runnerOverride = runner;
+          resolvedInstance = instanceId;
+          if (instanceId) {
+            await this.browserInstanceManager.markInstanceBusy(instanceId, runId);
+          }
+        }
+      }
+
       if (taskType === 'source' && this.sourceLoopService) {
         const overrides = {};
         if (schedulePayload.targetCount) overrides.targetCount = schedulePayload.targetCount;
+        if (runnerOverride) overrides.bossCliRunner = runnerOverride;
         await this.sourceLoopService.run({ runId, jobKey, ...overrides });
         await this.#finalizeScheduledRun({ schedule, scheduledRunId, scheduledJobId });
         return;
@@ -326,6 +343,7 @@ class SchedulerService {
       if ((taskType === 'followup' || taskType === 'chat' || taskType === 'download') && this.followupLoopService) {
         const overrides = {};
         if (schedulePayload.maxThreads) overrides.maxThreads = schedulePayload.maxThreads;
+        if (runnerOverride) overrides.bossCliRunner = runnerOverride;
         await this.followupLoopService.run({ runId, jobKey, mode: taskType, ...overrides });
         await this.#finalizeScheduledRun({ schedule, scheduledRunId, scheduledJobId });
         return;
@@ -444,6 +462,9 @@ class SchedulerService {
         }
       });
     } finally {
+      if (resolvedInstance && this.browserInstanceManager) {
+        await this.browserInstanceManager.releaseInstance(resolvedInstance).catch(() => {});
+      }
       this.taskLock?.release(runId);
     }
   }
