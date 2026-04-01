@@ -1462,8 +1462,8 @@ async function sendChatMessage({
     throw new Error('boss_chat_message_text_required');
   }
 
-  // Step 1: Focus editor and insert text via execCommand
-  const inputResult = await evaluateJson({
+  // Step 1: Focus editor and clear existing content
+  const focusResult = await evaluateJson({
     cdpClient, targetId, urlPrefix,
     expression: `(() => {
       const selectors = [
@@ -1480,23 +1480,58 @@ async function sendChatMessage({
       if (!editor) return JSON.stringify({ ok: false, reason: 'boss_chat_editor_not_found' });
       editor.focus();
       editor.textContent = '';
-      document.execCommand('insertText', false, ${JSON.stringify(text)});
       editor.dispatchEvent(new Event('input', { bubbles: true }));
       return JSON.stringify({ ok: true });
     })()`
   });
 
-  if (!inputResult?.ok) {
-    throw new Error(inputResult?.reason || 'boss_chat_editor_not_found');
+  if (!focusResult?.ok) {
+    throw new Error(focusResult?.reason || 'boss_chat_editor_not_found');
   }
+
+  // Step 2: Insert text via CDP Input.insertText (works reliably in headless/Linux)
+  await cdpClient.dispatchInsertText({ targetId, urlPrefix, text });
+
+  // Trigger input event so Vue picks up the change
+  await evaluateJson({
+    cdpClient, targetId, urlPrefix,
+    expression: `(() => {
+      const selectors = [
+        '.boss-chat-editor-input[contenteditable="true"]',
+        '.boss-chat-editor-input',
+        '.chat-editor [contenteditable="true"]',
+        '[contenteditable="true"]',
+      ];
+      let editor = null;
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (el && el.offsetParent !== null) { editor = el; break; }
+      }
+      if (!editor) return JSON.stringify({ ok: false });
+      editor.dispatchEvent(new Event('input', { bubbles: true }));
+      return JSON.stringify({ ok: true, textLength: (editor.textContent || '').length });
+    })()`
+  });
 
   await randomDelay(500, 1_000);
 
-  // Step 2: Real mouse click on send button
+  // Step 3: Send via Enter key first (BOSS chat supports Enter to send)
+  let sent = false;
   try {
-    await realClick({ cdpClient, targetId, urlPrefix, selector: '.conversation-editor .submit, .submit-content .submit' });
-  } catch (e) {
-    await realClickByText({ cdpClient, targetId, urlPrefix, text: '发送' });
+    await cdpClient.dispatchKeyDown({ targetId, urlPrefix, key: 'Enter', code: 'Enter', keyCode: 13, type: 'keyDown' });
+    await cdpClient.dispatchKeyDown({ targetId, urlPrefix, key: 'Enter', code: 'Enter', keyCode: 13, type: 'keyUp' });
+    sent = true;
+  } catch (_) {
+    // Enter key failed, fall through to button click
+  }
+
+  // Step 4: Fallback — real mouse click on send button
+  if (!sent) {
+    try {
+      await realClick({ cdpClient, targetId, urlPrefix, selector: '.conversation-editor .submit, .submit-content .submit' });
+    } catch (e) {
+      await realClickByText({ cdpClient, targetId, urlPrefix, text: '发送' });
+    }
   }
 
   await randomDelay(1_000, 2_000);

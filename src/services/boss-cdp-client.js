@@ -248,6 +248,30 @@ class BossCdpClient {
     });
   }
 
+  async dispatchInsertText({ targetId, urlPrefix, text } = {}) {
+    await this.sendCommand({
+      targetId,
+      urlPrefix,
+      method: 'Input.insertText',
+      params: { text }
+    });
+  }
+
+  async dispatchKeyDown({ targetId, urlPrefix, key, code, keyCode, nativeVirtualKeyCode, windowsVirtualKeyCode, type = 'keyDown' } = {}) {
+    await this.sendCommand({
+      targetId,
+      urlPrefix,
+      method: 'Input.dispatchKeyEvent',
+      params: {
+        type,
+        key,
+        code,
+        nativeVirtualKeyCode: nativeVirtualKeyCode || keyCode || 0,
+        windowsVirtualKeyCode: windowsVirtualKeyCode || keyCode || 0
+      }
+    });
+  }
+
   async dispatchMouseClick({ targetId, x, y, urlPrefix } = {}) {
     const normalizedX = Number(x);
     const normalizedY = Number(y);
