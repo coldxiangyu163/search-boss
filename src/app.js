@@ -140,7 +140,8 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.post('/api/dashboard/sync-recruit-data', async (req, res, next) => {
     try {
-      const result = await services.dashboard.syncRecruitData(req.body);
+      const hrAccountId = req.user?.hr_account_id || req.body?.hrAccountId;
+      const result = await services.dashboard.syncRecruitData({ ...req.body, hrAccountId });
       res.json(result);
     } catch (error) {
       next(error);

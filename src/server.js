@@ -82,7 +82,7 @@ agentService.jobService = jobService;
 const app = createApp({
   services: {
     auth: new AuthService({ pool }),
-    dashboard: new DashboardService({ pool, bossCliRunner }),
+    dashboard: new DashboardService({ pool, bossCliRunner, browserInstanceManager }),
     jobs: jobService,
     candidates: new CandidateService({ pool }),
     agent: agentService,

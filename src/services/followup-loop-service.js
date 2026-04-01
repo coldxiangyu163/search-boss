@@ -20,8 +20,16 @@ class FollowupLoopService {
   }
 
   async run({ runId, jobKey, mode = 'followup', maxThreads: overrideMaxThreads, bossCliRunner: runnerOverride } = {}) {
+    const savedRunner = this.bossCliRunner;
     if (runnerOverride) this.bossCliRunner = runnerOverride;
-    const effectiveMaxThreads = overrideMaxThreads || this.maxThreads;
+    try {
+    return await this.#runImpl({ runId, jobKey, mode, effectiveMaxThreads: overrideMaxThreads || this.maxThreads });
+    } finally {
+      this.bossCliRunner = savedRunner;
+    }
+  }
+
+  async #runImpl({ runId, jobKey, mode, effectiveMaxThreads }) {
     const stats = {
       processed: 0,
       replied: 0,

@@ -1,8 +1,9 @@
 class DashboardService {
-  constructor({ pool, bossCliRunner = null, sessionStore = null }) {
+  constructor({ pool, bossCliRunner = null, sessionStore = null, browserInstanceManager = null }) {
     this.pool = pool;
     this.bossCliRunner = bossCliRunner;
     this.sessionStore = sessionStore;
+    this.browserInstanceManager = browserInstanceManager;
   }
 
   async getSummary({ hrAccountId } = {}) {
@@ -62,9 +63,9 @@ class DashboardService {
     };
   }
 
-  async syncRecruitData({ metrics, quotas, scrapedAt } = {}) {
-    if (!metrics && this.bossCliRunner) {
-      return this._fetchAndSync();
+  async syncRecruitData({ metrics, quotas, scrapedAt, hrAccountId } = {}) {
+    if (!metrics && (this.bossCliRunner || this.browserInstanceManager)) {
+      return this._fetchAndSync({ hrAccountId });
     }
 
     if (!metrics) {
@@ -74,16 +75,35 @@ class DashboardService {
     return this._saveSnapshot({ metrics, quotas, scrapedAt });
   }
 
-  async _fetchAndSync() {
-    const runId = `recruit-sync-${Date.now()}`;
-    await this.bossCliRunner.bindTarget({ runId, mode: 'recruit-data' });
-    const scrapeResult = await this.bossCliRunner.scrapeRecruitData({ runId });
+  async _fetchAndSync({ hrAccountId } = {}) {
+    let runner = this.bossCliRunner;
+    let instanceId = null;
 
-    return this._saveSnapshot({
-      metrics: scrapeResult.metrics,
-      quotas: scrapeResult.quotas,
-      scrapedAt: scrapeResult.scrapedAt
-    });
+    if (hrAccountId && this.browserInstanceManager) {
+      const resolved = await this.browserInstanceManager.acquireRunner({ hrAccountId });
+      runner = resolved.runner;
+      instanceId = resolved.instanceId;
+    }
+
+    if (!runner) {
+      throw new Error('boss_recruit_data_missing');
+    }
+
+    try {
+      const runId = `recruit-sync-${Date.now()}`;
+      await runner.bindTarget({ runId, mode: 'recruit-data' });
+      const scrapeResult = await runner.scrapeRecruitData({ runId });
+
+      return this._saveSnapshot({
+        metrics: scrapeResult.metrics,
+        quotas: scrapeResult.quotas,
+        scrapedAt: scrapeResult.scrapedAt
+      });
+    } finally {
+      if (instanceId && this.browserInstanceManager) {
+        await this.browserInstanceManager.releaseInstance(instanceId).catch(() => {});
+      }
+    }
   }
 
   async _saveSnapshot({ metrics, quotas, scrapedAt }) {

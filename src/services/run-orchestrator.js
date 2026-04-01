@@ -26,9 +26,18 @@ class RunOrchestrator {
   }
 
   async runJobSync({ runId }) {
-    if (this.agentService.bossCliRunner && this.agentService.jobService) {
+    const hasRunner = this.agentService.bossCliRunner || this.agentService.browserInstanceManager;
+    if (hasRunner && this.agentService.jobService) {
+      let resolvedRunner = null;
+      let resolvedInstanceId = null;
       try {
-        return await this.agentService._runDeterministicJobSync({ runId });
+        const { runner, instanceId } = await this.agentService._resolveRunnerForRun(runId);
+        resolvedRunner = runner;
+        resolvedInstanceId = instanceId;
+        if (resolvedInstanceId && this.agentService.browserInstanceManager) {
+          await this.agentService.browserInstanceManager.markInstanceBusy(resolvedInstanceId, runId);
+        }
+        return await this.agentService._runDeterministicJobSync({ runId, bossCliRunner: resolvedRunner });
       } catch (error) {
         if (!this.agentService.nanobotRunner) {
           throw error;
@@ -43,6 +52,10 @@ class RunOrchestrator {
           message: 'boss cli sync fallback to nanobot',
           payload: { reason: error.message }
         });
+      } finally {
+        if (resolvedInstanceId && this.agentService.browserInstanceManager) {
+          await this.agentService.browserInstanceManager.releaseInstance(resolvedInstanceId).catch(() => {});
+        }
       }
     }
 

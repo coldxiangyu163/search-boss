@@ -49,7 +49,16 @@ class SourceLoopService {
 
   async run({ runId, jobKey, targetCount: overrideTargetCount, bossCliRunner: runnerOverride } = {}) {
     const effectiveTargetCount = overrideTargetCount || this.targetCount;
+    const savedRunner = this.bossCliRunner;
     if (runnerOverride) this.bossCliRunner = runnerOverride;
+    try {
+    return await this.#runImpl({ runId, jobKey, effectiveTargetCount });
+    } finally {
+      this.bossCliRunner = savedRunner;
+    }
+  }
+
+  async #runImpl({ runId, jobKey, effectiveTargetCount }) {
     const stats = {
       greeted: 0,
       skipped: 0,
