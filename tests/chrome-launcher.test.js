@@ -1,8 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('node:os');
+const fs = require('node:fs');
 
-const { ChromeLauncher, needsVirtualDisplay, findFreeDisplay } = require('../src/services/chrome-launcher');
+const { ChromeLauncher, needsVirtualDisplay, findFreeDisplay, detectLinuxChromePath } = require('../src/services/chrome-launcher');
 
 test('ChromeLauncher constructor parses port from cdpEndpoint', () => {
   const launcher = new ChromeLauncher({ cdpEndpoint: 'http://127.0.0.1:9333' });
@@ -14,6 +15,21 @@ test('ChromeLauncher constructor defaults to port 9222', () => {
   const launcher = new ChromeLauncher({});
   assert.equal(launcher.port, 9222);
   assert.equal(launcher.cdpEndpoint, 'http://127.0.0.1:9222');
+});
+
+test('detectLinuxChromePath supports ungoogled-chromium path', () => {
+  const originalAccessSync = fs.accessSync;
+  try {
+    fs.accessSync = (target) => {
+      if (target === '/usr/bin/ungoogled-chromium') {
+        return true;
+      }
+      throw new Error('not found');
+    };
+    assert.equal(detectLinuxChromePath(), '/usr/bin/ungoogled-chromium');
+  } finally {
+    fs.accessSync = originalAccessSync;
+  }
 });
 
 test('ChromeLauncher isRunning returns true when Chrome responds', async () => {

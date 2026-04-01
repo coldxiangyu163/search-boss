@@ -8,9 +8,11 @@ const LINUX_CHROME_CANDIDATES = [
   '/usr/bin/google-chrome',
   '/usr/bin/chromium-browser',
   '/usr/bin/chromium',
+  '/usr/bin/ungoogled-chromium',
   '/snap/bin/chromium',
   '/usr/lib/chromium/chromium',
   '/usr/lib/chromium-browser/chromium-browser',
+  '/usr/lib64/ungoogled-chromium/ungoogled-chromium',
   '/opt/google/chrome/chrome',
   '/opt/google/chrome/google-chrome',
 ];
@@ -20,6 +22,7 @@ const LINUX_WHICH_NAMES = [
   'google-chrome',
   'chromium-browser',
   'chromium',
+  'ungoogled-chromium',
 ];
 
 function detectLinuxChromePath() {
