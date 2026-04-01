@@ -302,8 +302,14 @@ class AgentService {
         values ($1, $2, $3, $4, case when $3 = 'greeted' then $5::timestamptz else null end, $6, $7)
         on conflict (job_id, person_id) do update
         set lifecycle_status = case
-              when job_candidates.lifecycle_status in ('resume_received', 'resume_downloaded') then job_candidates.lifecycle_status
-              else excluded.lifecycle_status
+              when array_position(
+                array['discovered','greeted','in_conversation','responded','resume_requested','resume_received','resume_downloaded'],
+                excluded.lifecycle_status
+              ) > array_position(
+                array['discovered','greeted','in_conversation','responded','resume_requested','resume_received','resume_downloaded'],
+                job_candidates.lifecycle_status
+              ) then excluded.lifecycle_status
+              else job_candidates.lifecycle_status
             end,
             source_run_id = coalesce(job_candidates.source_run_id, excluded.source_run_id),
             last_outbound_at = case
@@ -968,10 +974,27 @@ class AgentService {
     return false;
   }
 
-  async findLatestCandidateByGeekId(bossEncryptGeekId) {
+  async findLatestCandidateByGeekId(bossEncryptGeekId, jobKey) {
+    if (jobKey) {
+      const result = await this.pool.query(
+        `
+          select jc.id, jc.lifecycle_status as "lifecycleStatus"
+          from job_candidates jc
+          join people p on p.id = jc.person_id
+          join jobs j on j.id = jc.job_id
+          where p.boss_encrypt_geek_id = $1
+            and j.job_key = $2
+          order by jc.updated_at desc
+          limit 1
+        `,
+        [bossEncryptGeekId, jobKey]
+      );
+      return result.rows[0] || null;
+    }
+
     const result = await this.pool.query(
       `
-        select jc.id
+        select jc.id, jc.lifecycle_status as "lifecycleStatus"
         from job_candidates jc
         join people p on p.id = jc.person_id
         where p.boss_encrypt_geek_id = $1
@@ -1379,11 +1402,20 @@ function normalizeJobRequirement(value) {
   return normalized || null;
 }
 
-function normalizeCandidateStatus(status) {
-  if (status === 'greeted') {
-    return 'greeted';
-  }
+const VALID_LIFECYCLE_STATUSES = [
+  'discovered',
+  'greeted',
+  'in_conversation',
+  'responded',
+  'resume_requested',
+  'resume_received',
+  'resume_downloaded'
+];
 
+function normalizeCandidateStatus(status) {
+  if (VALID_LIFECYCLE_STATUSES.includes(status)) {
+    return status;
+  }
   return 'discovered';
 }
 

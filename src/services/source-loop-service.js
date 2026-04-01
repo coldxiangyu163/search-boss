@@ -185,7 +185,7 @@ class SourceLoopService {
 
     for (const candidate of candidates) {
       if (stats.greeted >= effectiveTargetCount) break;
-      if ((stats.skipped + stats.alreadyChatting + stats.errors) >= this.maxSkips) break;
+      if ((stats.skipped + stats.errors) >= this.maxSkips) break;
 
       if (stats.totalEvaluated > 0) {
         const delayMs = this.candidateDelayMin + Math.random() * (this.candidateDelayMax - this.candidateDelayMin);
@@ -279,9 +279,9 @@ class SourceLoopService {
       return;
     }
 
-    // DB dedup
+    // DB dedup (scoped to current job)
     try {
-      const existing = await this.agentService.findLatestCandidateByGeekId(bossEncryptGeekId);
+      const existing = await this.agentService.findLatestCandidateByGeekId(bossEncryptGeekId, jobKey);
       if (existing && existing.lifecycleStatus && existing.lifecycleStatus !== 'discovered') {
         stats.alreadyChatting += 1;
         await this.#recordEvent(runId, {

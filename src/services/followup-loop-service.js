@@ -266,9 +266,9 @@ class FollowupLoopService {
     }
 
     // Step 2c: Check and accept resume consent if pending
-    await this.#handleResumeConsentIfNeeded({ runId, encryptUid, candidateName: thread.name, stats });
+    const consentResult = await this.#handleResumeConsentIfNeeded({ runId, encryptUid, candidateName: thread.name, stats });
 
-    // Step 3: Check attachment state
+    // Step 3: Check attachment state (after consent handling so newly appeared attachments are detected)
     let attachmentState;
     try {
       attachmentState = await this.bossCliRunner.inspectAttachmentState({ runId });
@@ -386,7 +386,23 @@ class FollowupLoopService {
       return;
     }
 
-    // Step 10a: Send reply if LLM provided one
+    // Step 10a: Handle request_resume action
+    if (decision.action === 'request_resume') {
+      if (decision.replyText) {
+        await this.#executeSendMessage({
+          runId, jobKey, encryptUid,
+          candidateName: thread.name, candidateId,
+          text: decision.replyText, stats
+        });
+      }
+      await this.#executeResumeRequest({
+        runId, jobKey, encryptUid,
+        candidateName: thread.name, candidateId, stats
+      });
+      return;
+    }
+
+    // Step 10b: Send reply
     if (decision.replyText) {
       await this.#executeSendMessage({
         runId, jobKey, encryptUid,
@@ -395,8 +411,8 @@ class FollowupLoopService {
       });
     }
 
-    // Step 10b: Always request resume after replying if not yet received
-    if (attachmentState.buttonDisabled) {
+    // Step 10c: Request resume if eligible and not yet received
+    if (canRequestResume && !attachmentState.present) {
       await this.#executeResumeRequest({
         runId, jobKey, encryptUid,
         candidateName: thread.name, candidateId, stats
@@ -445,11 +461,11 @@ class FollowupLoopService {
     try {
       consentState = await this.bossCliRunner.inspectResumeConsentState({ runId });
     } catch (error) {
-      return;
+      return { accepted: false };
     }
 
     if (!consentState?.consentPending) {
-      return;
+      return { accepted: false };
     }
 
     try {
@@ -468,6 +484,8 @@ class FollowupLoopService {
           attachmentAppeared: result?.attachmentAppeared || false
         }
       });
+
+      return { accepted: true, attachmentAppeared: result?.attachmentAppeared || false };
     } catch (error) {
       await this.#recordEvent(runId, {
         eventId: `followup-loop-consent-error:${runId}:${encryptUid}`,
@@ -476,6 +494,7 @@ class FollowupLoopService {
         message: `resume consent accept failed: ${error.message}`,
         payload: { error: error.message, encryptUid, candidateName }
       });
+      return { accepted: false };
     }
   }
 
