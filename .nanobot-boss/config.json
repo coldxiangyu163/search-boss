@@ -1,7 +1,7 @@
 {
   "providers": {
     "custom": {
-      "apiKey": "sk-63JQfrn7h4tVOnSTylWAvUnQho9MnXnYhgFGxiRs1AphFSDw",
+      "apiKey": "your api key",
       "apiBase": "https://www.openclaudecode.cn/v1",
       "extraHeaders": {
         "User-Agent": "nanobot/0.1"

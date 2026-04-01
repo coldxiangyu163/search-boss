@@ -185,9 +185,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         state.view = 'admin-overview';
       }
       renderUserInfo();
+    } else {
+      window.location.href = '/login.html';
+      return;
     }
   } catch (_) {
-    // auth not configured, proceed without login
+    window.location.href = '/login.html';
+    return;
   }
   renderSidebarNav();
   bindEvents();

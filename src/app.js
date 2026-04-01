@@ -115,6 +115,19 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
     res.json({ status: 'ok' });
   });
 
+  // --- Require login for non-exempt API routes ---
+  if (pool) {
+    app.use('/api', (req, res, next) => {
+      if (req.path.startsWith('/auth/') || req.path.startsWith('/agent/')) {
+        return next();
+      }
+      if (!req.user) {
+        return res.status(401).json({ error: 'unauthorized' });
+      }
+      next();
+    });
+  }
+
   app.get('/api/dashboard/summary', async (req, res, next) => {
     try {
       const hrAccountId = req.user?.role === 'hr' ? req.user.hr_account_id : undefined;
