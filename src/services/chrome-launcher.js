@@ -132,6 +132,8 @@ class ChromeLauncher {
       args.push('--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage');
     }
 
+    args.push('https://www.zhipin.com/');
+
     try {
       this._process = spawn(this.chromePath, args, {
         stdio: 'ignore',
@@ -186,7 +188,7 @@ class ChromeLauncher {
       const targetId = blank?.id || pages[0]?.id;
       if (!targetId) {
         console.log('[chrome-launcher] No page target to navigate, creating new tab');
-        await fetch(`${this.cdpEndpoint}/json/new?${encodeURIComponent(bossUrl)}`);
+        await fetch(`${this.cdpEndpoint}/json/new?${bossUrl}`);
         console.log(`[chrome-launcher] Opened ${bossUrl} in new tab`);
         return;
       }
