@@ -1,11 +1,54 @@
 const { spawn, execFileSync } = require('node:child_process');
+const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+
+const LINUX_CHROME_CANDIDATES = [
+  '/usr/bin/google-chrome-stable',
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium-browser',
+  '/usr/bin/chromium',
+  '/snap/bin/chromium',
+  '/usr/lib/chromium/chromium',
+  '/usr/lib/chromium-browser/chromium-browser',
+  '/opt/google/chrome/chrome',
+  '/opt/google/chrome/google-chrome',
+];
+
+const LINUX_WHICH_NAMES = [
+  'google-chrome-stable',
+  'google-chrome',
+  'chromium-browser',
+  'chromium',
+];
+
+function detectLinuxChromePath() {
+  for (const candidate of LINUX_CHROME_CANDIDATES) {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      console.log(`[chrome-launcher] Detected Linux browser: ${candidate}`);
+      return candidate;
+    } catch {}
+  }
+
+  for (const name of LINUX_WHICH_NAMES) {
+    try {
+      const resolved = execFileSync('which', [name], { stdio: ['ignore', 'pipe', 'ignore'] })
+        .toString().trim();
+      if (resolved) {
+        console.log(`[chrome-launcher] Detected Linux browser via which: ${resolved}`);
+        return resolved;
+      }
+    } catch {}
+  }
+
+  console.warn('[chrome-launcher] No Chrome/Chromium found on Linux, falling back to "google-chrome"');
+  return 'google-chrome';
+}
 
 const DEFAULT_CHROME_PATHS = {
   darwin: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   win32: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  linux: '/usr/bin/google-chrome'
 };
 
 function needsVirtualDisplay() {
@@ -37,7 +80,8 @@ function findFreeDisplay(start = 99, end = 199) {
 class ChromeLauncher {
   constructor({ cdpEndpoint, chromePath, userDataDir, downloadDir } = {}) {
     this.cdpEndpoint = cdpEndpoint || 'http://127.0.0.1:9222';
-    this.chromePath = chromePath || DEFAULT_CHROME_PATHS[os.platform()] || 'google-chrome';
+    this.chromePath = chromePath || DEFAULT_CHROME_PATHS[os.platform()]
+      || (os.platform() === 'linux' ? detectLinuxChromePath() : 'google-chrome');
     this.userDataDir = userDataDir || path.join(os.homedir(), '.chrome-boss-profile');
     this.downloadDir = downloadDir || path.join(os.homedir(), '.chrome-boss-downloads');
     this._process = null;
@@ -233,4 +277,4 @@ class ChromeLauncher {
   }
 }
 
-module.exports = { ChromeLauncher, needsVirtualDisplay, isXvfbInstalled, findFreeDisplay };
+module.exports = { ChromeLauncher, needsVirtualDisplay, isXvfbInstalled, findFreeDisplay, detectLinuxChromePath };
