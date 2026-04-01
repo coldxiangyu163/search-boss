@@ -1394,7 +1394,7 @@ function renderSysAdminBossAndBrowser(bossAccounts, browserInstances, hrOptions,
         <h3 id="bi-modal-title">新增浏览器实例</h3>
         <form onsubmit="return submitBrowserInstance(event)">
           <input type="hidden" id="bi-edit-id" value="">
-          <div class="form-group"><label>关联BOSS账号</label><select id="bi-ba" required><option value="">请选择</option>${baOptions}</select></div>
+          <div class="form-group"><label>关联BOSS账号</label><select id="bi-ba" required onchange="onBiAccountChange(this)">${baOptions.length ? '<option value="">请选择</option>' + baOptions : '<option value="">无可用账号</option>'}</select></div>
           <div class="form-group"><label>实例名称</label><input type="text" id="bi-name" placeholder="如：Chrome-HR1"></div>
           <div class="form-group"><label>CDP 端点</label><input type="text" id="bi-cdp" required placeholder="http://127.0.0.1:9222"></div>
           <div class="form-group"><label>用户数据目录</label><input type="text" id="bi-userdata" required placeholder="/path/to/chrome-profile"></div>
@@ -1484,11 +1484,13 @@ function showModal(id) {
     document.getElementById('bi-edit-id').value = '';
     document.getElementById('bi-ba').value = '';
     document.getElementById('bi-ba').disabled = false;
+    const usedPorts = (state.adminBrowserInstances || []).map((b) => b.debug_port || 0);
+    const nextPort = Math.max(9222, ...usedPorts) + 1;
     document.getElementById('bi-name').value = '';
-    document.getElementById('bi-cdp').value = '';
-    document.getElementById('bi-userdata').value = '';
-    document.getElementById('bi-download').value = '';
-    document.getElementById('bi-port').value = '';
+    document.getElementById('bi-cdp').value = 'http://127.0.0.1:' + nextPort;
+    document.getElementById('bi-userdata').value = '~/.chrome-boss-profiles/<账号>';
+    document.getElementById('bi-download').value = '~/.chrome-boss-downloads/<账号>';
+    document.getElementById('bi-port').value = nextPort;
     document.getElementById('bi-host').value = 'localhost';
     document.getElementById('bi-status-group').style.display = 'none';
   }
@@ -1695,6 +1697,19 @@ async function deleteBossAccount(id) {
     await fetchJson('/api/admin/boss-accounts/' + id, { method: 'DELETE' });
     await loadData();
   } catch (err) { alert(err.message); }
+}
+
+function onBiAccountChange(sel) {
+  if (document.getElementById('bi-edit-id').value) return;
+  const baId = sel.value;
+  const ba = (state.adminBossAccounts || []).find((b) => String(b.id) === String(baId));
+  if (!ba) return;
+  const label = ba.display_name || ba.boss_login_name || '';
+  const key = (ba.boss_login_name || '').replace(/^boss_/, '') || 'account' + ba.id;
+  const port = document.getElementById('bi-port').value || '9222';
+  document.getElementById('bi-name').value = 'Chrome-' + label.replace(/BOSS$/, '').trim();
+  document.getElementById('bi-userdata').value = '~/.chrome-boss-profiles/' + key;
+  document.getElementById('bi-download').value = '~/.chrome-boss-downloads/' + key;
 }
 
 async function submitBrowserInstance(e) {
