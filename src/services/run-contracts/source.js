@@ -9,6 +9,17 @@ function buildCustomRequirementPrompt(customRequirement) {
   ].join('\n');
 }
 
+function buildEnterpriseKnowledgePrompt(enterpriseKnowledge) {
+  if (!enterpriseKnowledge) {
+    return '';
+  }
+
+  return [
+    '以下是企业知识库信息，当候选人询问公司相关问题（如公司介绍、福利待遇、工作环境、上班时间等）时，请参考该信息进行回答，不要编造未提供的内容。',
+    `企业知识库：${enterpriseKnowledge}`
+  ].join('\n');
+}
+
 function buildSourceRecoveryPrompt({ jobName, bossEncryptJobId }) {
   const normalizedJobName = String(jobName || '').trim();
   const recommendUrl = bossEncryptJobId
@@ -51,6 +62,7 @@ function buildTerminalFailPrompt() {
 
 module.exports = {
   buildCustomRequirementPrompt,
+  buildEnterpriseKnowledgePrompt,
   buildSourceRecoveryPrompt,
   buildSourceWriteContractPrompt,
   buildSourceQuotaPrompt,

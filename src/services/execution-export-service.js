@@ -18,6 +18,7 @@ async function exportExecutionData({
           source,
           jd_text,
           custom_requirement,
+          enterprise_knowledge,
           sync_metadata,
           last_synced_at,
           created_at,

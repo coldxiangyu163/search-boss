@@ -450,6 +450,7 @@ class FollowupLoopService {
       jobContext.city ? `工作地点：${jobContext.city}` : '',
       jobContext.salary ? `薪资范围：${jobContext.salary}` : '',
       jobContext.jdText ? `岗位说明：${String(jobContext.jdText).slice(0, 200)}` : '',
+      jobContext.enterpriseKnowledge ? `## 企业知识库\n${jobContext.enterpriseKnowledge}` : '',
       `## 候选人：${candidateName}`,
       '',
       '## 最近对话',

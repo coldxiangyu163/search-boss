@@ -52,7 +52,8 @@ const state = {
     isExpanded: true,
     pollTimer: null,
     lastEventId: 0,
-    taskType: 'sync_jobs'
+    taskType: 'sync_jobs',
+    showLiveView: false
   },
   jobDetailModal: {
     open: false,
@@ -61,7 +62,9 @@ const state = {
     error: '',
     item: null,
     saving: false,
-    savingError: ''
+    savingError: '',
+    savingKnowledge: false,
+    savingKnowledgeError: ''
   },
   candidateDetailDrawer: {
     open: false,
@@ -371,7 +374,9 @@ async function openJobDetailModal(jobKey) {
     error: '',
     item: null,
     saving: false,
-    savingError: ''
+    savingError: '',
+    savingKnowledge: false,
+    savingKnowledgeError: ''
   };
   render();
 
@@ -403,7 +408,9 @@ function closeJobDetailModal() {
     error: '',
     item: null,
     saving: false,
-    savingError: ''
+    savingError: '',
+    savingKnowledge: false,
+    savingKnowledgeError: ''
   };
   render();
 }
@@ -446,6 +453,48 @@ async function saveJobCustomRequirement() {
     state.jobDetailModal.savingError = error.message;
   } finally {
     state.jobDetailModal.saving = false;
+    render();
+  }
+}
+
+async function saveJobEnterpriseKnowledge() {
+  if (!state.jobDetailModal.item || state.jobDetailModal.savingKnowledge) {
+    return;
+  }
+
+  const textarea = document.getElementById('job-enterprise-knowledge-input');
+  if (!textarea) {
+    return;
+  }
+
+  state.jobDetailModal.savingKnowledge = true;
+  state.jobDetailModal.savingKnowledgeError = '';
+  render();
+
+  try {
+    const result = await fetchJson(
+      `/api/jobs/${encodeURIComponent(state.jobDetailModal.jobKey)}/enterprise-knowledge`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          enterpriseKnowledge: textarea.value
+        })
+      }
+    );
+
+    state.jobDetailModal.item = result.item;
+    state.jobs = state.jobs.map((job) => (
+      job.job_key === result.item.job_key
+        ? { ...job, enterprise_knowledge: result.item.enterprise_knowledge }
+        : job
+    ));
+  } catch (error) {
+    state.jobDetailModal.savingKnowledgeError = error.message;
+  } finally {
+    state.jobDetailModal.savingKnowledge = false;
     render();
   }
 }
@@ -576,6 +625,8 @@ function render() {
 
   const app = document.getElementById('app');
 
+  manageSyncLiveOverlay();
+
   if (!state.summary) {
     app.innerHTML = '<div class="card">加载中...</div>';
     return;
@@ -626,6 +677,7 @@ function render() {
 
 function openSyncModal(taskType = 'sync_jobs') {
   stopSyncPolling();
+  const showLiveView = taskType === 'source' || taskType === 'followup';
   state.syncModal = {
     open: true,
     runId: null,
@@ -637,13 +689,47 @@ function openSyncModal(taskType = 'sync_jobs') {
     isExpanded: true,
     pollTimer: null,
     lastEventId: 0,
-    taskType
+    taskType,
+    showLiveView
   };
+
+  if (showLiveView) {
+    liveView.open = true;
+    liveView.instanceId = null;
+    liveView.error = '';
+    liveView.pageUrl = '';
+    liveView.pageTitle = '';
+    liveView.viewportWidth = 0;
+    liveView.viewportHeight = 0;
+    liveView.useHrEndpoint = true;
+    startLiveViewPolling();
+  }
 }
 
 function closeSyncModal() {
   stopSyncPolling();
+  const hadLiveView = state.syncModal.showLiveView;
   state.syncModal.open = false;
+
+  if (hadLiveView) {
+    stopLiveViewPolling();
+    if (liveView.boostTimer) {
+      clearTimeout(liveView.boostTimer);
+      liveView.boostTimer = null;
+    }
+    liveView.open = false;
+    liveView.viewportWidth = 0;
+    liveView.viewportHeight = 0;
+    const overlay = document.getElementById('sync-live-overlay');
+    if (overlay) {
+      const img = overlay.querySelector('#live-view-img');
+      if (img && img.src && img.src.startsWith('blob:')) {
+        URL.revokeObjectURL(img.src);
+      }
+      overlay.remove();
+    }
+  }
+
   render();
 }
 
@@ -658,7 +744,7 @@ function appendSyncEvent(event) {
 }
 
 function getSyncLogScrollSnapshot() {
-  const logList = document.querySelector('.sync-log-list');
+  const logList = document.querySelector('#app .sync-log-list');
   if (!logList) {
     return null;
   }
@@ -671,7 +757,7 @@ function getSyncLogScrollSnapshot() {
 }
 
 function restoreSyncLogScroll(previousSnapshot) {
-  const logList = document.querySelector('.sync-log-list');
+  const logList = document.querySelector('#app .sync-log-list');
   if (!logList) {
     return;
   }
@@ -3231,6 +3317,28 @@ function renderJobDetailModal() {
             <section class="job-detail-section">
               <div class="card-header">
                 <div>
+                  <p class="eyebrow">企业信息参考</p>
+                  <h4 class="card-title job-detail-section-title">企业知识库</h4>
+                </div>
+                <button
+                  class="button-secondary"
+                  onclick="saveJobEnterpriseKnowledge()"
+                  ${state.jobDetailModal.savingKnowledge ? 'disabled' : ''}
+                >
+                  ${state.jobDetailModal.savingKnowledge ? '保存中...' : '保存知识库'}
+                </button>
+              </div>
+              <p class="card-subtitle job-detail-tip">企业相关信息（如公司介绍、福利政策、工作环境等），大模型回答候选人问题时会作为参考依据。</p>
+              ${state.jobDetailModal.savingKnowledgeError ? `<div class="inline-status inline-status-error">${escapeHtml(state.jobDetailModal.savingKnowledgeError)}</div>` : ''}
+              <textarea
+                id="job-enterprise-knowledge-input"
+                class="job-detail-textarea"
+                placeholder="例如：公司成立于2014年，是国内领先的AI科技公司；五险一金、带薪年假15天；办公地点在重庆江北区；双休、弹性工作制。"
+              >${escapeHtml(item.enterprise_knowledge || '')}</textarea>
+            </section>
+            <section class="job-detail-section">
+              <div class="card-header">
+                <div>
                   <p class="eyebrow">职位描述</p>
                   <h4 class="card-title job-detail-section-title">JD / 职位说明</h4>
                 </div>
@@ -3299,6 +3407,10 @@ function escapeHtml(value) {
 
 function renderSyncModal() {
   if (!state.syncModal.open) {
+    return '';
+  }
+
+  if (state.syncModal.showLiveView) {
     return '';
   }
 
@@ -3372,4 +3484,163 @@ function buildSyncStages() {
     error: state.syncModal.error,
     progress: state.syncModal.progress
   });
+}
+
+function getSyncStatusLabel() {
+  const statusMap = {
+    starting: '准备启动',
+    running: '执行中',
+    completed: '执行完成',
+    failed: '执行失败',
+    idle: '待开始'
+  };
+  return statusMap[state.syncModal.status] || '处理中';
+}
+
+function manageSyncLiveOverlay() {
+  if (!state.syncModal.open || !state.syncModal.showLiveView) {
+    const overlay = document.getElementById('sync-live-overlay');
+    if (overlay) overlay.remove();
+    return;
+  }
+
+  const overlay = document.getElementById('sync-live-overlay');
+  if (!overlay) {
+    createSyncLiveOverlay();
+  } else {
+    updateSyncLiveOverlayContent();
+  }
+}
+
+function createSyncLiveOverlay() {
+  const taskMeta = getTaskMeta(state.syncModal.taskType);
+
+  const overlay = document.createElement('div');
+  overlay.id = 'sync-live-overlay';
+  overlay.className = 'modal-overlay';
+  overlay.style.display = 'flex';
+  overlay.onclick = (e) => { if (e.target === overlay) closeSyncModal(); };
+
+  overlay.innerHTML = `
+    <div class="sync-live-container" onclick="event.stopPropagation()">
+      <div class="sync-live-browser">
+        <div class="sync-live-browser-header">
+          <div>
+            <p class="eyebrow">浏览器实时画面</p>
+            <h3 class="card-title">BOSS 直聘操作画面</h3>
+            <div id="live-view-status" class="live-view-status">
+              <span class="live-view-info">连接中...</span>
+            </div>
+          </div>
+          <span class="live-view-dot"></span>
+        </div>
+        <div class="sync-live-browser-body">
+          <div class="live-view-img-wrapper">
+            <img id="live-view-img" class="live-view-img" alt="浏览器画面加载中..." style="cursor:crosshair" />
+            <div id="live-view-click-indicator" class="live-view-click-indicator"></div>
+          </div>
+        </div>
+        <div class="sync-live-browser-footer">
+          <span class="live-view-hint">点击画面可操作远程浏览器</span>
+        </div>
+      </div>
+      <div class="sync-live-logs">
+        <div class="sync-live-logs-header">
+          <div class="card-header">
+            <div>
+              <p class="eyebrow">${taskMeta.eyebrow}</p>
+              <h3 class="card-title">小聘AGENT 执行过程</h3>
+              <p class="card-subtitle" id="sync-live-subtitle">任务 ${state.syncModal.runId || '-'} · ${getSyncStatusLabel()}</p>
+            </div>
+            <button class="button-secondary" onclick="closeSyncModal()">关闭</button>
+          </div>
+        </div>
+        <div class="sync-live-logs-body" id="sync-live-logs-body">
+          ${renderSyncLiveLogsContent()}
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  const img = document.getElementById('live-view-img');
+  if (img) {
+    img.addEventListener('click', handleLiveViewClick);
+  }
+}
+
+function updateSyncLiveOverlayContent() {
+  const subtitle = document.getElementById('sync-live-subtitle');
+  if (subtitle) {
+    subtitle.textContent = '任务 ' + (state.syncModal.runId || '-') + ' · ' + getSyncStatusLabel();
+  }
+
+  const logsBody = document.getElementById('sync-live-logs-body');
+  if (!logsBody) return;
+
+  const logList = logsBody.querySelector('.sync-log-list');
+  let scrollSnapshot = null;
+  if (logList) {
+    scrollSnapshot = captureSyncLogScrollSnapshot({
+      scrollTop: logList.scrollTop,
+      clientHeight: logList.clientHeight,
+      scrollHeight: logList.scrollHeight
+    });
+  }
+
+  logsBody.innerHTML = renderSyncLiveLogsContent();
+
+  const newLogList = logsBody.querySelector('.sync-log-list');
+  if (newLogList) {
+    newLogList.scrollTop = resolveSyncLogScrollTop({
+      previousSnapshot: scrollSnapshot,
+      nextClientHeight: newLogList.clientHeight,
+      nextScrollHeight: newLogList.scrollHeight
+    });
+  }
+}
+
+function renderSyncLiveLogsContent() {
+  const taskMeta = getTaskMeta(state.syncModal.taskType);
+
+  return `
+    <div class="sync-summary-grid">
+      <div class="status-box">
+        <span class="muted">开始时间</span>
+        <strong>${formatDateTime(state.syncModal.startedAt)}</strong>
+      </div>
+      <div class="status-box">
+        <span class="muted">当前状态</span>
+        <strong>${getSyncStatusLabel()}</strong>
+      </div>
+    </div>
+    ${state.syncModal.error ? '<div class="inline-status inline-status-error">' + state.syncModal.error + '</div>' : ''}
+    <div class="sync-timeline">
+      ${buildSyncStages().map((item) => `
+        <div class="sync-timeline-item ${item.active ? 'is-active' : ''} ${item.done ? 'is-done' : ''}">
+          <div class="sync-timeline-dot"></div>
+          <div>
+            <div class="list-title">${item.label}</div>
+            <div class="list-desc">${item.desc}</div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="sync-log-panel">
+      <button class="sync-log-toggle" onclick="toggleSyncLogPanel()">
+        ${state.syncModal.isExpanded ? '收起详细日志' : '展开详细日志'}
+      </button>
+      ${state.syncModal.isExpanded ? `
+        <div class="sync-log-list">
+          ${(state.syncModal.events.length ? state.syncModal.events : [{ message: taskMeta.emptyLogMessage, occurredAt: state.syncModal.startedAt }]).map((event) => `
+            <div class="sync-log-item">
+              <span class="sync-log-time">${formatDateTime(event.occurredAt)}</span>
+              <span>${event.message || event.eventType}</span>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
+    </div>
+  `;
 }

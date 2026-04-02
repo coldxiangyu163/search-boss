@@ -65,6 +65,7 @@ class SourceLoopService {
     const jobContext = await this.agentService._getJobNanobotContext(jobKey);
     const jobRequirement = buildJobRequirementText(jobContext);
     const customRequirement = jobContext.customRequirement || null;
+    const enterpriseKnowledge = jobContext.enterpriseKnowledge || null;
 
     await this.#recordEvent(runId, {
       eventId: `source-loop-start:${runId}`,
@@ -201,6 +202,7 @@ class SourceLoopService {
         jobKey,
         jobRequirement,
         customRequirement,
+        enterpriseKnowledge,
         candidate,
         stats,
         runner
@@ -247,7 +249,7 @@ class SourceLoopService {
     return { ok: true, stats: summary };
   }
 
-  async #processCandidate({ runId, jobKey, jobRequirement, customRequirement, candidate, stats, runner }) {
+  async #processCandidate({ runId, jobKey, jobRequirement, customRequirement, enterpriseKnowledge, candidate, stats, runner }) {
     const bossEncryptGeekId = candidate.geekId;
     const candidateText = candidate.text || '';
     const parsed = parseCardText(candidateText);
@@ -308,7 +310,8 @@ class SourceLoopService {
       decision = await this.llmEvaluator.evaluateCandidate({
         jobRequirement,
         candidateDetail: { name: candidateName, detailText: candidateText },
-        customRequirement
+        customRequirement,
+        enterpriseKnowledge
       });
     } catch (error) {
       stats.errors += 1;
@@ -532,6 +535,9 @@ function buildJobRequirementText(jobContext) {
   }
   if (jobContext.customRequirement) {
     parts.push(`特殊要求：${jobContext.customRequirement}`);
+  }
+  if (jobContext.enterpriseKnowledge) {
+    parts.push(`企业知识库：${jobContext.enterpriseKnowledge}`);
   }
 
   return parts.join('\n') || '(无岗位信息)';

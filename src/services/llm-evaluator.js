@@ -15,7 +15,7 @@ class LlmEvaluator {
     this.requestImpl = requestImpl;
   }
 
-  async evaluateCandidate({ jobRequirement, candidateDetail, customRequirement }) {
+  async evaluateCandidate({ jobRequirement, candidateDetail, customRequirement, enterpriseKnowledge }) {
     const systemPrompt = [
       '你是一个招聘专家，负责判断候选人与岗位的匹配度。',
       '只输出纯 JSON，不要添加任何解释文字。'
@@ -24,7 +24,8 @@ class LlmEvaluator {
     const userPrompt = buildCandidateEvalPrompt({
       jobRequirement,
       candidateDetail,
-      customRequirement
+      customRequirement,
+      enterpriseKnowledge
     });
 
     const raw = await this.chat({ systemPrompt, userPrompt });
@@ -69,7 +70,7 @@ class LlmEvaluator {
   }
 }
 
-function buildCandidateEvalPrompt({ jobRequirement, candidateDetail, customRequirement }) {
+function buildCandidateEvalPrompt({ jobRequirement, candidateDetail, customRequirement, enterpriseKnowledge }) {
   const lines = [
     '## 岗位信息',
     jobRequirement || '(无详细岗位信息)',
@@ -78,6 +79,10 @@ function buildCandidateEvalPrompt({ jobRequirement, candidateDetail, customRequi
 
   if (customRequirement) {
     lines.push('## 岗位定制要求', customRequirement, '');
+  }
+
+  if (enterpriseKnowledge) {
+    lines.push('## 企业知识库', enterpriseKnowledge, '');
   }
 
   lines.push(

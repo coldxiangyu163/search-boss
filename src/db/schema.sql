@@ -9,6 +9,7 @@ create table if not exists jobs (
   source text not null default 'boss',
   jd_text text,
   custom_requirement text,
+  enterprise_knowledge text,
   sync_metadata jsonb not null default '{}'::jsonb,
   last_synced_at timestamptz,
   created_at timestamptz not null default now(),

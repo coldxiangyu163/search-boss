@@ -24,6 +24,7 @@ class JobService {
         j.salary,
         j.status,
           coalesce(j.custom_requirement, null) as custom_requirement,
+          coalesce(j.enterprise_knowledge, null) as enterprise_knowledge,
         j.last_synced_at,
         count(jc.id)::int as candidate_count,
         count(*) filter (where jc.lifecycle_status = 'greeted')::int as greeted_count,
@@ -54,6 +55,7 @@ class JobService {
           j.status,
           j.jd_text,
           coalesce(j.custom_requirement, null) as custom_requirement,
+          coalesce(j.enterprise_knowledge, null) as enterprise_knowledge,
           j.sync_metadata,
           j.last_synced_at,
           count(jc.id)::int as candidate_count,
@@ -171,10 +173,39 @@ class JobService {
           status,
           jd_text,
           custom_requirement,
+          enterprise_knowledge,
           sync_metadata,
           last_synced_at
       `,
       [jobKey, normalizedRequirement]
+    );
+
+    return result.rows[0] || null;
+  }
+
+  async updateJobEnterpriseKnowledge(jobKey, enterpriseKnowledge) {
+    const normalized = normalizeCustomRequirement(enterpriseKnowledge);
+    const result = await this.pool.query(
+      `
+        update jobs
+        set enterprise_knowledge = $2,
+            updated_at = now()
+        where job_key = $1
+        returning
+          id,
+          job_key,
+          boss_encrypt_job_id,
+          job_name,
+          city,
+          salary,
+          status,
+          jd_text,
+          custom_requirement,
+          enterprise_knowledge,
+          sync_metadata,
+          last_synced_at
+      `,
+      [jobKey, normalized]
     );
 
     return result.rows[0] || null;

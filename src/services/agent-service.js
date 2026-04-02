@@ -1286,7 +1286,8 @@ class AgentService {
       jobKey,
       mode
     });
-    const jobContext = mode === 'source' ? await this._getJobNanobotContext(jobKey) : {};
+    const needsJobContext = mode === 'source' || mode === 'followup' || mode === 'chat';
+    const jobContext = needsJobContext ? await this._getJobNanobotContext(jobKey) : {};
     const message = buildSchedulePrompt({
       mode,
       runId,
@@ -1367,7 +1368,8 @@ class AgentService {
           city,
           salary,
           jd_text,
-          custom_requirement
+          custom_requirement,
+          enterprise_knowledge
         from jobs
         where job_key = $1
         limit 1
@@ -1386,7 +1388,8 @@ class AgentService {
       city: row.city || '',
       salary: row.salary || '',
       jdText: row.jd_text || '',
-      customRequirement: normalizeJobRequirement(row.custom_requirement)
+      customRequirement: normalizeJobRequirement(row.custom_requirement),
+      enterpriseKnowledge: normalizeJobRequirement(row.enterprise_knowledge)
     };
   }
 

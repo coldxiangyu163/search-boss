@@ -11,7 +11,8 @@ class RunOrchestrator {
     }
 
     const deterministicContextPrompt = await this.agentService._buildDeterministicContextPrompt({ runId, jobKey, mode });
-    const jobContext = mode === 'source'
+    const needsJobContext = mode === 'source' || mode === 'followup' || mode === 'chat';
+    const jobContext = needsJobContext
       ? await this.agentService._getJobNanobotContext(jobKey)
       : {};
     const message = buildSchedulePrompt({
