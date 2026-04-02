@@ -1399,3 +1399,52 @@ input[type="time"]:focus {
     max-height: 40vh;
   }
 }
+
+.recommend-filters-panel {
+  padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.recommend-filter-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.recommend-filter-label {
+  flex-shrink: 0;
+  width: 140px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary, #555);
+  padding-top: 5px;
+  text-align: right;
+}
+.recommend-filter-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1;
+}
+.recommend-filter-chip {
+  display: inline-block;
+  padding: 4px 12px;
+  font-size: 12px;
+  border: 1px solid var(--border, #e0e0e0);
+  border-radius: 16px;
+  background: var(--bg-surface, #fff);
+  color: var(--text-secondary, #555);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.recommend-filter-chip:hover {
+  border-color: var(--accent, #00bebd);
+  color: var(--accent, #00bebd);
+}
+.recommend-filter-chip.is-active {
+  background: var(--accent, #00bebd);
+  border-color: var(--accent, #00bebd);
+  color: #fff;
+  font-weight: 500;
+}

@@ -1369,7 +1369,8 @@ class AgentService {
           salary,
           jd_text,
           custom_requirement,
-          enterprise_knowledge
+          enterprise_knowledge,
+          recommend_filters
         from jobs
         where job_key = $1
         limit 1
@@ -1389,7 +1390,8 @@ class AgentService {
       salary: row.salary || '',
       jdText: row.jd_text || '',
       customRequirement: normalizeJobRequirement(row.custom_requirement),
-      enterpriseKnowledge: normalizeJobRequirement(row.enterprise_knowledge)
+      enterpriseKnowledge: normalizeJobRequirement(row.enterprise_knowledge),
+      recommendFilters: row.recommend_filters || null
     };
   }
 

@@ -166,6 +166,9 @@ create table if not exists scheduled_jobs (
 alter table scheduled_jobs
   add column if not exists payload jsonb not null default '{}'::jsonb;
 
+alter table jobs
+  add column if not exists recommend_filters jsonb;
+
 create table if not exists scheduled_job_runs (
   id bigserial primary key,
   scheduled_job_id bigint not null references scheduled_jobs(id) on delete cascade,

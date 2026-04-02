@@ -176,6 +176,34 @@ class SourceLoopService {
       }
     }
 
+    // Phase 2c2: Apply saved recommend filters if configured
+    if (jobContext.recommendFilters) {
+      try {
+        const filterResult = await runner.applyRecommendFilters({
+          runId,
+          filters: jobContext.recommendFilters
+        });
+        if (filterResult?.applied) {
+          await this.#recordEvent(runId, {
+            eventId: `source-loop-filters-applied:${runId}`,
+            eventType: 'recommend_filters_applied',
+            stage: 'source_loop',
+            message: `recommend filters applied: ${(filterResult.filters || []).map((f) => f.label + '=' + f.value).join(', ')}`,
+            payload: { filters: filterResult.filters }
+          });
+        }
+      } catch (error) {
+        // Non-fatal: proceed without filters
+        await this.#recordEvent(runId, {
+          eventId: `source-loop-filters-error:${runId}`,
+          eventType: 'source_loop_warning',
+          stage: 'source_loop',
+          message: `recommend filters apply failed: ${error.message}`,
+          payload: { error: error.message }
+        });
+      }
+    }
+
     // Phase 2d: Install canvas fillText capture for resume reading
     try {
       await runner.setupResumeCanvasCapture({ runId });

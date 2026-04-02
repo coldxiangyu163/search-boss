@@ -852,6 +852,21 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
     };
   }
 
+  if (options.command === 'recommend-apply-filters') {
+    const session = await sessionStore.loadSession(options.runId);
+    if (!options.filters) {
+      throw new Error('Missing value for --filters');
+    }
+    const filters = JSON.parse(options.filters);
+    const result = await browserCommands.applyRecommendFilters({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      filters
+    });
+    return { ok: true, ...result };
+  }
+
   throw new Error(`Unknown command: ${options.command}${options.subcommand ? ` ${options.subcommand}` : ''}`);
 }
 

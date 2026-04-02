@@ -3000,6 +3000,154 @@ async function scrollAndReadResumeDetail({
   return { ok: true, mode: 'canvas', fullText, segments: segments.length, textLength: fullText.length };
 }
 
+async function applyRecommendFilters({
+  cdpClient,
+  targetId,
+  urlPrefix,
+  filters = {}
+} = {}) {
+  const hasNonDefaultFilter = Object.entries(filters).some(([key, val]) => {
+    if (key === 'ageMin') return val && Number(val) > 16;
+    if (key === 'ageMax') return val && Number(val) < 99;
+    return val && val !== '';
+  });
+
+  if (!hasNonDefaultFilter) {
+    return { ok: true, applied: false, reason: 'all_defaults' };
+  }
+
+  // Step 1: Open the filter panel by clicking .filter-label
+  const openResult = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: `(() => {
+      try {
+        const recFrame = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+        const recDoc = recFrame?.contentDocument;
+        if (!recFrame || !recDoc) return JSON.stringify({ ok: false, reason: 'frame_unavailable' });
+        const label = recDoc.querySelector('.filter-label');
+        if (!label || label.offsetWidth === 0) return JSON.stringify({ ok: false, reason: 'filter_label_not_found' });
+        const frameRect = recFrame.getBoundingClientRect();
+        const lblRect = label.getBoundingClientRect();
+        return JSON.stringify({ ok: true, x: frameRect.left + lblRect.left + lblRect.width / 2, y: frameRect.top + lblRect.top + lblRect.height / 2 });
+      } catch (err) { return JSON.stringify({ ok: false, reason: err.message }); }
+    })()`
+  });
+
+  if (!openResult?.ok) {
+    throw new Error(openResult?.reason || 'recommend_filter_panel_open_failed');
+  }
+
+  await cdpClient.dispatchMouseClick({ targetId, urlPrefix, x: openResult.x, y: openResult.y });
+  await randomDelay(800, 1200);
+
+  // Verify filter panel is now expanded (has .filter-item rows)
+  const panelCheck = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: `(() => {
+      const recFrame = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+      const recDoc = recFrame?.contentDocument;
+      const items = recDoc?.querySelectorAll('.filter-item');
+      return JSON.stringify({ ok: true, itemCount: items ? items.length : 0 });
+    })()`
+  });
+
+  if (!panelCheck?.itemCount) {
+    throw new Error('recommend_filter_panel_not_expanded');
+  }
+
+  // Step 2: Click each configured filter option via .filter-item .option matching
+  const applied = [];
+  const filterMap = {
+    school: '院校',
+    activity: '活跃度',
+    notViewed: '近期没有看过',
+    notExchanged: '是否与同事交换简历',
+    gender: '性别',
+    jobHopFrequency: '跳槽频率',
+    degree: '学历要求',
+    experience: '经验要求',
+    jobIntent: '求职意向',
+    salary: '薪资待遇'
+  };
+
+  for (const [filterKey, filterLabel] of Object.entries(filterMap)) {
+    const filterValue = filters[filterKey];
+    if (!filterValue || filterValue === '' || filterValue === '不限') continue;
+
+    const clickResult = await evaluateJson({
+      cdpClient,
+      targetId,
+      urlPrefix,
+      expression: buildClickFilterItemOptionExpr(filterLabel, filterValue)
+    });
+
+    if (clickResult?.ok && clickResult?.found) {
+      await cdpClient.dispatchMouseClick({ targetId, urlPrefix, x: clickResult.x, y: clickResult.y });
+      applied.push({ key: filterKey, label: filterLabel, value: filterValue });
+      await randomDelay(1200, 2500);
+    }
+  }
+
+  // Step 3: Click "确定" button (.btn with text 确定 inside filter panel)
+  const confirmResult = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: `(() => {
+      try {
+        const recFrame = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+        const recDoc = recFrame?.contentDocument;
+        if (!recFrame || !recDoc) return JSON.stringify({ ok: false, reason: 'frame_unavailable' });
+        const panel = recDoc.querySelector('.fl.recommend-filter.op-filter') || recDoc.querySelector('.recommend-filter');
+        if (!panel) return JSON.stringify({ ok: false, found: false, reason: 'panel_gone' });
+        const btns = Array.from(panel.querySelectorAll('.btn'));
+        const confirm = btns.find(b => (b.textContent || '').trim() === '确定' && b.offsetWidth > 0);
+        if (!confirm) return JSON.stringify({ ok: false, found: false, reason: 'confirm_btn_not_found' });
+        const frameRect = recFrame.getBoundingClientRect();
+        const btnRect = confirm.getBoundingClientRect();
+        return JSON.stringify({ ok: true, found: true, x: frameRect.left + btnRect.left + btnRect.width / 2, y: frameRect.top + btnRect.top + btnRect.height / 2 });
+      } catch (err) { return JSON.stringify({ ok: false, reason: err.message }); }
+    })()`
+  });
+
+  if (confirmResult?.ok && confirmResult?.found) {
+    await cdpClient.dispatchMouseClick({ targetId, urlPrefix, x: confirmResult.x, y: confirmResult.y });
+    // Wait for candidate list to refresh after filter apply
+    await randomDelay(2500, 4000);
+  }
+
+  return { ok: true, applied: true, filters: applied };
+}
+
+function buildClickFilterItemOptionExpr(filterLabel, optionText) {
+  const safeLabel = JSON.stringify(filterLabel);
+  const safeOption = JSON.stringify(optionText.replace(/\s+/g, ''));
+  return `(() => {
+    try {
+      const recFrame = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+      const recDoc = recFrame?.contentDocument;
+      if (!recFrame || !recDoc) return JSON.stringify({ ok: false, reason: 'frame_unavailable' });
+      const rows = Array.from(recDoc.querySelectorAll('.filter-item'));
+      const row = rows.find(r => {
+        const nameEl = r.querySelector('.name');
+        if (!nameEl) return false;
+        return (nameEl.textContent || '').trim().includes(${safeLabel});
+      });
+      if (!row) return JSON.stringify({ ok: false, found: false, reason: 'row_not_found:' + ${safeLabel} });
+      const options = Array.from(row.querySelectorAll('.option'));
+      const target = options.find(o => (o.textContent || '').replace(/\\s+/g, '').trim() === ${safeOption} && o.offsetWidth > 0);
+      if (!target) return JSON.stringify({ ok: false, found: false, reason: 'option_not_found:' + ${safeOption} });
+      const frameRect = recFrame.getBoundingClientRect();
+      const optRect = target.getBoundingClientRect();
+      return JSON.stringify({ ok: true, found: true, x: frameRect.left + optRect.left + optRect.width / 2, y: frameRect.top + optRect.top + optRect.height / 2 });
+    } catch (err) { return JSON.stringify({ ok: false, reason: err.message }); }
+  })()`;
+}
+
 module.exports = {
   getUrl,
   evaluateJson,
@@ -3042,4 +3190,5 @@ module.exports = {
   setupResumeCanvasCapture,
   resetResumeCanvasCapture,
   scrollAndReadResumeDetail,
+  applyRecommendFilters,
 };

@@ -403,6 +403,16 @@ class BossCliRunner {
     ]);
   }
 
+  async applyRecommendFilters({ runId, filters }) {
+    return this.#run([
+      'recommend-apply-filters',
+      '--run-id',
+      String(runId),
+      '--filters',
+      JSON.stringify(filters)
+    ]);
+  }
+
   async #run(argv) {
     const result = await this.executeCliImpl(argv, {
       env: this.env,

@@ -65,7 +65,11 @@ const state = {
     saving: false,
     savingError: '',
     savingKnowledge: false,
-    savingKnowledgeError: ''
+    savingKnowledgeError: '',
+    savingFilters: false,
+    savingFiltersError: '',
+    filtersExpanded: false,
+    pendingFilters: null
   },
   candidateDetailDrawer: {
     open: false,
@@ -377,7 +381,11 @@ async function openJobDetailModal(jobKey) {
     saving: false,
     savingError: '',
     savingKnowledge: false,
-    savingKnowledgeError: ''
+    savingKnowledgeError: '',
+    savingFilters: false,
+    savingFiltersError: '',
+    filtersExpanded: false,
+    pendingFilters: null
   };
   render();
 
@@ -411,7 +419,11 @@ function closeJobDetailModal() {
     saving: false,
     savingError: '',
     savingKnowledge: false,
-    savingKnowledgeError: ''
+    savingKnowledgeError: '',
+    savingFilters: false,
+    savingFiltersError: '',
+    filtersExpanded: false,
+    pendingFilters: null
   };
   render();
 }
@@ -497,6 +509,233 @@ async function saveJobEnterpriseKnowledge() {
   } finally {
     state.jobDetailModal.savingKnowledge = false;
     render();
+  }
+}
+
+function toggleRecommendFilters() {
+  state.jobDetailModal.filtersExpanded = !state.jobDetailModal.filtersExpanded;
+  if (state.jobDetailModal.filtersExpanded && !state.jobDetailModal.pendingFilters) {
+    const saved = state.jobDetailModal.item?.recommend_filters || {};
+    state.jobDetailModal.pendingFilters = { ...getDefaultRecommendFilters(), ...saved };
+  }
+  renderPreservingModalScroll();
+}
+
+function getDefaultRecommendFilters() {
+  return {
+    ageMin: 16,
+    ageMax: 99,
+    activity: '',
+    gender: '',
+    notViewed: '',
+    notExchanged: '',
+    school: '',
+    jobHopFrequency: '',
+    jobIntent: '',
+    degree: '',
+    salary: '',
+    experience: ''
+  };
+}
+
+function getRecommendFilterOptions() {
+  return {
+    activity: [
+      { value: '', label: '不限' },
+      { value: '刚刚活跃', label: '刚刚活跃' },
+      { value: '今日活跃', label: '今日活跃' },
+      { value: '3日内活跃', label: '3日内活跃' },
+      { value: '本周活跃', label: '本周活跃' },
+      { value: '本月活跃', label: '本月活跃' }
+    ],
+    gender: [
+      { value: '', label: '不限' },
+      { value: '男', label: '男' },
+      { value: '女', label: '女' }
+    ],
+    notViewed: [
+      { value: '', label: '不限' },
+      { value: '近14天没有', label: '近14天没有' }
+    ],
+    notExchanged: [
+      { value: '', label: '不限' },
+      { value: '近一个月没有', label: '近一个月没有' }
+    ],
+    school: [
+      { value: '', label: '不限' },
+      { value: '985', label: '985' },
+      { value: '211', label: '211' },
+      { value: '双一流院校', label: '双一流院校' },
+      { value: '留学', label: '留学' },
+      { value: '国内外名校', label: '国内外名校' },
+      { value: '公办本科', label: '公办本科' }
+    ],
+    jobHopFrequency: [
+      { value: '', label: '不限' },
+      { value: '5年少于3份', label: '5年少于3份' },
+      { value: '平均每份工作大于1年', label: '平均每份工作大于1年' }
+    ],
+    jobIntent: [
+      { value: '', label: '不限' },
+      { value: '离职-随时到岗', label: '离职-随时到岗' },
+      { value: '在职-暂不考虑', label: '在职-暂不考虑' },
+      { value: '在职-考虑机会', label: '在职-考虑机会' },
+      { value: '在职-月内到岗', label: '在职-月内到岗' }
+    ],
+    degree: [
+      { value: '', label: '不限' },
+      { value: '初中及以下', label: '初中及以下' },
+      { value: '中专/中技', label: '中专/中技' },
+      { value: '高中', label: '高中' },
+      { value: '大专', label: '大专' },
+      { value: '本科', label: '本科' },
+      { value: '硕士', label: '硕士' },
+      { value: '博士', label: '博士' }
+    ],
+    salary: [
+      { value: '', label: '不限' },
+      { value: '3K以下', label: '3K以下' },
+      { value: '3-5K', label: '3-5K' },
+      { value: '5-10K', label: '5-10K' },
+      { value: '10-20K', label: '10-20K' },
+      { value: '20-50K', label: '20-50K' },
+      { value: '50K以上', label: '50K以上' }
+    ],
+    experience: [
+      { value: '', label: '不限' },
+      { value: '在校/应届', label: '在校/应届' },
+      { value: '1年以内', label: '1年以内' },
+      { value: '1-3年', label: '1-3年' },
+      { value: '3-5年', label: '3-5年' },
+      { value: '5-10年', label: '5-10年' },
+      { value: '10年以上', label: '10年以上' }
+    ]
+  };
+}
+
+function renderRecommendFiltersPanel(item) {
+  const filters = state.jobDetailModal.pendingFilters || item?.recommend_filters || getDefaultRecommendFilters();
+  const opts = getRecommendFilterOptions();
+
+  function renderFilterRow(label, fieldName, options) {
+    const currentValue = filters[fieldName] || '';
+    return `
+      <div class="recommend-filter-row">
+        <span class="recommend-filter-label">${label}</span>
+        <div class="recommend-filter-options">
+          ${options.map((opt) => `
+            <button
+              class="recommend-filter-chip ${currentValue === opt.value ? 'is-active' : ''}"
+              onclick="updateRecommendFilter('${fieldName}', '${opt.value}')"
+            >${opt.label}</button>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  const ageMin = filters.ageMin ?? 16;
+  const ageMax = filters.ageMax ?? 99;
+  const ageLabel = ageMax >= 99 ? `${ageMin} ~ 不限` : `${ageMin} ~ ${ageMax}`;
+
+  return `
+    <div class="recommend-filters-panel">
+      <div class="recommend-filter-row">
+        <span class="recommend-filter-label">年龄</span>
+        <div class="recommend-filter-options" style="flex-direction:column;gap:6px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <input type="number" min="16" max="99" value="${ageMin}" style="width:60px;padding:4px 6px;font-size:13px;border:1px solid var(--border,#e0e0e0);border-radius:4px" onchange="updateRecommendFilter('ageMin', this.value)" />
+            <span>~</span>
+            <input type="number" min="16" max="99" value="${ageMax}" style="width:60px;padding:4px 6px;font-size:13px;border:1px solid var(--border,#e0e0e0);border-radius:4px" onchange="updateRecommendFilter('ageMax', this.value)" />
+            <span class="muted" style="font-size:12px">(${ageLabel})</span>
+          </div>
+        </div>
+      </div>
+      ${renderFilterRow('活跃度', 'activity', opts.activity)}
+      ${renderFilterRow('性别', 'gender', opts.gender)}
+      ${renderFilterRow('近期没有看过', 'notViewed', opts.notViewed)}
+      ${renderFilterRow('是否与同事交换简历', 'notExchanged', opts.notExchanged)}
+      ${renderFilterRow('院校', 'school', opts.school)}
+      ${renderFilterRow('跳槽频率', 'jobHopFrequency', opts.jobHopFrequency)}
+      ${renderFilterRow('求职意向', 'jobIntent', opts.jobIntent)}
+      ${renderFilterRow('学历要求', 'degree', opts.degree)}
+      ${renderFilterRow('薪资待遇', 'salary', opts.salary)}
+      ${renderFilterRow('经验要求', 'experience', opts.experience)}
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border,#e0e0e0)">
+        <button class="button-secondary button-muted" onclick="resetRecommendFilters()">清除筛选</button>
+      </div>
+    </div>
+  `;
+}
+
+function getJobDetailModalScrollTop() {
+  const modal = document.querySelector('.job-detail-modal');
+  return modal ? modal.scrollTop : 0;
+}
+
+function restoreJobDetailModalScrollTop(scrollTop) {
+  if (!scrollTop) return;
+  const modal = document.querySelector('.job-detail-modal');
+  if (modal) modal.scrollTop = scrollTop;
+}
+
+function renderPreservingModalScroll() {
+  const scrollTop = getJobDetailModalScrollTop();
+  render();
+  restoreJobDetailModalScrollTop(scrollTop);
+}
+
+function updateRecommendFilter(field, value) {
+  if (!state.jobDetailModal.pendingFilters) {
+    const saved = state.jobDetailModal.item?.recommend_filters || {};
+    state.jobDetailModal.pendingFilters = { ...getDefaultRecommendFilters(), ...saved };
+  }
+  if (field === 'ageMin' || field === 'ageMax') {
+    state.jobDetailModal.pendingFilters[field] = Math.max(16, Math.min(99, parseInt(value) || 16));
+  } else {
+    state.jobDetailModal.pendingFilters[field] = value;
+  }
+  renderPreservingModalScroll();
+}
+
+function resetRecommendFilters() {
+  state.jobDetailModal.pendingFilters = getDefaultRecommendFilters();
+  renderPreservingModalScroll();
+}
+
+async function saveJobRecommendFilters() {
+  if (!state.jobDetailModal.item || state.jobDetailModal.savingFilters) {
+    return;
+  }
+
+  const filters = state.jobDetailModal.pendingFilters || getDefaultRecommendFilters();
+
+  state.jobDetailModal.savingFilters = true;
+  state.jobDetailModal.savingFiltersError = '';
+  renderPreservingModalScroll();
+
+  try {
+    const result = await fetchJson(
+      `/api/jobs/${encodeURIComponent(state.jobDetailModal.jobKey)}/recommend-filters`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recommendFilters: filters })
+      }
+    );
+
+    state.jobDetailModal.item = result.item;
+    state.jobDetailModal.pendingFilters = { ...getDefaultRecommendFilters(), ...(result.item.recommend_filters || {}) };
+    state.jobs = state.jobs.map((job) => (
+      job.job_key === result.item.job_key
+        ? { ...job, recommend_filters: result.item.recommend_filters }
+        : job
+    ));
+  } catch (error) {
+    state.jobDetailModal.savingFiltersError = error.message;
+  } finally {
+    state.jobDetailModal.savingFilters = false;
+    renderPreservingModalScroll();
   }
 }
 
@@ -3481,6 +3720,27 @@ function renderJobDetailModal() {
                 class="job-detail-textarea"
                 placeholder="例如：公司成立于2014年，是国内领先的AI科技公司；五险一金、带薪年假15天；办公地点在重庆江北区；双休、弹性工作制。"
               >${escapeHtml(item.enterprise_knowledge || '')}</textarea>
+            </section>
+            <section class="job-detail-section">
+              <div class="card-header" style="cursor:pointer" onclick="toggleRecommendFilters()">
+                <div>
+                  <p class="eyebrow">BOSS 推荐筛选</p>
+                  <h4 class="card-title job-detail-section-title">推荐牛人筛选条件</h4>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <button
+                    class="button-secondary"
+                    onclick="event.stopPropagation(); saveJobRecommendFilters()"
+                    ${state.jobDetailModal.savingFilters ? 'disabled' : ''}
+                  >
+                    ${state.jobDetailModal.savingFilters ? '保存中...' : '保存筛选'}
+                  </button>
+                  <span style="font-size:12px;color:var(--text-muted,#999)">${state.jobDetailModal.filtersExpanded ? '▲ 收起' : '▼ 展开'}</span>
+                </div>
+              </div>
+              <p class="card-subtitle job-detail-tip">与 BOSS 直聘推荐牛人页面筛选一致，寻源时自动应用到推荐页面。</p>
+              ${state.jobDetailModal.savingFiltersError ? `<div class="inline-status inline-status-error">${escapeHtml(state.jobDetailModal.savingFiltersError)}</div>` : ''}
+              ${state.jobDetailModal.filtersExpanded ? renderRecommendFiltersPanel(item) : ''}
             </section>
             <section class="job-detail-section">
               <div class="card-header">
