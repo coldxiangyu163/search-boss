@@ -60,6 +60,18 @@ function createMockBossCliRunner({
     async closeRecommendPopup(opts) {
       calls.push({ command: 'closeRecommendPopup', ...opts });
       return { ok: true, closed: true };
+    },
+    async setupResumeCanvasCapture(opts) {
+      calls.push({ command: 'setupResumeCanvasCapture', ...opts });
+      return { ok: true, injected: 1, total: 1 };
+    },
+    async resetResumeCanvasCapture(opts) {
+      calls.push({ command: 'resetResumeCanvasCapture', ...opts });
+      return { ok: true, reset: 1 };
+    },
+    async scrollAndReadResumeDetail(opts) {
+      calls.push({ command: 'scrollAndReadResumeDetail', ...opts });
+      return { ok: true, mode: 'canvas', fullText: '张三 28岁 4年 本科 工作经历 2020-2024 某公司 面点师 教育经历 2016-2020 某大学 食品科学 本科', segments: 3, textLength: 120 };
     }
   };
 }
@@ -413,8 +425,9 @@ test('SourceLoopService DB dedup skips already-greeted candidates', async () => 
   assert.equal(result.stats.greeted, 1);
 });
 
-test('SourceLoopService sends card text to LLM evaluator and logs evaluation', async () => {
+test('SourceLoopService opens detail, scrolls full resume, then evaluates with LLM', async () => {
   const cardText = '8-9K 张三 5年Java开发 本科 重庆 工作经历 腾讯2019-2024 后端开发 教育经历 重庆大学 计算机科学';
+  const fullResumeText = '张三 28岁 5年 本科 工作经历 2019-2024 腾讯 后端开发 教育经历 2015-2019 重庆大学 计算机科学 本科';
   const bossCliRunner = createMockBossCliRunner({
     listResult: {
       ok: true,
@@ -433,6 +446,10 @@ test('SourceLoopService sends card text to LLM evaluator and logs evaluation', a
       }]
     }
   });
+  bossCliRunner.scrollAndReadResumeDetail = async (opts) => {
+    bossCliRunner.calls.push({ command: 'scrollAndReadResumeDetail', ...opts });
+    return { ok: true, mode: 'scroll', fullText: fullResumeText, segments: 3, textLength: fullResumeText.length };
+  };
 
   const agentService = createMockAgentService();
 
@@ -455,12 +472,24 @@ test('SourceLoopService sends card text to LLM evaluator and logs evaluation', a
 
   await service.run({ runId: 108, jobKey: '测试岗位_abc' });
 
-  assert.equal(receivedDetail.detailText, cardText);
+  // LLM should receive full resume text, not card text
+  assert.equal(receivedDetail.detailText, fullResumeText);
+
+  // Verify call order: setupCanvas -> resetCanvas -> clickAtCoords (open popup) -> scrollAndReadResumeDetail -> clickRecommendGreet
+  const callOrder = bossCliRunner.calls
+    .filter((c) => ['setupResumeCanvasCapture', 'resetResumeCanvasCapture', 'clickAtCoords', 'scrollAndReadResumeDetail', 'clickRecommendGreet'].includes(c.command))
+    .map((c) => c.command);
+  assert.deepStrictEqual(callOrder, ['setupResumeCanvasCapture', 'resetResumeCanvasCapture', 'clickAtCoords', 'scrollAndReadResumeDetail', 'clickRecommendGreet']);
 
   const evalEvents = agentService.events.filter((e) => e.eventType === 'candidate_evaluated');
   assert.equal(evalEvents.length, 1);
   assert.equal(evalEvents[0].payload.action, 'greet');
-  assert.equal(evalEvents[0].payload.reason, 'good');
+  assert.equal(evalEvents[0].payload.evaluationSource, 'full_resume');
+
+  // Candidate metadata should reflect full_resume_detail mode
+  const candidateRecord = agentService.candidates[0];
+  assert.equal(candidateRecord.metadata.evaluationMode, 'full_resume_detail');
+  assert.ok(candidateRecord.metadata.fullResumeText);
 });
 
 // --- parseCardText tests ---

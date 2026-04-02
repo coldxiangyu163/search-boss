@@ -2611,6 +2611,7 @@ function renderCandidateDetailDrawer() {
                 </div>
               ` : '<div class="empty-state">当前没有可展示的互动记录。</div>'}
             </section>
+            ${renderFullResumeSection(item)}
             <section class="candidate-detail-section">
               <div class="card-header">
                 <div>
@@ -2627,6 +2628,34 @@ function renderCandidateDetailDrawer() {
         ` : ''}
       </aside>
     </div>
+  `;
+}
+
+function renderFullResumeSection(item) {
+  const meta = item.profile_metadata || {};
+  const text = meta.fullResumeText;
+  if (!text) return '';
+
+  const readAt = meta.resumeReadAt ? formatDateTime(meta.resumeReadAt) : '';
+  const mode = meta.evaluationMode || '';
+  const subtitle = [
+    readAt ? `采集于 ${readAt}` : '',
+    mode === 'full_resume_detail' ? '来源：详情页滚动采集' : ''
+  ].filter(Boolean).join(' · ');
+
+  return `
+    <section class="candidate-detail-section">
+      <div class="card-header">
+        <div>
+          <p class="eyebrow">简历全文</p>
+          <h4 class="card-title job-detail-section-title">完整简历内容</h4>
+          ${subtitle ? `<p class="card-subtitle">${escapeHtml(subtitle)}</p>` : ''}
+        </div>
+      </div>
+      <div class="candidate-resume-text">
+        <pre style="white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.6;max-height:500px;overflow-y:auto;padding:12px;background:#f8f9fa;border-radius:8px;border:1px solid #e2e8f0;">${escapeHtml(text)}</pre>
+      </div>
+    </section>
   `;
 }
 

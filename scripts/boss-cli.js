@@ -803,6 +803,36 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
     };
   }
 
+  if (options.command === 'recommend-setup-canvas-capture') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.setupResumeCanvasCapture({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+    return { ok: true, ...result };
+  }
+
+  if (options.command === 'recommend-reset-canvas-capture') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.resetResumeCanvasCapture({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+    return { ok: true, ...result };
+  }
+
+  if (options.command === 'recommend-scroll-read-detail') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.scrollAndReadResumeDetail({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+    return { ok: true, ...result };
+  }
+
   if (options.command === 'recruit-data') {
     const session = await sessionStore.loadSession(options.runId);
     const data = await browserCommands.bossFetch({

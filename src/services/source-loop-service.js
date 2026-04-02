@@ -173,6 +173,13 @@ class SourceLoopService {
       // Non-fatal: proceed with current tab
     }
 
+    // Phase 2d: Install canvas fillText capture for resume reading
+    try {
+      await runner.setupResumeCanvasCapture({ runId });
+    } catch (error) {
+      // Non-fatal: will fall back to DOM text in scrollAndReadResumeDetail
+    }
+
     // Phase 3: Read candidate list and evaluate each via LLM, greet through popup
     let listResult;
     try {
@@ -262,7 +269,7 @@ class SourceLoopService {
 
     await this.#recordEvent(runId, {
       eventId: `source-loop-card-read:${runId}:${bossEncryptGeekId}`,
-      eventType: 'candidate_detail_read',
+      eventType: 'candidate_card_read',
       stage: 'source_loop',
       message: `read card: ${candidateName}`,
       payload: {
@@ -304,12 +311,42 @@ class SourceLoopService {
       // Non-fatal
     }
 
-    // LLM evaluation with card text
+    // Step 1: Open detail popup by clicking on the candidate card
+    const popupOpened = await this.#openCandidateDetail({ runId, bossEncryptGeekId, candidateName, candidate, runner });
+
+    // Step 2: Scroll through the full resume and read complete text
+    let fullResumeText = '';
+    if (popupOpened) {
+      try {
+        const resumeResult = await runner.scrollAndReadResumeDetail({ runId });
+        if (resumeResult?.ok && resumeResult.fullText) {
+          fullResumeText = resumeResult.fullText;
+          await this.#recordEvent(runId, {
+            eventId: `source-loop-resume-read:${runId}:${bossEncryptGeekId}`,
+            eventType: 'resume_detail_read',
+            stage: 'source_loop',
+            message: `read full resume: ${candidateName} (${fullResumeText.length} chars, ${resumeResult.segments} segments)`,
+            payload: {
+              bossEncryptGeekId,
+              candidateName,
+              textLength: fullResumeText.length,
+              segments: resumeResult.segments,
+              mode: resumeResult.mode
+            }
+          });
+        }
+      } catch (error) {
+        // Non-fatal: fall back to card text for evaluation
+      }
+    }
+
+    // Step 3: LLM evaluation based on full resume detail (fall back to card text if scroll/read failed)
+    const evaluationText = fullResumeText || candidateText;
     let decision;
     try {
       decision = await this.llmEvaluator.evaluateCandidate({
         jobRequirement,
-        candidateDetail: { name: candidateName, detailText: candidateText },
+        candidateDetail: { name: candidateName, detailText: evaluationText },
         customRequirement,
         enterpriseKnowledge
       });
@@ -331,11 +368,12 @@ class SourceLoopService {
         tier: decision.tier,
         reason: decision.reason,
         facts: decision.facts,
-        cardTextPreview: candidateText.slice(0, 500)
+        evaluationSource: fullResumeText ? 'full_resume' : 'card_text',
+        evaluationTextLength: evaluationText.length
       }
     });
 
-    // Write candidate record
+    // Write candidate record (with full resume text if available)
     try {
       await this.agentService.upsertCandidate({
         runId,
@@ -354,22 +392,22 @@ class SourceLoopService {
           priority: decision.tier,
           facts: decision.facts,
           reasoning: decision.reason,
-          evaluationMode: 'list_popup_loop'
+          evaluationMode: fullResumeText ? 'full_resume_detail' : 'list_card_fallback',
+          fullResumeText: fullResumeText ? fullResumeText.slice(0, 10000) : undefined,
+          resumeReadAt: fullResumeText ? new Date().toISOString() : undefined
         }
       });
     } catch (error) {
       // Non-fatal
     }
 
-    // Execute greet (via popup) or skip
-    if (decision.action === 'greet') {
-      const greetResult = await this.#executeGreetViaPopup({
+    // Step 4: Execute greet or skip (popup is already open)
+    if (decision.action === 'greet' && popupOpened) {
+      const greetResult = await this.#greetInOpenPopup({
         runId,
         jobKey,
         bossEncryptGeekId,
         candidateName,
-        candidate,
-        stats,
         runner
       });
 
@@ -381,6 +419,11 @@ class SourceLoopService {
         stats.errors += 1;
       }
     } else {
+      // Close popup if it was opened but we're skipping
+      if (popupOpened) {
+        try { await runner.closeRecommendPopup({ runId }); } catch (_) {}
+      }
+
       stats.skipped += 1;
       await this.#recordEvent(runId, {
         eventId: `source-loop-skip:${runId}:${bossEncryptGeekId}`,
@@ -392,17 +435,23 @@ class SourceLoopService {
     }
   }
 
-  async #executeGreetViaPopup({ runId, jobKey, bossEncryptGeekId, candidateName, candidate, stats, runner }) {
-    // Step 1: Click card to open detail popup
+  async #openCandidateDetail({ runId, bossEncryptGeekId, candidateName, candidate, runner }) {
     if (!candidate?.cardX || !candidate?.cardY) {
       await this.#recordEvent(runId, {
-        eventId: `source-loop-greet-error:${runId}:${bossEncryptGeekId}`,
+        eventId: `source-loop-detail-error:${runId}:${bossEncryptGeekId}`,
         eventType: 'source_loop_error',
         stage: 'source_loop',
-        message: 'no card coordinates for popup',
+        message: 'no card coordinates for detail popup',
         payload: { bossEncryptGeekId }
       });
-      return { greeted: false, alreadyChatting: false };
+      return false;
+    }
+
+    // Reset canvas captures before opening new candidate detail
+    try {
+      await runner.resetResumeCanvasCapture({ runId });
+    } catch (error) {
+      // Non-fatal
     }
 
     // Scroll the card into view and get fresh coordinates
@@ -431,7 +480,11 @@ class SourceLoopService {
     const delayMs = this.candidateDelayMin + Math.random() * (this.candidateDelayMax - this.candidateDelayMin);
     await new Promise((r) => setTimeout(r, delayMs));
 
-    // Step 2: Click greet button inside the popup
+    return true;
+  }
+
+  async #greetInOpenPopup({ runId, jobKey, bossEncryptGeekId, candidateName, runner }) {
+    // Click greet button inside the already-open popup
     try {
       const greetResult = await runner.clickRecommendGreet({ runId });
       if (greetResult.alreadyChatting) {
@@ -450,7 +503,7 @@ class SourceLoopService {
       return { greeted: false, alreadyChatting: false };
     }
 
-    // Step 3: Close popup after greeting
+    // Close popup after greeting
     try { await runner.closeRecommendPopup({ runId }); } catch (_) {}
 
     // Record greet action
@@ -464,7 +517,7 @@ class SourceLoopService {
         dedupeKey,
         jobKey,
         bossEncryptGeekId,
-        payload: { candidateName, source: 'list_popup_loop' }
+        payload: { candidateName, source: 'full_resume_detail' }
       });
     } catch (error) {
       // Non-fatal

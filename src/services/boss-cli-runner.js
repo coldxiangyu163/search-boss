@@ -379,6 +379,30 @@ class BossCliRunner {
     ]);
   }
 
+  async setupResumeCanvasCapture({ runId }) {
+    return this.#run([
+      'recommend-setup-canvas-capture',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
+  async resetResumeCanvasCapture({ runId }) {
+    return this.#run([
+      'recommend-reset-canvas-capture',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
+  async scrollAndReadResumeDetail({ runId }) {
+    return this.#run([
+      'recommend-scroll-read-detail',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
   async #run(argv) {
     const result = await this.executeCliImpl(argv, {
       env: this.env,

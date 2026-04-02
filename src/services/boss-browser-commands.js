@@ -2666,6 +2666,340 @@ function buildAcceptResumeConsentTargetExpression() {
   })()`;
 }
 
+async function setupResumeCanvasCapture({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: `(() => {
+      try {
+        var fr = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+        if (!fr || !fr.contentDocument) return JSON.stringify({ ok: false, reason: 'no_outer_iframe' });
+        var fwin = fr.contentWindow;
+        function injectFillText(iframe) {
+          try {
+            iframe.style.height = '1600px';
+            iframe.style.minHeight = '1600px';
+            var fw = iframe.contentWindow;
+            if (!fw) return false;
+            if (fw.__fillTextInjected) return true;
+            fw.__fillTextCaptures = [];
+            fw.__fillTextInjected = true;
+            var orig = fw.CanvasRenderingContext2D.prototype.fillText;
+            fw.CanvasRenderingContext2D.prototype.fillText = function(text, x, y) {
+              if (text && String(text).trim())
+                fw.__fillTextCaptures.push({ t: String(text), x: Math.round(x), y: Math.round(y) });
+              return orig.apply(this, arguments);
+            };
+            return true;
+          } catch (e) { return false; }
+        }
+        var existing = [].slice.call(fr.contentDocument.querySelectorAll('iframe'));
+        var injected = existing.filter(function(f) { return injectFillText(f); }).length;
+        if (fwin.__fillTextObserver) fwin.__fillTextObserver.disconnect();
+        var obs = new fwin.MutationObserver(function(mutations) {
+          mutations.forEach(function(m) {
+            m.addedNodes.forEach(function(node) {
+              if (!node || node.nodeType !== 1) return;
+              if (node.tagName === 'IFRAME') {
+                injectFillText(node);
+                node.addEventListener('load', function() { injectFillText(node); });
+              }
+              var frames = node.querySelectorAll ? [].slice.call(node.querySelectorAll('iframe')) : [];
+              frames.forEach(function(f) { injectFillText(f); f.addEventListener('load', function() { injectFillText(f); }); });
+            });
+          });
+        });
+        obs.observe(fr.contentDocument.body, { childList: true, subtree: true });
+        fwin.__fillTextObserver = obs;
+        return JSON.stringify({ ok: true, injected: injected, total: existing.length });
+      } catch (err) {
+        return JSON.stringify({ ok: false, reason: 'setup_canvas_error:' + (err && err.message || String(err)) });
+      }
+    })()`
+  });
+
+  return { ok: true, ...result };
+}
+
+async function resetResumeCanvasCapture({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: `(() => {
+      try {
+        var fr = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+        if (!fr || !fr.contentDocument) return JSON.stringify({ ok: true, reset: 0 });
+        var frames = [].slice.call(fr.contentDocument.querySelectorAll('iframe'));
+        var n = 0;
+        frames.forEach(function(f) {
+          try { if (f.contentWindow.__fillTextInjected) { f.contentWindow.__fillTextCaptures = []; n++; } } catch(e) {}
+        });
+        return JSON.stringify({ ok: true, reset: n });
+      } catch (err) {
+        return JSON.stringify({ ok: true, reset: 0 });
+      }
+    })()`
+  });
+
+  return { ok: true, ...result };
+}
+
+const SCROLL_STEP = 500;
+const MAX_SCROLL_STEPS = 48;
+const MAX_EMPTY_STREAK = 3;
+
+async function scrollAndReadResumeDetail({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const readCapturesExpr = `(function(){
+    var fr = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+    if (!fr || !fr.contentDocument) return JSON.stringify({ n: 0, text: '' });
+    var frames = [].slice.call(fr.contentDocument.querySelectorAll('iframe'));
+    var bestCaps = null, bestCount = 0;
+    frames.forEach(function(f) {
+      try {
+        var fw = f.contentWindow; var caps = fw.__fillTextCaptures;
+        if (!caps || !caps.length) return;
+        var c = f.contentDocument.querySelector('canvas');
+        if (!c || c.width <= 300) return;
+        if (caps.length > bestCount) { bestCount = caps.length; bestCaps = caps; }
+      } catch(e) {}
+    });
+    if (!bestCaps) return JSON.stringify({ n: 0, text: '' });
+    var seen = {}, dedup = [];
+    bestCaps.forEach(function(it) { var k = it.t + '|' + it.x + '|' + it.y; if (!seen[k]) { seen[k] = true; dedup.push(it); } });
+    var lines = {};
+    dedup.forEach(function(it) { var yk = Math.round(it.y / 8) * 8; if (!lines[yk]) lines[yk] = []; lines[yk].push(it); });
+    var text = Object.keys(lines).sort(function(a,b) { return a - b; }).map(function(yk) {
+      return lines[yk].sort(function(a,b) { return a.x - b.x; }).map(function(it) { return it.t; }).join('');
+    }).join('\\n');
+    return JSON.stringify({ n: bestCount, text: text });
+  })()`;
+
+  const scrollProbeExpr = `(function(){
+    var fr = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+    if (!fr || !fr.contentDocument) return JSON.stringify({ err: 'no-iframe', mode: 'virtual', maxScroll: 2400, iframeIndex: 0 });
+    var doc = fr.contentDocument;
+    var win = fr.contentWindow;
+    var best = null;
+    function considerOuter(sel) {
+      var el = doc.querySelector(sel);
+      if (!el) return;
+      var sh = el.scrollHeight | 0, ch = el.clientHeight | 0;
+      if (sh > ch + 30) {
+        var ms = sh - ch;
+        if (!best || ms > best.maxScroll) best = { mode: 'outer', selector: sel, maxScroll: ms };
+      }
+    }
+    var outerSels = ['.resume-detail-wrap', '.resume-center-side', '.resume-middle-wrap', '.boss-dialog__body', '.boss-popup__content', '.lib-standard-resume', '.resume-layout-wrap'];
+    for (var i = 0; i < outerSels.length; i++) considerOuter(outerSels[i]);
+    var frames = [].slice.call(doc.querySelectorAll('iframe'));
+    var maxCanvasH = 0, bestCanvasFi = 0;
+    for (var fi = 0; fi < frames.length; fi++) {
+      try {
+        var fd = frames[fi].contentDocument;
+        if (!fd) continue;
+        var cv = fd.querySelector('canvas');
+        if (cv && cv.height >= maxCanvasH) { maxCanvasH = cv.height; bestCanvasFi = fi; }
+        var de = fd.documentElement, bd = fd.body;
+        if (de) {
+          var sh = de.scrollHeight | 0, ch = de.clientHeight | 0;
+          if (sh > ch + 30) {
+            var ms = sh - ch;
+            if (!best || ms > best.maxScroll) best = { mode: 'inner_doc', iframeIndex: fi, maxScroll: ms };
+          }
+        }
+        if (bd && bd !== de) {
+          var sh2 = bd.scrollHeight | 0, ch2 = bd.clientHeight | 0;
+          if (sh2 > ch2 + 30) {
+            var ms2 = sh2 - ch2;
+            if (!best || ms2 > best.maxScroll) best = { mode: 'inner_doc', iframeIndex: fi, maxScroll: ms2 };
+          }
+        }
+        var idw = fd.querySelector('.resume-detail-wrap');
+        if (idw) {
+          var sh3 = idw.scrollHeight | 0, ch3 = idw.clientHeight | 0;
+          if (sh3 > ch3 + 30) {
+            var ms3 = sh3 - ch3;
+            if (!best || ms3 > best.maxScroll) best = { mode: 'inner_detail', iframeIndex: fi, maxScroll: ms3 };
+          }
+        }
+      } catch(e) {}
+    }
+    if (!best) {
+      var virt = Math.max(maxCanvasH + 400, 2400, 1600);
+      return JSON.stringify({ mode: 'virtual', maxScroll: virt, iframeIndex: bestCanvasFi, maxCanvasH: maxCanvasH, fallback: true });
+    }
+    return JSON.stringify(best);
+  })()`;
+
+  function buildScrollApplyExpr(pos, specs) {
+    const payload = JSON.stringify({
+      mode: specs.mode,
+      selector: specs.selector || '',
+      iframeIndex: specs.iframeIndex || 0
+    });
+    return `(function(){
+      var pos = ${pos};
+      var specs = ${payload};
+      var fr = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+      if (!fr || !fr.contentDocument) return;
+      var doc = fr.contentDocument;
+      if (specs.mode === 'outer' && specs.selector) {
+        var el = doc.querySelector(specs.selector);
+        if (el) el.scrollTop = pos;
+        return;
+      }
+      var frames = [].slice.call(doc.querySelectorAll('iframe'));
+      var ix = specs.iframeIndex | 0;
+      var f = frames[ix];
+      if (!f || !f.contentDocument) return;
+      var fd = f.contentDocument;
+      if (specs.mode === 'inner_detail') {
+        var dw = fd.querySelector('.resume-detail-wrap');
+        if (dw) dw.scrollTop = pos;
+        return;
+      }
+      if (specs.mode === 'inner_doc' || specs.mode === 'virtual') {
+        var r = fd.documentElement || fd.body;
+        if (r) r.scrollTop = pos;
+      }
+    })()`;
+  }
+
+  const resetCapturesExpr = `(function(){
+    var fr = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+    if (!fr || !fr.contentDocument) return;
+    [].slice.call(fr.contentDocument.querySelectorAll('iframe')).forEach(function(f) {
+      try { if (f.contentWindow.__fillTextInjected) f.contentWindow.__fillTextCaptures = []; } catch(e) {}
+    });
+  })()`;
+
+  // Phase 1: Wait for canvas first render (up to 4s)
+  for (let i = 0; i < 8; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    try {
+      const r = await evaluateJson({ cdpClient, targetId, urlPrefix, expression: readCapturesExpr });
+      if (r.n > 50) break;
+    } catch (_) {}
+  }
+
+  // Phase 2: Probe scrollable container
+  let specs = { mode: 'virtual', maxScroll: 2400, iframeIndex: 0 };
+  try {
+    const parsed = await evaluateJson({ cdpClient, targetId, urlPrefix, expression: scrollProbeExpr });
+    if (!parsed.err && typeof parsed.maxScroll === 'number') {
+      specs = parsed;
+    }
+  } catch (_) {}
+
+  const maxScrollRange = Math.max(0, specs.maxScroll);
+  let maxPos = maxScrollRange + SCROLL_STEP;
+  if (Math.ceil(maxPos / SCROLL_STEP) + 1 > MAX_SCROLL_STEPS) {
+    maxPos = MAX_SCROLL_STEPS * SCROLL_STEP;
+  }
+
+  // Phase 3: Scroll through each segment, collect canvas captures
+  const segments = [];
+  let consecutiveEmpty = 0;
+  let stepIndex = 0;
+
+  for (let pos = 0; pos <= maxPos && stepIndex < MAX_SCROLL_STEPS; pos += SCROLL_STEP, stepIndex++) {
+    // Reset captures for this segment
+    try {
+      await evaluateJson({ cdpClient, targetId, urlPrefix, expression: resetCapturesExpr });
+    } catch (_) {}
+
+    // Scroll to position
+    try {
+      await evaluateJson({ cdpClient, targetId, urlPrefix, expression: buildScrollApplyExpr(pos, specs) });
+    } catch (_) {}
+
+    // Wait for rendering to stabilize
+    let prev = 0;
+    let stable = 0;
+    for (let i = 0; i < 8; i++) {
+      await new Promise((r) => setTimeout(r, 400));
+      try {
+        const r = await evaluateJson({ cdpClient, targetId, urlPrefix, expression: readCapturesExpr });
+        if (r.n > 0 && r.n === prev) {
+          stable++;
+          if (stable >= 2) break;
+        } else {
+          stable = 0;
+        }
+        prev = r.n;
+      } catch (_) {}
+    }
+
+    // Read current segment text
+    try {
+      const r = await evaluateJson({ cdpClient, targetId, urlPrefix, expression: readCapturesExpr });
+      if (r.n > 0) {
+        segments.push(r.text);
+        consecutiveEmpty = 0;
+      } else {
+        consecutiveEmpty++;
+        if (consecutiveEmpty >= MAX_EMPTY_STREAK) break;
+      }
+    } catch (_) {
+      consecutiveEmpty++;
+      if (consecutiveEmpty >= MAX_EMPTY_STREAK) break;
+    }
+  }
+
+  // Phase 4: If canvas capture failed, fallback to DOM innerText
+  if (segments.length === 0) {
+    const fallbackExpr = `(function(){
+      var fr = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+      if (!fr || !fr.contentDocument) return JSON.stringify({ ok: false });
+      var sels = ['.resume-right-side', '.resume-simple-box', '.resume-detail-wrap', '.boss-popup__wrapper'];
+      for (var i = 0; i < sels.length; i++) {
+        var el = fr.contentDocument.querySelector(sels[i]);
+        if (el) { var t = (el.innerText || '').trim(); if (t.length > 50) return JSON.stringify({ ok: true, text: t.substring(0, 10000) }); }
+      }
+      return JSON.stringify({ ok: false });
+    })()`;
+
+    try {
+      const fb = await evaluateJson({ cdpClient, targetId, urlPrefix, expression: fallbackExpr });
+      if (fb?.ok && fb.text) {
+        return { ok: true, mode: 'dom_fallback', fullText: fb.text, segments: 1, textLength: fb.text.length };
+      }
+    } catch (_) {}
+
+    return { ok: true, mode: 'empty', fullText: '', segments: 0, textLength: 0 };
+  }
+
+  // Phase 5: Deduplicate lines across segments
+  const allLines = [];
+  const seenLines = new Set();
+  for (const seg of segments) {
+    for (const line of seg.split('\n')) {
+      const key = line.trim();
+      if (key && !seenLines.has(key)) {
+        seenLines.add(key);
+        allLines.push(line);
+      }
+    }
+  }
+
+  const fullText = allLines.join('\n');
+  return { ok: true, mode: 'canvas', fullText, segments: segments.length, textLength: fullText.length };
+}
+
 module.exports = {
   getUrl,
   evaluateJson,
@@ -2705,4 +3039,7 @@ module.exports = {
   scrollRecommendCardIntoView,
   closeResumeDetail,
   scrapeRecruitData,
+  setupResumeCanvasCapture,
+  resetResumeCanvasCapture,
+  scrollAndReadResumeDetail,
 };
