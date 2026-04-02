@@ -25,11 +25,16 @@ const LINUX_WHICH_NAMES = [
   'ungoogled-chromium',
 ];
 
+let _cachedLinuxChromePath = null;
+
 function detectLinuxChromePath() {
+  if (_cachedLinuxChromePath) return _cachedLinuxChromePath;
+
   for (const candidate of LINUX_CHROME_CANDIDATES) {
     try {
       fs.accessSync(candidate, fs.constants.X_OK);
       console.log(`[chrome-launcher] Detected Linux browser: ${candidate}`);
+      _cachedLinuxChromePath = candidate;
       return candidate;
     } catch {}
   }
@@ -40,13 +45,15 @@ function detectLinuxChromePath() {
         .toString().trim();
       if (resolved) {
         console.log(`[chrome-launcher] Detected Linux browser via which: ${resolved}`);
+        _cachedLinuxChromePath = resolved;
         return resolved;
       }
     } catch {}
   }
 
   console.warn('[chrome-launcher] No Chrome/Chromium found on Linux, falling back to "google-chrome"');
-  return 'google-chrome';
+  _cachedLinuxChromePath = 'google-chrome';
+  return _cachedLinuxChromePath;
 }
 
 const DEFAULT_CHROME_PATHS = {
