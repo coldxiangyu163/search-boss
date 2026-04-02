@@ -32,8 +32,7 @@ const state = {
     form: {
       jobKey: '',
       taskType: 'source',
-      startHour: 9,
-      startMinute: 0,
+      timeRanges: [{ startHour: 9, startMinute: 0, endHour: 18, endMinute: 0 }],
       intervalMinutes: 60,
       targetCount: 5,
       maxThreads: 20
@@ -2637,10 +2636,9 @@ function renderAutomation() {
             <tr>
               <th>职位</th>
               <th>任务类型</th>
-              <th>开始时间</th>
+              <th>执行时间范围</th>
               <th>执行间隔</th>
-              <th>寻源人数</th>
-              <th>回复线程数</th>
+              <th>执行参数</th>
               <th>状态</th>
               <th>最近执行</th>
               <th>操作</th>
@@ -2649,17 +2647,19 @@ function renderAutomation() {
           <tbody>
             ${state.schedules.map((schedule) => {
               const payload = schedule.payload || {};
-              const startTime = formatScheduleTime(payload.startHour, payload.startMinute);
+              const timeRangesDisplay = formatPayloadTimeRanges(payload);
               const interval = payload.intervalMinutes ? `每 ${payload.intervalMinutes} 分钟` : '-';
               const jobName = getJobNameByKey(schedule.job_key);
+              const paramDisplay = schedule.task_type === 'source'
+                ? `寻源 ${payload.targetCount || '-'} 人`
+                : `回复 ${payload.maxThreads || '-'} 线程`;
               return `
                 <tr>
                   <td>${escapeHtml(jobName)}<div class="muted">${escapeHtml(schedule.job_key)}</div></td>
                   <td>${escapeHtml(formatTaskType(schedule.task_type))}</td>
-                  <td>${escapeHtml(startTime)}</td>
+                  <td>${timeRangesDisplay}</td>
                   <td>${escapeHtml(interval)}</td>
-                  <td>${payload.targetCount || '-'}</td>
-                  <td>${payload.maxThreads || '-'}</td>
+                  <td>${escapeHtml(paramDisplay)}</td>
                   <td>
                     <button
                       class="badge ${schedule.enabled ? 'badge-success' : 'badge-warning'}"
@@ -2728,6 +2728,37 @@ function renderScheduleModal() {
     view: '调度详情'
   };
 
+  const timeRanges = form.timeRanges || [{ startHour: 9, startMinute: 0, endHour: 18, endMinute: 0 }];
+
+  const timeRangesHtml = timeRanges.map((range, idx) => {
+    if (isView) {
+      return `
+        <div class="time-range-row">
+          <span class="time-range-label">时段 ${idx + 1}：</span>
+          <span>${escapeHtml(formatScheduleTime(range.startHour, range.startMinute))} ~ ${escapeHtml(formatScheduleTime(range.endHour, range.endMinute))}</span>
+        </div>
+      `;
+    }
+    return `
+      <div class="time-range-row">
+        <input
+          type="time"
+          value="${padTime(range.startHour)}:${padTime(range.startMinute)}"
+          onchange="handleTimeRangeChange(${idx}, 'start', this.value)"
+        />
+        <span class="time-range-separator">~</span>
+        <input
+          type="time"
+          value="${padTime(range.endHour)}:${padTime(range.endMinute)}"
+          onchange="handleTimeRangeChange(${idx}, 'end', this.value)"
+        />
+        ${timeRanges.length > 1 ? `<button type="button" class="btn-sm btn-danger" onclick="removeTimeRange(${idx})" title="删除该时段">✕</button>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  const isSource = form.taskType === 'source';
+
   return `
     <div class="modal-backdrop" onclick="closeScheduleModal()">
       <section class="sync-modal schedule-modal" onclick="event.stopPropagation()">
@@ -2764,7 +2795,7 @@ function renderScheduleModal() {
           <label class="form-field">
             <span class="form-label">任务类型</span>
             ${isCreate ? `
-              <select onchange="updateScheduleModalForm('taskType', this.value)">
+              <select onchange="handleTaskTypeChange(this.value)">
                 <option value="source" ${form.taskType === 'source' ? 'selected' : ''}>寻源打招呼</option>
                 <option value="followup" ${form.taskType === 'followup' ? 'selected' : ''}>主动沟通拉简历</option>
               </select>
@@ -2772,18 +2803,13 @@ function renderScheduleModal() {
               <div class="schedule-view-value">${escapeHtml(formatTaskType(form.taskType))}</div>
             `}
           </label>
-          <label class="form-field">
-            <span class="form-label">开始执行时间</span>
-            ${isView ? `
-              <div class="schedule-view-value">${escapeHtml(formatScheduleTime(form.startHour, form.startMinute))}</div>
-            ` : `
-              <input
-                type="time"
-                value="${padTime(form.startHour)}:${padTime(form.startMinute)}"
-                onchange="handleScheduleModalTimeChange(this.value)"
-              />
-            `}
-          </label>
+          <div class="form-field form-field-full">
+            <span class="form-label">执行时间范围</span>
+            <div class="time-ranges-container">
+              ${timeRangesHtml}
+            </div>
+            ${!isView ? `<button type="button" class="btn-sm" onclick="addTimeRange()" style="margin-top:6px">+ 添加时段</button>` : ''}
+          </div>
           <label class="form-field">
             <span class="form-label">执行间隔（分钟）</span>
             ${isView ? `
@@ -2798,6 +2824,7 @@ function renderScheduleModal() {
               />
             `}
           </label>
+          ${isSource ? `
           <label class="form-field">
             <span class="form-label">单次寻源人数</span>
             ${isView ? `
@@ -2812,6 +2839,7 @@ function renderScheduleModal() {
               />
             `}
           </label>
+          ` : `
           <label class="form-field">
             <span class="form-label">单次回复线程数</span>
             ${isView ? `
@@ -2826,6 +2854,7 @@ function renderScheduleModal() {
               />
             `}
           </label>
+          `}
         </div>
         ${!isView ? `
           <div class="schedule-form-actions">
@@ -2876,8 +2905,7 @@ function openScheduleModal(mode, scheduleId) {
       form: {
         jobKey: '',
         taskType: 'source',
-        startHour: 9,
-        startMinute: 0,
+        timeRanges: [{ startHour: 9, startMinute: 0, endHour: 18, endMinute: 0 }],
         intervalMinutes: 60,
         targetCount: 5,
         maxThreads: 20
@@ -2887,6 +2915,9 @@ function openScheduleModal(mode, scheduleId) {
     const schedule = state.schedules.find((s) => String(s.id) === String(scheduleId));
     if (!schedule) return;
     const payload = schedule.payload || {};
+    const timeRanges = payload.timeRanges && payload.timeRanges.length
+      ? payload.timeRanges
+      : [{ startHour: payload.startHour ?? 0, startMinute: payload.startMinute ?? 0, endHour: 18, endMinute: 0 }];
     state.scheduleModal = {
       open: true,
       mode,
@@ -2896,8 +2927,7 @@ function openScheduleModal(mode, scheduleId) {
       form: {
         jobKey: schedule.job_key,
         taskType: schedule.task_type,
-        startHour: payload.startHour ?? 0,
-        startMinute: payload.startMinute ?? 0,
+        timeRanges,
         intervalMinutes: payload.intervalMinutes ?? 60,
         targetCount: payload.targetCount ?? 5,
         maxThreads: payload.maxThreads ?? 20
@@ -2917,8 +2947,7 @@ function closeScheduleModal() {
     form: {
       jobKey: '',
       taskType: 'source',
-      startHour: 9,
-      startMinute: 0,
+      timeRanges: [{ startHour: 9, startMinute: 0, endHour: 18, endMinute: 0 }],
       intervalMinutes: 60,
       targetCount: 5,
       maxThreads: 20
@@ -2936,10 +2965,43 @@ function updateScheduleModalForm(field, value) {
   state.scheduleModal.form[field] = value;
 }
 
-function handleScheduleModalTimeChange(timeStr) {
+function handleTaskTypeChange(value) {
+  state.scheduleModal.form.taskType = value;
+  render();
+}
+
+function handleTimeRangeChange(idx, type, timeStr) {
   const [hours, minutes] = timeStr.split(':').map(Number);
-  state.scheduleModal.form.startHour = hours || 0;
-  state.scheduleModal.form.startMinute = minutes || 0;
+  const ranges = state.scheduleModal.form.timeRanges;
+  if (!ranges[idx]) return;
+  if (type === 'start') {
+    ranges[idx].startHour = hours || 0;
+    ranges[idx].startMinute = minutes || 0;
+  } else {
+    ranges[idx].endHour = hours || 0;
+    ranges[idx].endMinute = minutes || 0;
+  }
+}
+
+function addTimeRange() {
+  state.scheduleModal.form.timeRanges.push({ startHour: 9, startMinute: 0, endHour: 18, endMinute: 0 });
+  render();
+}
+
+function removeTimeRange(idx) {
+  state.scheduleModal.form.timeRanges.splice(idx, 1);
+  render();
+}
+
+function formatPayloadTimeRanges(payload) {
+  const ranges = payload.timeRanges;
+  if (ranges && ranges.length) {
+    return ranges.map((r) =>
+      `${escapeHtml(formatScheduleTime(r.startHour, r.startMinute))}~${escapeHtml(formatScheduleTime(r.endHour, r.endMinute))}`
+    ).join('<br>');
+  }
+  const startTime = formatScheduleTime(payload.startHour, payload.startMinute);
+  return escapeHtml(startTime);
 }
 
 async function submitScheduleModal() {
@@ -2962,7 +3024,23 @@ async function submitScheduleModal() {
   render();
 
   try {
-    const cronDesc = `每天 ${padTime(form.startHour)}:${padTime(form.startMinute)} 起，每 ${form.intervalMinutes} 分钟`;
+    const timeRanges = form.timeRanges || [];
+    const firstRange = timeRanges[0] || {};
+    const rangeDesc = timeRanges.map((r) =>
+      `${padTime(r.startHour)}:${padTime(r.startMinute)}-${padTime(r.endHour)}:${padTime(r.endMinute)}`
+    ).join(', ');
+    const cronDesc = `每天 ${rangeDesc}，每 ${form.intervalMinutes} 分钟`;
+    const payload = {
+      startHour: firstRange.startHour ?? 9,
+      startMinute: firstRange.startMinute ?? 0,
+      timeRanges,
+      intervalMinutes: form.intervalMinutes
+    };
+    if (form.taskType === 'source') {
+      payload.targetCount = form.targetCount;
+    } else {
+      payload.maxThreads = form.maxThreads;
+    }
     await fetchJson('/api/schedules', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2971,13 +3049,7 @@ async function submitScheduleModal() {
         taskType: form.taskType,
         cronExpression: cronDesc,
         enabled: true,
-        payload: {
-          startHour: form.startHour,
-          startMinute: form.startMinute,
-          intervalMinutes: form.intervalMinutes,
-          targetCount: form.targetCount,
-          maxThreads: form.maxThreads
-        }
+        payload
       })
     });
 

@@ -955,6 +955,38 @@ input[type="time"]:focus {
   margin-top: 18px;
 }
 
+.form-field-full {
+  grid-column: 1 / -1;
+}
+
+.time-ranges-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.time-range-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.time-range-row input[type="time"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.time-range-separator {
+  color: var(--text-muted, #999);
+  flex-shrink: 0;
+}
+
+.time-range-label {
+  color: var(--text-secondary, #666);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
 .schedule-modal-header-actions {
   display: flex;
   gap: 8px;

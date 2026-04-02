@@ -129,8 +129,12 @@ class SchedulerService {
   }
 
   #shouldRunNow(schedule, now) {
+    const payload = schedule.payload || {};
+    const hasTimeRanges = payload.timeRanges && payload.timeRanges.length > 0;
+    const hasPayloadInterval = payload.intervalMinutes && payload.intervalMinutes > 0;
+
     const cron = schedule.cron_expression;
-    if (cron && cron.trim()) {
+    if (cron && cron.trim() && !hasTimeRanges && !hasPayloadInterval) {
       if (!matchesCronExpression(cron, now)) return false;
       if (schedule.last_run_at) {
         const elapsedMs = now.getTime() - new Date(schedule.last_run_at).getTime();
@@ -139,9 +143,6 @@ class SchedulerService {
       return true;
     }
 
-    const payload = schedule.payload || {};
-    const startHour = payload.startHour ?? 0;
-    const startMinute = payload.startMinute ?? 0;
     const intervalMinutes = payload.intervalMinutes ?? 0;
 
     if (!intervalMinutes || intervalMinutes <= 0) return false;
@@ -149,12 +150,25 @@ class SchedulerService {
     const currentHour = now.getHours();
     const currentMinute = now.getMinutes();
     const currentTotalMinutes = currentHour * 60 + currentMinute;
-    const startTotalMinutes = startHour * 60 + startMinute;
 
-    if (currentTotalMinutes < startTotalMinutes) return false;
+    const timeRanges = payload.timeRanges && payload.timeRanges.length
+      ? payload.timeRanges
+      : [{ startHour: payload.startHour ?? 0, startMinute: payload.startMinute ?? 0, endHour: 23, endMinute: 59 }];
 
-    const minutesSinceStart = currentTotalMinutes - startTotalMinutes;
-    if (minutesSinceStart % intervalMinutes !== 0) return false;
+    let inRange = false;
+    for (const range of timeRanges) {
+      const rangeStart = (range.startHour ?? 0) * 60 + (range.startMinute ?? 0);
+      const rangeEnd = (range.endHour ?? 23) * 60 + (range.endMinute ?? 59);
+      if (currentTotalMinutes >= rangeStart && currentTotalMinutes <= rangeEnd) {
+        const minutesSinceRangeStart = currentTotalMinutes - rangeStart;
+        if (minutesSinceRangeStart % intervalMinutes === 0) {
+          inRange = true;
+          break;
+        }
+      }
+    }
+
+    if (!inRange) return false;
 
     if (schedule.last_run_at) {
       const lastRun = new Date(schedule.last_run_at);
