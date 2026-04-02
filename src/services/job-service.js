@@ -110,7 +110,11 @@ class JobService {
               jd_text = excluded.jd_text,
               sync_metadata = excluded.sync_metadata,
               last_synced_at = excluded.last_synced_at,
-              hr_account_id = coalesce(jobs.hr_account_id, excluded.hr_account_id),
+              hr_account_id = case
+                when jobs.hr_account_id is null then excluded.hr_account_id
+                when exists (select 1 from hr_accounts where id = jobs.hr_account_id and status = 'active') then jobs.hr_account_id
+                else excluded.hr_account_id
+              end,
               updated_at = now()
           returning id
         `,

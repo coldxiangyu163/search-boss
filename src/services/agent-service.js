@@ -68,7 +68,11 @@ class AgentService {
         values ($1, $2, $3, 'pending', $4)
         on conflict (run_key) do update
         set mode = excluded.mode,
-            hr_account_id = coalesce(sourcing_runs.hr_account_id, excluded.hr_account_id),
+            hr_account_id = case
+              when sourcing_runs.hr_account_id is null then excluded.hr_account_id
+              when exists (select 1 from hr_accounts where id = sourcing_runs.hr_account_id and status = 'active') then sourcing_runs.hr_account_id
+              else excluded.hr_account_id
+            end,
             updated_at = now()
         returning id, run_key as "runKey", status
       `,
@@ -317,7 +321,11 @@ class AgentService {
               else job_candidates.last_outbound_at
             end,
             workflow_metadata = excluded.workflow_metadata,
-            hr_account_id = coalesce(job_candidates.hr_account_id, excluded.hr_account_id),
+            hr_account_id = case
+              when job_candidates.hr_account_id is null then excluded.hr_account_id
+              when exists (select 1 from hr_accounts where id = job_candidates.hr_account_id and status = 'active') then job_candidates.hr_account_id
+              else excluded.hr_account_id
+            end,
             updated_at = now()
         returning id
       `,
