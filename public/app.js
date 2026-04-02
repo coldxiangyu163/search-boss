@@ -2646,6 +2646,7 @@ function renderCandidateDetailDrawer() {
                 </div>
               ` : '<div class="empty-state">当前没有可展示的互动记录。</div>'}
             </section>
+            ${renderLlmEvaluationSection(item)}
             ${renderFullResumeSection(item)}
             <section class="candidate-detail-section">
               <div class="card-header">
@@ -2663,6 +2664,56 @@ function renderCandidateDetailDrawer() {
         ` : ''}
       </aside>
     </div>
+  `;
+}
+
+function renderLlmEvaluationSection(item) {
+  const meta = item.profile_metadata || {};
+  const decision = meta.decision;
+  if (!decision) return '';
+
+  const priority = meta.priority || '-';
+  const reasoning = meta.reasoning || '-';
+  const facts = meta.facts || {};
+
+  const isGreet = decision === 'greet';
+  const decisionLabel = isGreet ? '打招呼' : '跳过';
+  const decisionColor = isGreet ? '#16a34a' : '#dc2626';
+  const tierColors = { A: '#16a34a', B: '#2563eb', C: '#d97706' };
+  const tierColor = tierColors[priority] || '#6b7280';
+
+  const factsHtml = Object.keys(facts).length > 0
+    ? Object.entries(facts).map(([k, v]) =>
+        `<div style="display:flex;gap:8px;padding:4px 0;border-bottom:1px solid #f1f5f9;">
+          <span style="min-width:80px;color:#64748b;font-size:12px;">${escapeHtml(k)}</span>
+          <span style="font-size:13px;color:#334155;">${escapeHtml(String(v))}</span>
+        </div>`
+      ).join('')
+    : '<span style="color:#94a3b8;font-size:13px;">无</span>';
+
+  return `
+    <section class="candidate-detail-section">
+      <div class="card-header">
+        <div>
+          <p class="eyebrow">模型评估</p>
+          <h4 class="card-title job-detail-section-title">LLM 判断依据</h4>
+        </div>
+      </div>
+      <div style="display:flex;gap:12px;margin-bottom:12px;">
+        <span style="display:inline-flex;align-items:center;padding:4px 12px;border-radius:6px;font-size:13px;font-weight:600;color:#fff;background:${decisionColor};">${decisionLabel}</span>
+        <span style="display:inline-flex;align-items:center;padding:4px 12px;border-radius:6px;font-size:13px;font-weight:600;color:#fff;background:${tierColor};">优先级 ${escapeHtml(priority)}</span>
+      </div>
+      <div style="margin-bottom:12px;">
+        <p style="font-size:12px;color:#64748b;margin-bottom:4px;">判断理由</p>
+        <p style="font-size:13px;line-height:1.6;color:#334155;background:#f8f9fa;padding:10px 12px;border-radius:8px;border:1px solid #e2e8f0;">${escapeHtml(reasoning)}</p>
+      </div>
+      <div>
+        <p style="font-size:12px;color:#64748b;margin-bottom:4px;">关键信息</p>
+        <div style="background:#f8f9fa;padding:10px 12px;border-radius:8px;border:1px solid #e2e8f0;">
+          ${factsHtml}
+        </div>
+      </div>
+    </section>
   `;
 }
 
