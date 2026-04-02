@@ -1462,15 +1462,19 @@ async function sendChatMessage({
     throw new Error('boss_chat_message_text_required');
   }
 
-  // Step 1: Focus editor and clear existing content
-  const focusResult = await evaluateJson({
+  // Step 1: Focus editor, clear content, insert text via document.execCommand
+  const insertResult = await evaluateJson({
     cdpClient, targetId, urlPrefix,
     expression: `(() => {
       const selectors = [
         '.boss-chat-editor-input[contenteditable="true"]',
         '.boss-chat-editor-input',
         '.chat-editor [contenteditable="true"]',
+        '.chat-input [contenteditable="true"]',
+        '.message-editor [contenteditable="true"]',
+        '.chat-conversation [contenteditable="true"]',
         '[contenteditable="true"]',
+        'textarea',
       ];
       let editor = null;
       for (const sel of selectors) {
@@ -1479,104 +1483,103 @@ async function sendChatMessage({
       }
       if (!editor) return JSON.stringify({ ok: false, reason: 'boss_chat_editor_not_found' });
       editor.focus();
-      editor.textContent = '';
-      editor.dispatchEvent(new Event('input', { bubbles: true }));
-      return JSON.stringify({ ok: true });
-    })()`
-  });
-
-  if (!focusResult?.ok) {
-    throw new Error(focusResult?.reason || 'boss_chat_editor_not_found');
-  }
-
-  // Step 2: Insert text via CDP Input.insertText (works reliably in headless/Linux)
-  await cdpClient.dispatchInsertText({ targetId, urlPrefix, text });
-
-  // Trigger input event so Vue picks up the change
-  await evaluateJson({
-    cdpClient, targetId, urlPrefix,
-    expression: `(() => {
-      const selectors = [
-        '.boss-chat-editor-input[contenteditable="true"]',
-        '.boss-chat-editor-input',
-        '.chat-editor [contenteditable="true"]',
-        '[contenteditable="true"]',
-      ];
-      let editor = null;
-      for (const sel of selectors) {
-        const el = document.querySelector(sel);
-        if (el && el.offsetParent !== null) { editor = el; break; }
+      if (editor.tagName === 'TEXTAREA' || editor.tagName === 'INPUT') {
+        editor.value = ${JSON.stringify(text)};
+        editor.dispatchEvent(new Event('input', { bubbles: true }));
+      } else {
+        editor.textContent = '';
+        editor.focus();
+        document.execCommand('insertText', false, ${JSON.stringify(text)});
+        editor.dispatchEvent(new Event('input', { bubbles: true }));
       }
-      if (!editor) return JSON.stringify({ ok: false });
-      editor.dispatchEvent(new Event('input', { bubbles: true }));
-      return JSON.stringify({ ok: true, textLength: (editor.textContent || '').length });
+      return JSON.stringify({ ok: true, textLength: (editor.textContent || editor.value || '').length });
     })()`
   });
+
+  if (!insertResult?.ok) {
+    throw new Error(insertResult?.reason || 'boss_chat_editor_not_found');
+  }
 
   await randomDelay(500, 1_000);
 
-  // Capture editor text length before send attempt for verification
-  const preTextLength = await evaluateJson({
-    cdpClient, targetId, urlPrefix,
-    expression: `(() => {
-      const selectors = [
-        '.boss-chat-editor-input[contenteditable="true"]',
-        '.boss-chat-editor-input',
-        '.chat-editor [contenteditable="true"]',
-        '[contenteditable="true"]',
-      ];
-      for (const sel of selectors) {
-        const el = document.querySelector(sel);
-        if (el && el.offsetParent !== null) return JSON.stringify({ len: (el.textContent || '').length });
-      }
-      return JSON.stringify({ len: -1 });
-    })()`
-  });
-
-  // Step 3: Send via Enter key with full key sequence for Linux compatibility
+  // Step 2: Send via click on send button (more reliable than Enter key)
   let sent = false;
   try {
-    await cdpClient.dispatchKeyDown({ targetId, urlPrefix, key: 'Enter', code: 'Enter', keyCode: 13, type: 'rawKeyDown' });
-    await cdpClient.dispatchKeyDown({ targetId, urlPrefix, key: 'Enter', code: 'Enter', keyCode: 13, type: 'char' });
-    await cdpClient.dispatchKeyDown({ targetId, urlPrefix, key: 'Enter', code: 'Enter', keyCode: 13, type: 'keyUp' });
+    const clickResult = await evaluateJson({
+      cdpClient, targetId, urlPrefix,
+      expression: `(() => {
+        const btn = document.querySelector('.conversation-editor .submit')
+                 || document.querySelector('.submit-content .submit')
+                 || document.querySelector('.conversation-operate .submit');
+        if (btn && btn.offsetParent !== null) {
+          btn.click();
+          return JSON.stringify({ clicked: true });
+        }
+        return JSON.stringify({ clicked: false });
+      })()`
+    });
+    if (clickResult?.clicked) {
+      sent = true;
+    }
   } catch (_) {
-    // Enter key dispatch failed
+    // button click failed, will try fallback
   }
 
-  // Step 3b: Verify Enter actually cleared the editor (message was sent)
-  await randomDelay(500, 800);
-  const postTextLength = await evaluateJson({
-    cdpClient, targetId, urlPrefix,
-    expression: `(() => {
-      const selectors = [
-        '.boss-chat-editor-input[contenteditable="true"]',
-        '.boss-chat-editor-input',
-        '.chat-editor [contenteditable="true"]',
-        '[contenteditable="true"]',
-      ];
-      for (const sel of selectors) {
-        const el = document.querySelector(sel);
-        if (el && el.offsetParent !== null) return JSON.stringify({ len: (el.textContent || '').length });
-      }
-      return JSON.stringify({ len: -1 });
-    })()`
-  });
-
-  if (preTextLength?.len > 0 && postTextLength?.len === 0) {
-    sent = true;
-  }
-
-  // Step 4: Fallback — real mouse click on send button if Enter didn't work
+  // Step 2b: Fallback — real mouse click on send button
   if (!sent) {
     try {
-      await realClick({ cdpClient, targetId, urlPrefix, selector: '.conversation-editor .submit, .submit-content .submit' });
-    } catch (e) {
+      await realClick({ cdpClient, targetId, urlPrefix, selector: '.conversation-editor .submit, .submit-content .submit, .conversation-operate .submit' });
+      sent = true;
+    } catch (_) {
+      // real click also failed
+    }
+  }
+
+  // Step 2c: Fallback — click by text "发送"
+  if (!sent) {
+    try {
       await realClickByText({ cdpClient, targetId, urlPrefix, text: '发送' });
+      sent = true;
+    } catch (_) {
+      // text click also failed
+    }
+  }
+
+  // Step 3: Last resort — Enter key
+  if (!sent) {
+    try {
+      await cdpClient.dispatchKeyDown({ targetId, urlPrefix, key: 'Enter', code: 'Enter', keyCode: 13, type: 'rawKeyDown' });
+      await cdpClient.dispatchKeyDown({ targetId, urlPrefix, key: 'Enter', code: 'Enter', keyCode: 13, type: 'char' });
+      await cdpClient.dispatchKeyDown({ targetId, urlPrefix, key: 'Enter', code: 'Enter', keyCode: 13, type: 'keyUp' });
+      sent = true;
+    } catch (_) {
+      // Enter key dispatch failed
     }
   }
 
   await randomDelay(1_000, 2_000);
-  return { ok: true, sent: true, textLength: text.length, method: sent ? 'enter_key' : 'button_click' };
+
+  // Step 4: Verify editor was cleared (message sent successfully)
+  const postCheck = await evaluateJson({
+    cdpClient, targetId, urlPrefix,
+    expression: `(() => {
+      const selectors = [
+        '.boss-chat-editor-input[contenteditable="true"]',
+        '.boss-chat-editor-input',
+        '.chat-editor [contenteditable="true"]',
+        '[contenteditable="true"]',
+      ];
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (el && el.offsetParent !== null) return JSON.stringify({ len: (el.textContent || '').length });
+      }
+      return JSON.stringify({ len: -1 });
+    })()`
+  });
+
+  const verified = postCheck?.len === 0;
+  const method = sent ? (verified ? 'button_click' : 'button_click_unverified') : 'all_methods_failed';
+  return { ok: true, sent, verified, textLength: text.length, method };
 }
 
 async function clickRequestResume({
