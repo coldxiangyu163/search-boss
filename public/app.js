@@ -35,7 +35,8 @@ const state = {
       timeRanges: [{ startHour: 9, startMinute: 0, endHour: 18, endMinute: 0 }],
       intervalMinutes: 60,
       targetCount: 5,
-      maxThreads: 20
+      maxThreads: 20,
+      recommendTab: 'default'
     }
   },
   syncModal: {
@@ -586,6 +587,49 @@ async function triggerJobTask(jobKey, taskType) {
       eventType: 'schedule_triggered',
       stage: 'bootstrap',
       message: `${taskMeta.buttonLabel}已触发：${jobKey}`,
+      occurredAt: state.syncModal.startedAt
+    });
+    startSyncPolling();
+    await loadData();
+  } catch (error) {
+    state.syncStatus = `${taskMeta.buttonLabel}失败：${error.message}`;
+    state.syncModal.status = 'failed';
+    state.syncModal.error = error.message;
+    appendSyncEvent({
+      eventType: 'run_failed',
+      stage: 'complete',
+      message: state.syncStatus,
+      occurredAt: new Date().toISOString()
+    });
+    render();
+  } finally {
+    state.triggeringTaskKey = '';
+  }
+}
+
+async function triggerScheduleById(scheduleId, jobKey, taskType) {
+  const taskMeta = getTaskMeta(taskType);
+  const actionKey = `schedule:${scheduleId}`;
+
+  state.triggeringTaskKey = actionKey;
+  state.syncStatus = '';
+  openSyncModal(taskType);
+  render();
+
+  try {
+    const result = await fetchJson(
+      `/api/schedules/${encodeURIComponent(scheduleId)}/trigger`,
+      { method: 'POST' }
+    );
+
+    state.syncStatus = result.message || `${taskMeta.inlineSuccess}，职位 ${jobKey}`;
+    state.syncModal.runId = result.runId;
+    state.syncModal.status = result.status || 'running';
+    state.syncModal.startedAt = new Date().toISOString();
+    appendSyncEvent({
+      eventType: 'schedule_triggered',
+      stage: 'bootstrap',
+      message: `${taskMeta.buttonLabel}已触发（调度 #${scheduleId}）：${jobKey}`,
       occurredAt: state.syncModal.startedAt
     });
     startSyncPolling();
@@ -2082,7 +2126,7 @@ function renderJobs() {
             <th>已打招呼</th>
             <th>已回复</th>
             <th>已下载简历</th>
-            ${admin ? '' : '<th>手动触发</th>'}
+            ${admin ? '' : '<th>操作</th>'}
           </tr>
         </thead>
         <tbody>
@@ -2119,8 +2163,7 @@ function formatDateTime(value) {
 }
 
 function renderJobActions(job) {
-  const actionEnabled = isJobActionEnabled(job.status);
-  const disabledHint = '仅招聘中的职位支持寻源和拉取简历';
+  const hasAnySchedule = hasSchedule(job.job_key, 'source') || hasSchedule(job.job_key, 'followup');
 
   return `
     <div class="table-actions">
@@ -2131,18 +2174,10 @@ function renderJobActions(job) {
       >
         查看详情
       </button>
-      ${renderTaskTriggerButton(job.job_key, 'source', {
-        enabled: actionEnabled,
-        hint: actionEnabled
-          ? (hasSchedule(job.job_key, 'source') ? '已配置定时任务，也支持手动触发' : '未配置定时任务，当前按手动执行处理')
-          : disabledHint
-      })}
-      ${renderTaskTriggerButton(job.job_key, 'followup', {
-        enabled: actionEnabled,
-        hint: actionEnabled
-          ? (hasSchedule(job.job_key, 'followup') ? '已配置定时任务，也支持手动触发' : '未配置定时任务，当前按手动执行处理')
-          : disabledHint
-      })}
+      ${hasAnySchedule
+        ? '<span class="badge badge-success" title="已配置调度任务，前往自动化调度页执行">已配置调度</span>'
+        : '<span class="badge badge-warning" title="请到自动化调度页添加定时任务">未配置调度</span>'
+      }
     </div>
   `;
 }
@@ -2765,8 +2800,9 @@ function renderAutomation() {
               const timeRangesDisplay = formatPayloadTimeRanges(payload);
               const interval = payload.intervalMinutes ? `每 ${payload.intervalMinutes} 分钟` : '-';
               const jobName = getJobNameByKey(schedule.job_key);
+              const recommendLabel = (payload.recommendTab || 'default') === 'default' ? '默认推荐' : '最新推荐';
               const paramDisplay = schedule.task_type === 'source'
-                ? `寻源 ${payload.targetCount || '-'} 人`
+                ? `寻源 ${payload.targetCount || '-'} 人 · ${recommendLabel}`
                 : `回复 ${payload.maxThreads || '-'} 线程`;
               return `
                 <tr>
@@ -2788,6 +2824,14 @@ function renderAutomation() {
                   <td>${formatDateTime(schedule.last_run_at)}</td>
                   <td>
                     <div class="table-actions">
+                      <button
+                        class="button-secondary button-compact"
+                        onclick='triggerScheduleById(${schedule.id}, ${JSON.stringify(schedule.job_key)}, ${JSON.stringify(schedule.task_type)})'
+                        ${state.triggeringTaskKey === 'schedule:' + schedule.id ? 'disabled' : ''}
+                        title="使用该调度配置的参数立即执行一次"
+                      >
+                        ${state.triggeringTaskKey === 'schedule:' + schedule.id ? '执行中...' : '立即执行'}
+                      </button>
                       <button
                         class="button-secondary button-compact"
                         onclick='openScheduleModal("view", ${schedule.id})'
@@ -2954,6 +2998,24 @@ function renderScheduleModal() {
               />
             `}
           </label>
+          <div class="form-field">
+            <span class="form-label">推荐列表模式</span>
+            ${isView ? `
+              <div class="schedule-view-value">${(form.recommendTab || 'default') === 'default' ? '默认推荐' : '最新推荐'}</div>
+            ` : `
+              <div class="segment-control">
+                <input type="radio" name="recommendTab" id="rt-default" value="default"
+                  ${(form.recommendTab || 'default') === 'default' ? 'checked' : ''}
+                  onchange="updateScheduleModalForm('recommendTab', 'default')"
+                /><label for="rt-default">默认推荐</label>
+                <input type="radio" name="recommendTab" id="rt-latest" value="latest"
+                  ${form.recommendTab === 'latest' ? 'checked' : ''}
+                  onchange="updateScheduleModalForm('recommendTab', 'latest')"
+                /><label for="rt-latest">最新推荐</label>
+              </div>
+              <p class="form-hint">默认推荐：按 BOSS 系统推荐顺序浏览；最新推荐：切换到「最新」标签筛选。</p>
+            `}
+          </div>
           ` : `
           <label class="form-field">
             <span class="form-label">单次回复线程数</span>
@@ -3023,7 +3085,8 @@ function openScheduleModal(mode, scheduleId) {
         timeRanges: [{ startHour: 9, startMinute: 0, endHour: 18, endMinute: 0 }],
         intervalMinutes: 60,
         targetCount: 5,
-        maxThreads: 20
+        maxThreads: 20,
+        recommendTab: 'default'
       }
     };
   } else {
@@ -3045,7 +3108,8 @@ function openScheduleModal(mode, scheduleId) {
         timeRanges,
         intervalMinutes: payload.intervalMinutes ?? 60,
         targetCount: payload.targetCount ?? 5,
-        maxThreads: payload.maxThreads ?? 20
+        maxThreads: payload.maxThreads ?? 20,
+        recommendTab: payload.recommendTab || 'default'
       }
     };
   }
@@ -3065,7 +3129,8 @@ function closeScheduleModal() {
       timeRanges: [{ startHour: 9, startMinute: 0, endHour: 18, endMinute: 0 }],
       intervalMinutes: 60,
       targetCount: 5,
-      maxThreads: 20
+      maxThreads: 20,
+      recommendTab: 'default'
     }
   };
   render();
@@ -3153,6 +3218,7 @@ async function submitScheduleModal() {
     };
     if (form.taskType === 'source') {
       payload.targetCount = form.targetCount;
+      payload.recommendTab = form.recommendTab || 'default';
     } else {
       payload.maxThreads = form.maxThreads;
     }

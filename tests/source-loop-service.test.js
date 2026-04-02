@@ -302,7 +302,7 @@ test('SourceLoopService handles already-chatting candidates', async () => {
   assert.equal(result.stats.greeted, 2);
 });
 
-test('SourceLoopService always refreshes recommend initial url before processing', async () => {
+test('SourceLoopService always navigates with jobid and selects job', async () => {
   const bossCliRunner = createMockBossCliRunner({
     listResult: makeCandidateList([
       { geekId: 'geek-1', name: '张三' }
@@ -323,11 +323,15 @@ test('SourceLoopService always refreshes recommend initial url before processing
     candidateDelayMax: 0
   });
 
+  // Both default and latest mode should navigate with jobid and select job
   await service.run({ runId: 109, jobKey: '测试岗位_abc' });
 
   const navCall = bossCliRunner.calls.find((call) => call.command === 'navigateTo');
   assert.ok(navCall);
   assert.equal(navCall.url, 'https://www.zhipin.com/web/chat/recommend?jobid=enc-job-1');
+
+  const selectCalls = bossCliRunner.calls.filter((c) => c.command === 'selectRecommendJob');
+  assert.equal(selectCalls.length, 1);
 });
 
 test('SourceLoopService records checkpoint events', async () => {
@@ -490,6 +494,55 @@ test('SourceLoopService opens detail, scrolls full resume, then evaluates with L
   const candidateRecord = agentService.candidates[0];
   assert.equal(candidateRecord.metadata.evaluationMode, 'full_resume_detail');
   assert.ok(candidateRecord.metadata.fullResumeText);
+});
+
+test('SourceLoopService skips switchRecommendToLatest in default recommend mode', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    listResult: makeCandidateList([{ geekId: 'geek-1', name: '张三' }])
+  });
+
+  const agentService = createMockAgentService();
+  const llmEvaluator = createMockLlmEvaluator([
+    { action: 'greet', tier: 'A', reason: 'good', facts: {} }
+  ]);
+
+  const service = new SourceLoopService({
+    bossCliRunner,
+    agentService,
+    llmEvaluator,
+    targetCount: 1,
+    candidateDelayMin: 0,
+    candidateDelayMax: 0
+  });
+
+  // default mode (no recommendTab or recommendTab='default') should NOT call switchRecommendToLatest
+  await service.run({ runId: 110, jobKey: '测试岗位_abc' });
+  const latestCalls = bossCliRunner.calls.filter((c) => c.command === 'switchRecommendToLatest');
+  assert.equal(latestCalls.length, 0, 'default mode should not switch to latest');
+});
+
+test('SourceLoopService switches to latest tab when recommendTab is latest', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    listResult: makeCandidateList([{ geekId: 'geek-1', name: '张三' }])
+  });
+
+  const agentService = createMockAgentService();
+  const llmEvaluator = createMockLlmEvaluator([
+    { action: 'greet', tier: 'A', reason: 'good', facts: {} }
+  ]);
+
+  const service = new SourceLoopService({
+    bossCliRunner,
+    agentService,
+    llmEvaluator,
+    targetCount: 1,
+    candidateDelayMin: 0,
+    candidateDelayMax: 0
+  });
+
+  await service.run({ runId: 111, jobKey: '测试岗位_abc', recommendTab: 'latest' });
+  const latestCalls = bossCliRunner.calls.filter((c) => c.command === 'switchRecommendToLatest');
+  assert.equal(latestCalls.length, 1, 'latest mode should switch to latest tab');
 });
 
 // --- parseCardText tests ---

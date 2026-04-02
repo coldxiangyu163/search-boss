@@ -959,6 +959,43 @@ input[type="time"]:focus {
   grid-column: 1 / -1;
 }
 
+.segment-control {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.segment-control input[type="radio"] {
+  display: none;
+}
+
+.segment-control label {
+  padding: 6px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--muted);
+  transition: background 0.15s, color 0.15s;
+  user-select: none;
+  border-right: 1px solid var(--border);
+}
+
+.segment-control label:last-of-type {
+  border-right: none;
+}
+
+.segment-control input[type="radio"]:checked + label {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+}
+
+.form-hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
 .time-ranges-container {
   display: flex;
   flex-direction: column;

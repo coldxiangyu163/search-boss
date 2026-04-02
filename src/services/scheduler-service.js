@@ -352,6 +352,7 @@ class SchedulerService {
       if (taskType === 'source' && this.sourceLoopService) {
         const overrides = {};
         if (schedulePayload.targetCount) overrides.targetCount = schedulePayload.targetCount;
+        if (schedulePayload.recommendTab) overrides.recommendTab = schedulePayload.recommendTab;
         if (runnerOverride) overrides.bossCliRunner = runnerOverride;
         await this.sourceLoopService.run({ runId, jobKey, ...overrides });
         await this.#finalizeScheduledRun({ schedule, scheduledRunId, scheduledJobId });

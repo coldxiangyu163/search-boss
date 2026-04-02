@@ -47,13 +47,14 @@ class SourceLoopService {
     this.candidateDelayMax = candidateDelayMax;
   }
 
-  async run({ runId, jobKey, targetCount: overrideTargetCount, bossCliRunner: runnerOverride } = {}) {
+  async run({ runId, jobKey, targetCount: overrideTargetCount, recommendTab, bossCliRunner: runnerOverride } = {}) {
     const effectiveTargetCount = overrideTargetCount || this.targetCount;
+    const effectiveRecommendTab = recommendTab || 'default';
     const runner = runnerOverride || this.bossCliRunner;
-    return this.#runImpl({ runId, jobKey, effectiveTargetCount, runner });
+    return this.#runImpl({ runId, jobKey, effectiveTargetCount, effectiveRecommendTab, runner });
   }
 
-  async #runImpl({ runId, jobKey, effectiveTargetCount, runner }) {
+  async #runImpl({ runId, jobKey, effectiveTargetCount, effectiveRecommendTab, runner }) {
     const stats = {
       greeted: 0,
       skipped: 0,
@@ -72,7 +73,7 @@ class SourceLoopService {
       eventType: 'source_loop_started',
       stage: 'source_loop',
       message: 'deterministic source loop started',
-      payload: { targetCount: effectiveTargetCount, jobKey, mode: 'deterministic' }
+      payload: { targetCount: effectiveTargetCount, jobKey, mode: 'deterministic', recommendTab: effectiveRecommendTab }
     });
 
     // Phase 1: Bind browser target
@@ -163,14 +164,16 @@ class SourceLoopService {
       }
     }
 
-    // Phase 2c: Switch to "最新" tab for stable list without similar-geek interference
-    try {
-      const latestResult = await runner.switchRecommendToLatest({ runId });
-      if (!latestResult.alreadyActive) {
-        await new Promise((r) => setTimeout(r, 2_000));
+    // Phase 2c: Switch to "最新" tab only when configured (default: stay on recommend tab)
+    if (effectiveRecommendTab === 'latest') {
+      try {
+        const latestResult = await runner.switchRecommendToLatest({ runId });
+        if (!latestResult.alreadyActive) {
+          await new Promise((r) => setTimeout(r, 2_000));
+        }
+      } catch (error) {
+        // Non-fatal: proceed with current tab
       }
-    } catch (error) {
-      // Non-fatal: proceed with current tab
     }
 
     // Phase 2d: Install canvas fillText capture for resume reading
