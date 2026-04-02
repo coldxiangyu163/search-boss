@@ -2172,6 +2172,38 @@ function closeLiveView() {
   if (modal) modal.remove();
 }
 
+async function restartLiveViewBrowser() {
+  const btn = document.getElementById('live-view-restart-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '重启中...';
+  }
+  stopLiveViewPolling();
+  try {
+    const url = liveView.useHrEndpoint
+      ? '/api/browser/restart'
+      : `/api/admin/browser-instances/${liveView.instanceId}/restart`;
+    const resp = await fetchJson(url, { method: 'POST' });
+    if (resp.error) {
+      alert(resp.message || '重启失败');
+    } else {
+      liveView.error = '';
+      liveView.viewportWidth = 0;
+      liveView.viewportHeight = 0;
+    }
+  } catch (err) {
+    alert('重启失败: ' + err.message);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '重启浏览器';
+    }
+    if (liveView.open) {
+      startLiveViewPolling();
+    }
+  }
+}
+
 function startLiveViewPolling(intervalMs) {
   stopLiveViewPolling();
   liveView.pollInterval = intervalMs || 800;
@@ -2274,6 +2306,7 @@ function renderLiveViewModal() {
         </div>
         <div class="live-view-actions">
           <span class="live-view-dot"></span>
+          <button class="button-secondary" id="live-view-restart-btn" onclick="restartLiveViewBrowser()">重启浏览器</button>
           <button class="button-secondary" onclick="closeLiveView()">关闭</button>
         </div>
       </div>
@@ -3948,6 +3981,7 @@ function createSyncLiveOverlay() {
         </div>
         <div class="sync-live-browser-footer">
           <span class="live-view-hint">点击画面可操作远程浏览器</span>
+          <button class="button-secondary btn-sm" id="live-view-restart-btn" onclick="restartLiveViewBrowser()">重启浏览器</button>
         </div>
       </div>
       <div class="sync-live-logs">

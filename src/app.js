@@ -1319,6 +1319,80 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
     } catch (error) { next(error); }
   });
 
+  app.post('/api/admin/browser-instances/:id/restart', async (req, res, next) => {
+    try {
+      if (!req.user || !isAdminRole(req.user)) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      const bi = await pool?.query('select * from browser_instances where id = $1', [req.params.id]);
+      if (!bi.rows[0]) return res.status(404).json({ error: 'not_found' });
+      const instance = bi.rows[0];
+      if (instance.status === 'busy') {
+        return res.status(409).json({ error: 'instance_busy', message: '浏览器实例正在执行任务，请等待任务完成后再重启' });
+      }
+      await pool?.query("update browser_instances set status = 'offline', updated_at = now() where id = $1", [instance.id]);
+      const { ChromeLauncher } = require('./services/chrome-launcher');
+      const launcher = new ChromeLauncher({
+        cdpEndpoint: instance.cdp_endpoint,
+        chromePath: config.chromePath,
+        userDataDir: instance.user_data_dir,
+        downloadDir: instance.download_dir
+      });
+      try {
+        await launcher.restart();
+        await pool?.query("update browser_instances set status = 'idle', last_seen_at = now(), updated_at = now() where id = $1", [instance.id]);
+        res.json({ ok: true, message: '浏览器已重启' });
+      } catch (err) {
+        await pool?.query("update browser_instances set status = 'offline', updated_at = now() where id = $1", [instance.id]);
+        res.status(502).json({ error: 'restart_failed', message: '重启失败: ' + err.message });
+      }
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/browser/restart', async (req, res, next) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: 'unauthorized' });
+      }
+      const hrAccountId = req.user.hr_account_id || req.user.hrAccountId;
+      if (!hrAccountId) {
+        return res.status(400).json({ error: 'no_hr_account', message: '当前用户未绑定 HR 账号' });
+      }
+      const bi = await pool?.query(`
+        select bi.id, bi.cdp_endpoint, bi.user_data_dir, bi.download_dir, bi.status
+        from browser_instances bi
+        join boss_accounts ba on ba.id = bi.boss_account_id
+        where ba.hr_account_id = $1
+          and ba.status = 'active'
+        order by bi.last_seen_at desc nulls last
+        limit 1
+      `, [hrAccountId]);
+      if (!bi.rows[0]) {
+        return res.status(404).json({ error: 'no_browser_instance', message: '未找到可用的浏览器实例' });
+      }
+      const instance = bi.rows[0];
+      if (instance.status === 'busy') {
+        return res.status(409).json({ error: 'instance_busy', message: '浏览器正在执行任务，请等待任务完成后再重启' });
+      }
+      await pool?.query("update browser_instances set status = 'offline', updated_at = now() where id = $1", [instance.id]);
+      const { ChromeLauncher } = require('./services/chrome-launcher');
+      const launcher = new ChromeLauncher({
+        cdpEndpoint: instance.cdp_endpoint,
+        chromePath: config.chromePath,
+        userDataDir: instance.user_data_dir,
+        downloadDir: instance.download_dir
+      });
+      try {
+        await launcher.restart();
+        await pool?.query("update browser_instances set status = 'idle', last_seen_at = now(), updated_at = now() where id = $1", [instance.id]);
+        res.json({ ok: true, message: '浏览器已重启' });
+      } catch (err) {
+        await pool?.query("update browser_instances set status = 'offline', updated_at = now() where id = $1", [instance.id]);
+        res.status(502).json({ error: 'restart_failed', message: '重启失败: ' + err.message });
+      }
+    } catch (error) { next(error); }
+  });
+
   app.use((error, _req, res, _next) => {
     if (error.message === 'boss_encrypt_geek_id_missing') {
       res.status(400).json({

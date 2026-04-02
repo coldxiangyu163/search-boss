@@ -126,6 +126,41 @@ class ChromeLauncher {
     return this._launch();
   }
 
+  async restart() {
+    console.log(`[chrome-launcher] Restarting Chrome at ${this.cdpEndpoint}...`);
+    await this._killViaCdp();
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    this._ensureDisplay();
+    return this._launch();
+  }
+
+  async _killViaCdp() {
+    try {
+      await fetch(`${this.cdpEndpoint}/json/close`, {
+        signal: AbortSignal.timeout(3000)
+      }).catch(() => {});
+      const response = await fetch(`${this.cdpEndpoint}/json`, {
+        signal: AbortSignal.timeout(3000)
+      });
+      const targets = await response.json();
+      for (const target of targets) {
+        if (target.id) {
+          await fetch(`${this.cdpEndpoint}/json/close/${target.id}`, {
+            signal: AbortSignal.timeout(2000)
+          }).catch(() => {});
+        }
+      }
+    } catch {}
+    if (this._process) {
+      try { this._process.kill(); } catch {}
+      this._process = null;
+    }
+    try {
+      const { execFileSync } = require('node:child_process');
+      execFileSync('fuser', ['-k', `${this.port}/tcp`], { stdio: 'ignore', timeout: 3000 });
+    } catch {}
+  }
+
   _ensureDisplay() {
     if (!needsVirtualDisplay()) {
       if (os.platform() === 'linux' && process.env.DISPLAY) {
@@ -179,7 +214,8 @@ class ChromeLauncher {
       '--disable-background-timer-throttling',
       '--disable-backgrounding-occluded-windows',
       '--disable-renderer-backgrounding',
-      '--disable-features=CalculateNativeWinOcclusion'
+      '--disable-features=CalculateNativeWinOcclusion',
+      '--remote-allow-origins=*'
     ];
 
     if (os.platform() === 'linux') {
