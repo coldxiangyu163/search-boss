@@ -428,8 +428,9 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
   });
 
   app.get('/api/task-lock', (_req, res) => {
-    const holder = services.taskLock?.getHolder() || null;
-    res.json({ busy: holder !== null, holder });
+    const holders = services.taskLock?.getAllHolders?.() || [];
+    const holder = holders[0] || null;
+    res.json({ busy: holders.length > 0, holder, holders });
   });
 
   app.get('/api/schedules', async (req, res, next) => {
@@ -974,6 +975,52 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
       if (!result.rows[0]) {
         return res.status(404).json({ error: 'hr_account_not_found' });
       }
+
+      // 级联停用：HR 停用时，关联的 BOSS 账号和浏览器实例也应停用
+      if (status === 'inactive') {
+        const bossIds = await pool?.query(
+          "select id from boss_accounts where hr_account_id = $1 and status = 'active'",
+          [req.params.id]
+        );
+        if (bossIds.rows.length > 0) {
+          await pool?.query(
+            "update boss_accounts set status = 'inactive', updated_at = now() where hr_account_id = $1 and status = 'active'",
+            [req.params.id]
+          );
+          const ids = bossIds.rows.map(r => r.id);
+          await pool?.query(
+            `update browser_instances set status = 'disabled', current_run_id = null, updated_at = now()
+             where boss_account_id = any($1) and status != 'disabled'`,
+            [ids]
+          );
+        }
+        // 停用关联的调度任务
+        await pool?.query(
+          "update scheduled_jobs set enabled = false, updated_at = now() where hr_account_id = $1 and enabled = true",
+          [req.params.id]
+        );
+      }
+
+      // 级联启用：HR 重新启用时，恢复关联的 BOSS 账号和浏览器实例
+      if (status === 'active') {
+        await pool?.query(
+          "update boss_accounts set status = 'active', updated_at = now() where hr_account_id = $1 and status = 'inactive'",
+          [req.params.id]
+        );
+        const bossIds = await pool?.query(
+          "select id from boss_accounts where hr_account_id = $1",
+          [req.params.id]
+        );
+        if (bossIds.rows.length > 0) {
+          const ids = bossIds.rows.map(r => r.id);
+          await pool?.query(
+            `update browser_instances set status = 'idle', updated_at = now()
+             where boss_account_id = any($1) and status = 'disabled'`,
+            [ids]
+          );
+        }
+      }
+
       res.json({ item: result.rows[0] });
     } catch (error) {
       next(error);

@@ -21,12 +21,11 @@ class DashboardService {
         from job_candidates
         ${resumeFilter}
       `),
-      this.pool.query(`
-        select metrics, quotas, scraped_at
-        from boss_recruit_snapshots
-        where snapshot_date = current_date
-        limit 1
-      `)
+      this.pool.query(
+        hrAccountId
+          ? `select metrics, quotas, scraped_at from boss_recruit_snapshots where snapshot_date = current_date and hr_account_id = ${Number(hrAccountId)} limit 1`
+          : `select metrics, quotas, scraped_at from boss_recruit_snapshots where snapshot_date = current_date order by scraped_at desc limit 1`
+      )
     ]);
 
     const recruit = recruitResult.rows[0] || null;
@@ -72,7 +71,7 @@ class DashboardService {
       throw new Error('boss_recruit_data_missing');
     }
 
-    return this._saveSnapshot({ metrics, quotas, scrapedAt });
+    return this._saveSnapshot({ metrics, quotas, scrapedAt, hrAccountId });
   }
 
   async _fetchAndSync({ hrAccountId } = {}) {
@@ -97,7 +96,8 @@ class DashboardService {
       return this._saveSnapshot({
         metrics: scrapeResult.metrics,
         quotas: scrapeResult.quotas,
-        scrapedAt: scrapeResult.scrapedAt
+        scrapedAt: scrapeResult.scrapedAt,
+        hrAccountId
       });
     } finally {
       if (instanceId && this.browserInstanceManager) {
@@ -106,18 +106,18 @@ class DashboardService {
     }
   }
 
-  async _saveSnapshot({ metrics, quotas, scrapedAt }) {
+  async _saveSnapshot({ metrics, quotas, scrapedAt, hrAccountId }) {
     const result = await this.pool.query(
       `
-        insert into boss_recruit_snapshots (snapshot_date, metrics, quotas, scraped_at)
-        values (current_date, $1, $2, $3)
-        on conflict (snapshot_date) do update
+        insert into boss_recruit_snapshots (snapshot_date, metrics, quotas, scraped_at, hr_account_id)
+        values (current_date, $1, $2, $3, $4)
+        on conflict (snapshot_date, coalesce(hr_account_id, 0)) do update
         set metrics = excluded.metrics,
             quotas = excluded.quotas,
             scraped_at = excluded.scraped_at
         returning id, snapshot_date
       `,
-      [metrics || {}, quotas || {}, scrapedAt || new Date().toISOString()]
+      [metrics || {}, quotas || {}, scrapedAt || new Date().toISOString(), hrAccountId || null]
     );
 
     return {

@@ -20,16 +20,12 @@ class FollowupLoopService {
   }
 
   async run({ runId, jobKey, mode = 'followup', maxThreads: overrideMaxThreads, bossCliRunner: runnerOverride } = {}) {
-    const savedRunner = this.bossCliRunner;
-    if (runnerOverride) this.bossCliRunner = runnerOverride;
-    try {
-    return await this.#runImpl({ runId, jobKey, mode, effectiveMaxThreads: overrideMaxThreads || this.maxThreads });
-    } finally {
-      this.bossCliRunner = savedRunner;
-    }
+    const runner = runnerOverride || this.bossCliRunner;
+    const effectiveMaxThreads = overrideMaxThreads || this.maxThreads;
+    return this.#runImpl({ runId, jobKey, mode, effectiveMaxThreads, runner });
   }
 
-  async #runImpl({ runId, jobKey, mode, effectiveMaxThreads }) {
+  async #runImpl({ runId, jobKey, mode, effectiveMaxThreads, runner }) {
     const stats = {
       processed: 0,
       replied: 0,
@@ -53,7 +49,7 @@ class FollowupLoopService {
 
     // Phase 1: Bind browser target (prefer chat page)
     try {
-      await this.bossCliRunner.bindTarget({
+      await runner.bindTarget({
         runId,
         mode,
         jobKey,
@@ -74,14 +70,14 @@ class FollowupLoopService {
 
     // Phase 1b: Bring tab to front to prevent Chrome background throttling
     try {
-      await this.bossCliRunner.bringToFront({ runId });
+      await runner.bringToFront({ runId });
     } catch (error) {
       // Non-fatal
     }
 
     // Phase 2: Always reset to chat initial URL to clear stale thread state
     try {
-      await this.bossCliRunner.navigateTo({
+      await runner.navigateTo({
         runId,
         url: 'https://www.zhipin.com/web/chat/index'
       });
@@ -93,7 +89,7 @@ class FollowupLoopService {
     // Phase 3: Select job filter
     try {
       const jobNameShort = extractJobNameShort(jobContext.jobName);
-      await this.bossCliRunner.selectChatJobFilter({ runId, jobName: jobNameShort });
+      await runner.selectChatJobFilter({ runId, jobName: jobNameShort });
 
       await this.#recordEvent(runId, {
         eventId: `followup-loop-job-filtered:${runId}`,
@@ -109,7 +105,7 @@ class FollowupLoopService {
 
     // Phase 4: Select unread filter
     try {
-      await this.bossCliRunner.selectChatUnreadFilter({ runId });
+      await runner.selectChatUnreadFilter({ runId });
 
       await this.#recordEvent(runId, {
         eventId: `followup-loop-unread-filtered:${runId}`,
@@ -132,7 +128,7 @@ class FollowupLoopService {
     // Phase 5: Read visible unread list from DOM
     let threads;
     try {
-      const listResult = await this.bossCliRunner.inspectVisibleChatList({
+      const listResult = await runner.inspectVisibleChatList({
         runId,
         limit: effectiveMaxThreads
       });
@@ -150,7 +146,7 @@ class FollowupLoopService {
         message: 'no unread threads visible',
         payload: { jobKey }
       });
-      await this.#resetChatPageAfterCompletion({ runId });
+      await this.#resetChatPageAfterCompletion({ runId, runner });
       await this.agentService.completeRun({
         runId,
         payload: { ...stats, reason: 'no_unread_threads' }
@@ -185,7 +181,8 @@ class FollowupLoopService {
         jobContext,
         thread,
         mode,
-        stats
+        stats,
+        runner
       });
 
       stats.processed += 1;
@@ -210,18 +207,18 @@ class FollowupLoopService {
       payload: summary
     });
 
-    await this.#resetChatPageAfterCompletion({ runId });
+    await this.#resetChatPageAfterCompletion({ runId, runner });
     await this.agentService.completeRun({ runId, payload: summary });
 
     return { ok: true, stats: summary };
   }
 
-  async #processOneThread({ runId, jobKey, jobContext, thread, mode, stats }) {
+  async #processOneThread({ runId, jobKey, jobContext, thread, mode, stats, runner }) {
     const threadId = thread.dataId || `idx-${thread.index}`;
 
     // Step 1: Click the row in the left-side chat list
     try {
-      await this.bossCliRunner.clickChatRow({
+      await runner.clickChatRow({
         runId,
         index: thread.index,
         dataId: thread.dataId
@@ -241,7 +238,7 @@ class FollowupLoopService {
     // Step 2: Read the encryptUid from the active thread state (right panel)
     let threadState;
     try {
-      threadState = await this.bossCliRunner.inspectChatThreadState({ runId });
+      threadState = await runner.inspectChatThreadState({ runId });
     } catch (error) {
       stats.errors += 1;
       return;
@@ -274,12 +271,12 @@ class FollowupLoopService {
     }
 
     // Step 2c: Check and accept resume consent if pending
-    const consentResult = await this.#handleResumeConsentIfNeeded({ runId, encryptUid, candidateName: thread.name, stats });
+    const consentResult = await this.#handleResumeConsentIfNeeded({ runId, encryptUid, candidateName: thread.name, stats, runner });
 
     // Step 3: Check attachment state (after consent handling so newly appeared attachments are detected)
     let attachmentState;
     try {
-      attachmentState = await this.bossCliRunner.inspectAttachmentState({ runId });
+      attachmentState = await runner.inspectAttachmentState({ runId });
     } catch (error) {
       attachmentState = { present: false, buttonEnabled: false, fileName: '' };
     }
@@ -295,7 +292,8 @@ class FollowupLoopService {
           encryptUid,
           candidateName: thread.name,
           candidateId,
-          stats
+          stats,
+          runner
         });
       } else {
         await this.#recordEvent(runId, {
@@ -312,7 +310,7 @@ class FollowupLoopService {
     // Step 5: No attachment — read visible messages from the open right panel
     let messages;
     try {
-      const msgResult = await this.bossCliRunner.readOpenThreadMessages({ runId });
+      const msgResult = await runner.readOpenThreadMessages({ runId });
       messages = Array.isArray(msgResult?.messages) ? msgResult.messages : [];
     } catch (error) {
       stats.errors += 1;
@@ -400,12 +398,12 @@ class FollowupLoopService {
         await this.#executeSendMessage({
           runId, jobKey, encryptUid,
           candidateName: thread.name, candidateId,
-          text: decision.replyText, stats
+          text: decision.replyText, stats, runner
         });
       }
       await this.#executeResumeRequest({
         runId, jobKey, encryptUid,
-        candidateName: thread.name, candidateId, stats
+        candidateName: thread.name, candidateId, stats, runner
       });
       return;
     }
@@ -415,7 +413,7 @@ class FollowupLoopService {
       await this.#executeSendMessage({
         runId, jobKey, encryptUid,
         candidateName: thread.name, candidateId,
-        text: decision.replyText, stats
+        text: decision.replyText, stats, runner
       });
     }
 
@@ -423,7 +421,7 @@ class FollowupLoopService {
     if (canRequestResume && !attachmentState.present) {
       await this.#executeResumeRequest({
         runId, jobKey, encryptUid,
-        candidateName: thread.name, candidateId, stats
+        candidateName: thread.name, candidateId, stats, runner
       });
     }
   }
@@ -464,10 +462,10 @@ class FollowupLoopService {
     return parseChatDecision(raw);
   }
 
-  async #handleResumeConsentIfNeeded({ runId, encryptUid, candidateName, stats }) {
+  async #handleResumeConsentIfNeeded({ runId, encryptUid, candidateName, stats, runner }) {
     let consentState;
     try {
-      consentState = await this.bossCliRunner.inspectResumeConsentState({ runId });
+      consentState = await runner.inspectResumeConsentState({ runId });
     } catch (error) {
       return { accepted: false };
     }
@@ -477,7 +475,7 @@ class FollowupLoopService {
     }
 
     try {
-      const result = await this.bossCliRunner.acceptResumeConsent({ runId });
+      const result = await runner.acceptResumeConsent({ runId });
       stats.consentAccepted += 1;
 
       await this.#recordEvent(runId, {
@@ -506,12 +504,12 @@ class FollowupLoopService {
     }
   }
 
-  async #executeResumeDownload({ runId, jobKey, encryptUid, candidateName, candidateId, stats }) {
+  async #executeResumeDownload({ runId, jobKey, encryptUid, candidateName, candidateId, stats, runner }) {
 
     // Step 1: Get preview metadata
     let previewMeta;
     try {
-      previewMeta = await this.bossCliRunner.getResumePreviewMeta({ runId });
+      previewMeta = await runner.getResumePreviewMeta({ runId });
     } catch (error) {
       stats.errors += 1;
       await this.#recordEvent(runId, {
@@ -547,7 +545,7 @@ class FollowupLoopService {
     const outputPath = path.join(this.projectRoot, 'resumes', jobKey, fileName);
     let downloadResult;
     try {
-      downloadResult = await this.bossCliRunner.resumeDownload({ runId, outputPath });
+      downloadResult = await runner.resumeDownload({ runId, outputPath });
     } catch (error) {
       stats.errors += 1;
       await this.#recordEvent(runId, {
@@ -558,7 +556,7 @@ class FollowupLoopService {
         payload: { error: error.message, encryptUid }
       });
       // Close resume detail page even on download failure
-      await this.#closeResumeDetailSafe(runId, encryptUid);
+      await this.#closeResumeDetailSafe(runId, encryptUid, runner);
       return;
     }
 
@@ -572,7 +570,7 @@ class FollowupLoopService {
         message: `resume download incomplete for ${candidateName}`,
         payload: { encryptUid, downloadResult }
       });
-      await this.#closeResumeDetailSafe(runId, encryptUid);
+      await this.#closeResumeDetailSafe(runId, encryptUid, runner);
       return;
     }
 
@@ -628,12 +626,12 @@ class FollowupLoopService {
     });
 
     // Step 7: Close resume detail page after successful download
-    await this.#closeResumeDetailSafe(runId, encryptUid);
+    await this.#closeResumeDetailSafe(runId, encryptUid, runner);
   }
 
-  async #executeSendMessage({ runId, jobKey, encryptUid, candidateName, candidateId, text, stats }) {
+  async #executeSendMessage({ runId, jobKey, encryptUid, candidateName, candidateId, text, stats, runner }) {
     try {
-      await this.bossCliRunner.sendChatMessage({ runId, text });
+      await runner.sendChatMessage({ runId, text });
       stats.replied += 1;
 
       await this.agentService.recordMessage({
@@ -653,9 +651,9 @@ class FollowupLoopService {
     }
   }
 
-  async #executeResumeRequest({ runId, jobKey, encryptUid, candidateName, candidateId, stats }) {
+  async #executeResumeRequest({ runId, jobKey, encryptUid, candidateName, candidateId, stats, runner }) {
     try {
-      const resumeResult = await this.bossCliRunner.clickRequestResume({ runId });
+      const resumeResult = await runner.clickRequestResume({ runId });
       const confirmed = resumeResult?.confirmed === true;
       stats.resumeRequested += 1;
 
@@ -743,9 +741,9 @@ class FollowupLoopService {
     }
   }
 
-  async #closeResumeDetailSafe(runId, encryptUid) {
+  async #closeResumeDetailSafe(runId, encryptUid, runner) {
     try {
-      await this.bossCliRunner.closeResumeDetail({ runId });
+      await runner.closeResumeDetail({ runId });
     } catch (error) {
       await this.#recordEvent(runId, {
         eventId: `followup-loop-close-detail-warn:${runId}:${encryptUid}`,
@@ -757,9 +755,9 @@ class FollowupLoopService {
     }
   }
 
-  async #resetChatPageAfterCompletion({ runId }) {
+  async #resetChatPageAfterCompletion({ runId, runner }) {
     try {
-      await this.bossCliRunner.navigateTo({
+      await runner.navigateTo({
         runId,
         url: 'https://www.zhipin.com/web/chat/index'
       });

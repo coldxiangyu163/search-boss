@@ -257,18 +257,22 @@ class BossCdpClient {
     });
   }
 
-  async dispatchKeyDown({ targetId, urlPrefix, key, code, keyCode, nativeVirtualKeyCode, windowsVirtualKeyCode, type = 'keyDown' } = {}) {
+  async dispatchKeyDown({ targetId, urlPrefix, key, code, keyCode, nativeVirtualKeyCode, windowsVirtualKeyCode, type = 'keyDown', text } = {}) {
+    const params = {
+      type,
+      key,
+      code,
+      nativeVirtualKeyCode: nativeVirtualKeyCode || keyCode || 0,
+      windowsVirtualKeyCode: windowsVirtualKeyCode || keyCode || 0
+    };
+    if (type === 'char' && text !== undefined) {
+      params.text = text;
+    }
     await this.sendCommand({
       targetId,
       urlPrefix,
       method: 'Input.dispatchKeyEvent',
-      params: {
-        type,
-        key,
-        code,
-        nativeVirtualKeyCode: nativeVirtualKeyCode || keyCode || 0,
-        windowsVirtualKeyCode: windowsVirtualKeyCode || keyCode || 0
-      }
+      params
     });
   }
 

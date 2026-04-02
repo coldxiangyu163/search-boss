@@ -49,16 +49,11 @@ class SourceLoopService {
 
   async run({ runId, jobKey, targetCount: overrideTargetCount, bossCliRunner: runnerOverride } = {}) {
     const effectiveTargetCount = overrideTargetCount || this.targetCount;
-    const savedRunner = this.bossCliRunner;
-    if (runnerOverride) this.bossCliRunner = runnerOverride;
-    try {
-    return await this.#runImpl({ runId, jobKey, effectiveTargetCount });
-    } finally {
-      this.bossCliRunner = savedRunner;
-    }
+    const runner = runnerOverride || this.bossCliRunner;
+    return this.#runImpl({ runId, jobKey, effectiveTargetCount, runner });
   }
 
-  async #runImpl({ runId, jobKey, effectiveTargetCount }) {
+  async #runImpl({ runId, jobKey, effectiveTargetCount, runner }) {
     const stats = {
       greeted: 0,
       skipped: 0,
@@ -82,7 +77,7 @@ class SourceLoopService {
     // Phase 1: Bind browser target
     let bindResult;
     try {
-      bindResult = await this.bossCliRunner.bindTarget({
+      bindResult = await runner.bindTarget({
         runId,
         mode: 'source',
         jobKey,
@@ -106,14 +101,14 @@ class SourceLoopService {
 
     // Phase 1b: Bring tab to front to prevent Chrome background throttling
     try {
-      await this.bossCliRunner.bringToFront({ runId });
+      await runner.bringToFront({ runId });
     } catch (error) {
       // Non-fatal
     }
 
     // Phase 1c: Always reset to recommend initial URL to clear stale tab state
     try {
-      await this.bossCliRunner.navigateTo({
+      await runner.navigateTo({
         runId,
         url: buildRecommendInitialUrl(jobContext.bossEncryptJobId)
       });
@@ -127,7 +122,7 @@ class SourceLoopService {
     let iframeReady = false;
     while (Date.now() < stateDeadline) {
       try {
-        const state = await this.bossCliRunner.inspectRecommendState({ runId });
+        const state = await runner.inspectRecommendState({ runId });
         if (state?.ok) { iframeReady = true; break; }
       } catch (error) {
         // retry
@@ -146,7 +141,7 @@ class SourceLoopService {
       let selectDone = false;
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
-          const selectResult = await this.bossCliRunner.selectRecommendJob({ runId, jobName: jobContext.jobName });
+          const selectResult = await runner.selectRecommendJob({ runId, jobName: jobContext.jobName });
           if (!selectResult.alreadySelected) {
             await new Promise((r) => setTimeout(r, 3_000));
           }
@@ -169,7 +164,7 @@ class SourceLoopService {
 
     // Phase 2c: Switch to "最新" tab for stable list without similar-geek interference
     try {
-      const latestResult = await this.bossCliRunner.switchRecommendToLatest({ runId });
+      const latestResult = await runner.switchRecommendToLatest({ runId });
       if (!latestResult.alreadyActive) {
         await new Promise((r) => setTimeout(r, 2_000));
       }
@@ -180,7 +175,7 @@ class SourceLoopService {
     // Phase 3: Read candidate list and evaluate each via LLM, greet through popup
     let listResult;
     try {
-      listResult = await this.bossCliRunner.inspectRecommendList({ runId, limit: effectiveTargetCount + this.maxSkips });
+      listResult = await runner.inspectRecommendList({ runId, limit: effectiveTargetCount + this.maxSkips });
     } catch (error) {
       await this.#failRun(runId, `recommend_list_failed:${error.message}`, stats);
       return { ok: false, stats, reason: 'recommend_list_unavailable' };
@@ -207,7 +202,8 @@ class SourceLoopService {
         jobRequirement,
         customRequirement,
         candidate,
-        stats
+        stats,
+        runner
       });
 
       stats.totalEvaluated += 1;
@@ -251,7 +247,7 @@ class SourceLoopService {
     return { ok: true, stats: summary };
   }
 
-  async #processCandidate({ runId, jobKey, jobRequirement, customRequirement, candidate, stats }) {
+  async #processCandidate({ runId, jobKey, jobRequirement, customRequirement, candidate, stats, runner }) {
     const bossEncryptGeekId = candidate.geekId;
     const candidateText = candidate.text || '';
     const parsed = parseCardText(candidateText);
@@ -370,7 +366,8 @@ class SourceLoopService {
         bossEncryptGeekId,
         candidateName,
         candidate,
-        stats
+        stats,
+        runner
       });
 
       if (greetResult.greeted) {
@@ -392,7 +389,7 @@ class SourceLoopService {
     }
   }
 
-  async #executeGreetViaPopup({ runId, jobKey, bossEncryptGeekId, candidateName, candidate, stats }) {
+  async #executeGreetViaPopup({ runId, jobKey, bossEncryptGeekId, candidateName, candidate, stats, runner }) {
     // Step 1: Click card to open detail popup
     if (!candidate?.cardX || !candidate?.cardY) {
       await this.#recordEvent(runId, {
@@ -409,7 +406,7 @@ class SourceLoopService {
     let clickX = candidate.cardX;
     let clickY = candidate.cardY;
     try {
-      const scrollResult = await this.bossCliRunner.scrollCardIntoView({
+      const scrollResult = await runner.scrollCardIntoView({
         runId,
         cardIndex: candidate.index
       });
@@ -422,7 +419,7 @@ class SourceLoopService {
     }
 
     try {
-      await this.bossCliRunner.clickAtCoords({ runId, x: clickX, y: clickY });
+      await runner.clickAtCoords({ runId, x: clickX, y: clickY });
     } catch (error) {
       // Non-fatal: popup may still have opened
     }
@@ -433,13 +430,13 @@ class SourceLoopService {
 
     // Step 2: Click greet button inside the popup
     try {
-      const greetResult = await this.bossCliRunner.clickRecommendGreet({ runId });
+      const greetResult = await runner.clickRecommendGreet({ runId });
       if (greetResult.alreadyChatting) {
-        try { await this.bossCliRunner.closeRecommendPopup({ runId }); } catch (_) {}
+        try { await runner.closeRecommendPopup({ runId }); } catch (_) {}
         return { greeted: false, alreadyChatting: true };
       }
     } catch (error) {
-      try { await this.bossCliRunner.closeRecommendPopup({ runId }); } catch (_) {}
+      try { await runner.closeRecommendPopup({ runId }); } catch (_) {}
       await this.#recordEvent(runId, {
         eventId: `source-loop-greet-error:${runId}:${bossEncryptGeekId}`,
         eventType: 'source_loop_error',
@@ -451,7 +448,7 @@ class SourceLoopService {
     }
 
     // Step 3: Close popup after greeting
-    try { await this.bossCliRunner.closeRecommendPopup({ runId }); } catch (_) {}
+    try { await runner.closeRecommendPopup({ runId }); } catch (_) {}
 
     // Record greet action
     const dedupeKey = `greet:${jobKey}:${bossEncryptGeekId}`;

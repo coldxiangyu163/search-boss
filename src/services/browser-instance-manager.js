@@ -7,7 +7,7 @@ class BrowserInstanceManager {
     this._runners = new Map();
   }
 
-  async acquireRunner({ hrAccountId }) {
+  async acquireRunner({ hrAccountId, runId }) {
     if (!hrAccountId) {
       return { runner: this.fallbackRunner, instanceId: null };
     }
@@ -18,10 +18,8 @@ class BrowserInstanceManager {
       join boss_accounts ba on ba.id = bi.boss_account_id
       where ba.hr_account_id = $1
         and ba.status = 'active'
-        and bi.status in ('idle', 'busy')
-      order by
-        case bi.status when 'idle' then 0 else 1 end,
-        bi.last_seen_at desc nulls last
+        and bi.status = 'idle'
+      order by bi.last_seen_at desc nulls last
       limit 1
     `, [hrAccountId]);
 
@@ -30,12 +28,12 @@ class BrowserInstanceManager {
       if (this.fallbackRunner) {
         return { runner: this.fallbackRunner, instanceId: null };
       }
-      throw new Error('no_browser_instance_available');
+      throw new Error('no_idle_browser_instance_available');
     }
 
     await this.pool.query(
-      "update browser_instances set status = 'busy', current_run_id = null, updated_at = now() where id = $1",
-      [instance.id]
+      "update browser_instances set status = 'busy', current_run_id = $2, updated_at = now() where id = $1",
+      [instance.id, runId || null]
     );
 
     const runner = this._getOrCreateRunner(instance);

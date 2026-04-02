@@ -1515,17 +1515,58 @@ async function sendChatMessage({
 
   await randomDelay(500, 1_000);
 
-  // Step 3: Send via Enter key first (BOSS chat supports Enter to send)
+  // Capture editor text length before send attempt for verification
+  const preTextLength = await evaluateJson({
+    cdpClient, targetId, urlPrefix,
+    expression: `(() => {
+      const selectors = [
+        '.boss-chat-editor-input[contenteditable="true"]',
+        '.boss-chat-editor-input',
+        '.chat-editor [contenteditable="true"]',
+        '[contenteditable="true"]',
+      ];
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (el && el.offsetParent !== null) return JSON.stringify({ len: (el.textContent || '').length });
+      }
+      return JSON.stringify({ len: -1 });
+    })()`
+  });
+
+  // Step 3: Send via Enter key with full key sequence for Linux compatibility
   let sent = false;
   try {
-    await cdpClient.dispatchKeyDown({ targetId, urlPrefix, key: 'Enter', code: 'Enter', keyCode: 13, type: 'keyDown' });
+    await cdpClient.dispatchKeyDown({ targetId, urlPrefix, key: 'Enter', code: 'Enter', keyCode: 13, type: 'rawKeyDown' });
+    await cdpClient.dispatchKeyDown({ targetId, urlPrefix, key: 'Enter', code: 'Enter', keyCode: 13, type: 'char' });
     await cdpClient.dispatchKeyDown({ targetId, urlPrefix, key: 'Enter', code: 'Enter', keyCode: 13, type: 'keyUp' });
-    sent = true;
   } catch (_) {
-    // Enter key failed, fall through to button click
+    // Enter key dispatch failed
   }
 
-  // Step 4: Fallback — real mouse click on send button
+  // Step 3b: Verify Enter actually cleared the editor (message was sent)
+  await randomDelay(500, 800);
+  const postTextLength = await evaluateJson({
+    cdpClient, targetId, urlPrefix,
+    expression: `(() => {
+      const selectors = [
+        '.boss-chat-editor-input[contenteditable="true"]',
+        '.boss-chat-editor-input',
+        '.chat-editor [contenteditable="true"]',
+        '[contenteditable="true"]',
+      ];
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (el && el.offsetParent !== null) return JSON.stringify({ len: (el.textContent || '').length });
+      }
+      return JSON.stringify({ len: -1 });
+    })()`
+  });
+
+  if (preTextLength?.len > 0 && postTextLength?.len === 0) {
+    sent = true;
+  }
+
+  // Step 4: Fallback — real mouse click on send button if Enter didn't work
   if (!sent) {
     try {
       await realClick({ cdpClient, targetId, urlPrefix, selector: '.conversation-editor .submit, .submit-content .submit' });
@@ -1535,7 +1576,7 @@ async function sendChatMessage({
   }
 
   await randomDelay(1_000, 2_000);
-  return { ok: true, sent: true, textLength: text.length };
+  return { ok: true, sent: true, textLength: text.length, method: sent ? 'enter_key' : 'button_click' };
 }
 
 async function clickRequestResume({

@@ -47,11 +47,10 @@ class SchedulerService {
           hr_account_id
         )
         values ($1, $2, $3, $4, $5, $6)
-        on conflict (job_key, task_type) do update
+        on conflict (job_key, task_type, coalesce(hr_account_id, 0)) do update
         set cron_expression = excluded.cron_expression,
             payload = excluded.payload,
             enabled = excluded.enabled,
-            hr_account_id = coalesce(scheduled_jobs.hr_account_id, excluded.hr_account_id),
             updated_at = now()
         returning *
       `,
@@ -102,22 +101,24 @@ class SchedulerService {
 
   async #tick() {
     try {
-      if (this.taskLock?.isBusy()) {
-        const holder = this.taskLock.getHolder();
-        console.log(`[scheduler] tick skipped: task lock held by run ${holder?.runId} (${holder?.jobKey}/${holder?.taskType})`);
-        return;
-      }
-
       const schedules = await this.listSchedules();
       const now = new Date();
 
       for (const schedule of schedules) {
         if (!schedule.enabled) continue;
+
+        const hrAccountId = schedule.hr_account_id || null;
+        if (this.taskLock?.isBusy(hrAccountId)) {
+          const holder = this.taskLock.getHolder(hrAccountId);
+          console.log(`[scheduler] schedule ${schedule.id} skipped: lock held by run ${holder?.runId} (${holder?.jobKey}/${holder?.taskType}) for hr_account ${hrAccountId || 'global'}`);
+          continue;
+        }
+
         if (this.#shouldRunNow(schedule, now)) {
           try {
             await this.triggerSchedule(schedule.id);
           } catch (triggerError) {
-            if (triggerError.message === 'task_already_running') break;
+            if (triggerError.message === 'task_already_running') continue;
             console.error(`[scheduler] trigger failed for schedule ${schedule.id} (${schedule.job_key}/${schedule.task_type}):`, triggerError);
           }
         }
@@ -243,8 +244,8 @@ class SchedulerService {
       hrAccountId: resolvedHrAccountId
     });
 
-    if (this.taskLock && !this.taskLock.tryAcquire({ runId: run.id, jobKey, taskType })) {
-      const holder = this.taskLock.getHolder();
+    if (this.taskLock && !this.taskLock.tryAcquire({ runId: run.id, jobKey, taskType, hrAccountId: resolvedHrAccountId })) {
+      const holder = this.taskLock.getHolder(resolvedHrAccountId);
       const err = new Error('task_already_running');
       err.holder = holder;
       throw err;
@@ -322,11 +323,14 @@ class SchedulerService {
         const run = await this.pool.query('select hr_account_id from sourcing_runs where id = $1', [runId]);
         const hrAccountId = run.rows[0]?.hr_account_id;
         if (hrAccountId) {
-          const { runner, instanceId } = await this.browserInstanceManager.acquireRunner({ hrAccountId });
+          const { runner, instanceId } = await this.browserInstanceManager.acquireRunner({ hrAccountId, runId });
           runnerOverride = runner;
           resolvedInstance = instanceId;
           if (instanceId) {
-            await this.browserInstanceManager.markInstanceBusy(instanceId, runId);
+            await this.pool.query(
+              'update sourcing_runs set browser_instance_id = $2, updated_at = now() where id = $1',
+              [runId, instanceId]
+            );
           }
         }
       }

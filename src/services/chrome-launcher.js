@@ -176,7 +176,14 @@ class ChromeLauncher {
     ];
 
     if (os.platform() === 'linux') {
-      args.push('--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage');
+      args.push(
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-gpu',
+        '--disable-dev-shm-usage',
+        '--start-maximized',
+        '--window-size=1920,1080'
+      );
     }
 
     args.push('https://www.zhipin.com/');

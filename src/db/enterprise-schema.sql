@@ -86,6 +86,28 @@ alter table job_candidates
 alter table scheduled_jobs
   add column if not exists hr_account_id bigint references hr_accounts(id);
 
+-- boss_recruit_snapshots: add hr_account_id for multi-account isolation
+alter table boss_recruit_snapshots
+  add column if not exists hr_account_id bigint references hr_accounts(id);
+
+-- Replace single-column unique with (snapshot_date, hr_account_id)
+do $$ begin
+  alter table boss_recruit_snapshots drop constraint if exists boss_recruit_snapshots_snapshot_date_key;
+exception when others then null;
+end $$;
+drop index if exists boss_recruit_snapshots_snapshot_date_key;
+create unique index if not exists boss_recruit_snapshots_date_hr_unique
+  on boss_recruit_snapshots (snapshot_date, coalesce(hr_account_id, 0));
+
+-- scheduled_jobs: replace unique constraint to include hr_account_id
+do $$ begin
+  alter table scheduled_jobs drop constraint if exists scheduled_jobs_job_key_task_type_key;
+exception when others then null;
+end $$;
+drop index if exists scheduled_jobs_job_key_task_type_key;
+create unique index if not exists scheduled_jobs_job_key_task_type_hr_unique
+  on scheduled_jobs (job_key, task_type, coalesce(hr_account_id, 0));
+
 -- Phase 3: system_admin role & enterprise admin limits
 alter table users
   add column if not exists expires_at timestamptz;
