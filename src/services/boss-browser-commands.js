@@ -1462,7 +1462,20 @@ async function sendChatMessage({
     throw new Error('boss_chat_message_text_required');
   }
 
-  // Step 1: Focus editor, clear content, insert text via document.execCommand
+  let beforeMessages = [];
+  try {
+    const beforeState = await readOpenThreadMessages({
+      cdpClient,
+      targetId,
+      urlPrefix,
+      limit: 20
+    });
+    beforeMessages = Array.isArray(beforeState?.messages) ? beforeState.messages : [];
+  } catch (_) {
+    // best-effort verification only
+  }
+
+  // Step 1: Focus editor and select existing content before inserting native text events
   const insertResult = await evaluateJson({
     cdpClient, targetId, urlPrefix,
     expression: `(() => {
@@ -1484,15 +1497,17 @@ async function sendChatMessage({
       if (!editor) return JSON.stringify({ ok: false, reason: 'boss_chat_editor_not_found' });
       editor.focus();
       if (editor.tagName === 'TEXTAREA' || editor.tagName === 'INPUT') {
-        editor.value = ${JSON.stringify(text)};
-        editor.dispatchEvent(new Event('input', { bubbles: true }));
+        if (typeof editor.select === 'function') {
+          editor.select();
+        }
       } else {
-        editor.textContent = '';
-        editor.focus();
-        document.execCommand('insertText', false, ${JSON.stringify(text)});
-        editor.dispatchEvent(new Event('input', { bubbles: true }));
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(editor);
+        selection.removeAllRanges();
+        selection.addRange(range);
       }
-      return JSON.stringify({ ok: true, textLength: (editor.textContent || editor.value || '').length });
+      return JSON.stringify({ ok: true, tagName: editor.tagName });
     })()`
   });
 
@@ -1500,10 +1515,67 @@ async function sendChatMessage({
     throw new Error(insertResult?.reason || 'boss_chat_editor_not_found');
   }
 
-  await randomDelay(500, 1_000);
+  if (typeof cdpClient.dispatchInsertText === 'function') {
+    await cdpClient.dispatchInsertText({ targetId, urlPrefix, text });
+  } else {
+    const fallbackInsert = await evaluateJson({
+      cdpClient, targetId, urlPrefix,
+      expression: `(() => {
+        const editor = document.querySelector('.boss-chat-editor-input[contenteditable="true"], .boss-chat-editor-input, .chat-editor [contenteditable="true"], .chat-input [contenteditable="true"], .message-editor [contenteditable="true"], .chat-conversation [contenteditable="true"], [contenteditable="true"], textarea');
+        if (!editor) return JSON.stringify({ ok: false, reason: 'boss_chat_editor_not_found' });
+        if (editor.tagName === 'TEXTAREA' || editor.tagName === 'INPUT') {
+          editor.value = ${JSON.stringify(text)};
+        } else {
+          editor.textContent = '';
+          document.execCommand('insertText', false, ${JSON.stringify(text)});
+        }
+        editor.dispatchEvent(new Event('input', { bubbles: true }));
+        return JSON.stringify({ ok: true });
+      })()`
+    });
+    if (!fallbackInsert?.ok) {
+      throw new Error(fallbackInsert?.reason || 'boss_chat_editor_insert_failed');
+    }
+  }
+
+  let composerState = null;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    composerState = await evaluateJson({
+      cdpClient, targetId, urlPrefix,
+      expression: `(() => {
+        const editor = document.querySelector('.boss-chat-editor-input[contenteditable="true"], .boss-chat-editor-input, .chat-editor [contenteditable="true"], .chat-input [contenteditable="true"], .message-editor [contenteditable="true"], .chat-conversation [contenteditable="true"], [contenteditable="true"], textarea');
+        const btn = document.querySelector('.conversation-editor .submit')
+                 || document.querySelector('.submit-content .submit')
+                 || document.querySelector('.conversation-operate .submit');
+        if (!editor) return JSON.stringify({ ok: false, reason: 'boss_chat_editor_not_found' });
+        const editorText = editor.tagName === 'TEXTAREA' || editor.tagName === 'INPUT'
+          ? (editor.value || '')
+          : (editor.textContent || '');
+        return JSON.stringify({
+          ok: true,
+          editorTextLength: editorText.length,
+          submitActive: Boolean(btn && btn.classList.contains('active')),
+          submitVisible: Boolean(btn && btn.offsetParent !== null)
+        });
+      })()`
+    });
+
+    if (composerState?.ok && composerState.editorTextLength > 0) {
+      break;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  if (!composerState?.ok || composerState.editorTextLength === 0) {
+    throw new Error('boss_chat_message_insert_failed');
+  }
+
+  await randomDelay(300, 700);
 
   // Step 2: Send via click on send button (more reliable than Enter key)
   let sent = false;
+  let method = 'all_methods_failed';
   try {
     const clickResult = await evaluateJson({
       cdpClient, targetId, urlPrefix,
@@ -1511,7 +1583,7 @@ async function sendChatMessage({
         const btn = document.querySelector('.conversation-editor .submit')
                  || document.querySelector('.submit-content .submit')
                  || document.querySelector('.conversation-operate .submit');
-        if (btn && btn.offsetParent !== null) {
+        if (btn && btn.offsetParent !== null && btn.classList.contains('active')) {
           btn.click();
           return JSON.stringify({ clicked: true });
         }
@@ -1520,6 +1592,7 @@ async function sendChatMessage({
     });
     if (clickResult?.clicked) {
       sent = true;
+      method = 'button_click';
     }
   } catch (_) {
     // button click failed, will try fallback
@@ -1530,6 +1603,7 @@ async function sendChatMessage({
     try {
       await realClick({ cdpClient, targetId, urlPrefix, selector: '.conversation-editor .submit, .submit-content .submit, .conversation-operate .submit' });
       sent = true;
+      method = 'real_click';
     } catch (_) {
       // real click also failed
     }
@@ -1540,6 +1614,7 @@ async function sendChatMessage({
     try {
       await realClickByText({ cdpClient, targetId, urlPrefix, text: '发送' });
       sent = true;
+      method = 'text_click';
     } catch (_) {
       // text click also failed
     }
@@ -1549,37 +1624,78 @@ async function sendChatMessage({
   if (!sent) {
     try {
       await cdpClient.dispatchKeyDown({ targetId, urlPrefix, key: 'Enter', code: 'Enter', keyCode: 13, type: 'rawKeyDown' });
-      await cdpClient.dispatchKeyDown({ targetId, urlPrefix, key: 'Enter', code: 'Enter', keyCode: 13, type: 'char' });
+      await cdpClient.dispatchKeyDown({ targetId, urlPrefix, key: 'Enter', code: 'Enter', keyCode: 13, type: 'char', text: '\n' });
       await cdpClient.dispatchKeyDown({ targetId, urlPrefix, key: 'Enter', code: 'Enter', keyCode: 13, type: 'keyUp' });
       sent = true;
+      method = 'enter_key';
     } catch (_) {
       // Enter key dispatch failed
     }
   }
 
-  await randomDelay(1_000, 2_000);
+  if (!sent) {
+    return { ok: true, sent: false, verified: false, textLength: text.length, method };
+  }
 
-  // Step 4: Verify editor was cleared (message sent successfully)
-  const postCheck = await evaluateJson({
-    cdpClient, targetId, urlPrefix,
-    expression: `(() => {
-      const selectors = [
-        '.boss-chat-editor-input[contenteditable="true"]',
-        '.boss-chat-editor-input',
-        '.chat-editor [contenteditable="true"]',
-        '[contenteditable="true"]',
-      ];
-      for (const sel of selectors) {
-        const el = document.querySelector(sel);
-        if (el && el.offsetParent !== null) return JSON.stringify({ len: (el.textContent || '').length });
-      }
-      return JSON.stringify({ len: -1 });
-    })()`
-  });
+  await randomDelay(600, 1_200);
 
-  const verified = postCheck?.len === 0;
-  const method = sent ? (verified ? 'button_click' : 'button_click_unverified') : 'all_methods_failed';
-  return { ok: true, sent, verified, textLength: text.length, method };
+  let editorCleared = false;
+  let messageAppeared = false;
+
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const postCheck = await evaluateJson({
+      cdpClient, targetId, urlPrefix,
+      expression: `(() => {
+        const editor = document.querySelector('.boss-chat-editor-input[contenteditable="true"], .boss-chat-editor-input, .chat-editor [contenteditable="true"], .chat-input [contenteditable="true"], .message-editor [contenteditable="true"], .chat-conversation [contenteditable="true"], [contenteditable="true"], textarea');
+        const btn = document.querySelector('.conversation-editor .submit')
+                 || document.querySelector('.submit-content .submit')
+                 || document.querySelector('.conversation-operate .submit');
+        if (!editor) return JSON.stringify({ ok: false, reason: 'boss_chat_editor_not_found' });
+        const editorText = editor.tagName === 'TEXTAREA' || editor.tagName === 'INPUT'
+          ? (editor.value || '')
+          : (editor.textContent || '');
+        return JSON.stringify({
+          ok: true,
+          len: editorText.length,
+          submitActive: Boolean(btn && btn.classList.contains('active'))
+        });
+      })()`
+    });
+
+    editorCleared = postCheck?.ok && postCheck?.len === 0 && postCheck?.submitActive === false;
+
+    try {
+      const afterState = await readOpenThreadMessages({
+        cdpClient,
+        targetId,
+        urlPrefix,
+        limit: 20
+      });
+      const afterMessages = Array.isArray(afterState?.messages) ? afterState.messages : [];
+      messageAppeared = didOpenThreadSendMessage({
+        beforeMessages,
+        afterMessages,
+        text
+      });
+    } catch (_) {
+      // best-effort verification only
+    }
+
+    if (messageAppeared) {
+      break;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+
+  return {
+    ok: true,
+    sent: true,
+    verified: messageAppeared,
+    editorCleared,
+    textLength: text.length,
+    method: messageAppeared ? method : `${method}_unverified`
+  };
 }
 
 async function clickRequestResume({
@@ -1589,6 +1705,7 @@ async function clickRequestResume({
 } = {}) {
   // Phase 1: Wait for "求简历" button to become enabled (up to 8 seconds)
   let waitedMs = 0;
+  let buttonReady = false;
   for (let i = 0; i < 16; i++) {
     const state = await evaluateJson({
       cdpClient, targetId, urlPrefix,
@@ -1603,12 +1720,19 @@ async function clickRequestResume({
       })()`
     });
 
-    if (state?.found && !state?.disabled) break;
+    if (state?.found && !state?.disabled) {
+      buttonReady = true;
+      break;
+    }
     if (!state?.found) {
       throw new Error('boss_chat_request_resume_button_not_found');
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
     waitedMs += 500;
+  }
+
+  if (!buttonReady) {
+    throw new Error('boss_chat_request_resume_button_disabled');
   }
 
   // Phase 2: Real mouse click on "求简历"
@@ -1647,7 +1771,86 @@ async function clickRequestResume({
   }
 
   await randomDelay(1_500, 2_500);
-  return { ok: true, requested: true, confirmed, waitedMs };
+  return { ok: true, requested: confirmed, confirmed, waitedMs };
+}
+
+async function inspectResumeRequestState({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildInspectResumeRequestStateExpression()
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_chat_request_resume_state_failed');
+  }
+
+  return result;
+}
+
+function buildInspectResumeRequestStateExpression() {
+  return `(() => {
+    try {
+      const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+      const btn = Array.from(document.querySelectorAll('button, a, span, div')).find((node) => {
+        const text = normalize(node.textContent || '');
+        return text === '求简历' && node.offsetWidth > 0;
+      });
+      if (!btn) {
+        return JSON.stringify({ ok: false, reason: 'boss_chat_request_resume_button_not_found' });
+      }
+
+      const disabled = Boolean(
+        btn.disabled
+        || btn.getAttribute('aria-disabled') === 'true'
+        || btn.classList.contains('disabled')
+      );
+      const container = btn.closest('.operate-icon-item, .operate-exchange-left, .conversation-operate') || btn.parentElement || btn;
+      const surroundingText = normalize(container.textContent || '');
+      const hintText = normalize(
+        surroundingText
+          .replace(/求简历/g, '')
+          .replace(/^[：:]/, '')
+      );
+
+      return JSON.stringify({
+        ok: true,
+        found: true,
+        enabled: !disabled,
+        disabled,
+        className: btn.className || '',
+        hintText,
+        surroundingText
+      });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_chat_request_resume_state_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
+function normalizeChatMessageText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function didOpenThreadSendMessage({ beforeMessages = [], afterMessages = [], text }) {
+  const expected = normalizeChatMessageText(text);
+  if (!expected || !Array.isArray(afterMessages) || afterMessages.length === 0) {
+    return false;
+  }
+
+  const beforeMatches = beforeMessages.filter((message) =>
+    message?.from === 'me' && normalizeChatMessageText(message?.text) === expected
+  ).length;
+  const afterMatches = afterMessages.filter((message) =>
+    message?.from === 'me' && normalizeChatMessageText(message?.text) === expected
+  ).length;
+
+  return afterMatches > beforeMatches;
 }
 
 async function readOpenThreadMessages({
@@ -2489,6 +2692,7 @@ module.exports = {
   realClickByText,
   sendChatMessage,
   clickRequestResume,
+  inspectResumeRequestState,
   readOpenThreadMessages,
   selectRecommendJob,
   clickFirstRecommendCard,

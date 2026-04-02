@@ -394,23 +394,24 @@ class FollowupLoopService {
 
     // Step 10a: Handle request_resume action
     if (decision.action === 'request_resume') {
-      if (decision.replyText) {
-        await this.#executeSendMessage({
-          runId, jobKey, encryptUid,
-          candidateName: thread.name, candidateId,
-          text: decision.replyText, stats, runner
-        });
-      }
-      await this.#executeResumeRequest({
-        runId, jobKey, encryptUid,
-        candidateName: thread.name, candidateId, stats, runner
+      await this.#requestResumeWhenReady({
+        runId,
+        jobKey,
+        encryptUid,
+        candidateName: thread.name,
+        candidateId,
+        replyText: decision.replyText,
+        allowWarmupReply: true,
+        stats,
+        runner
       });
       return;
     }
 
     // Step 10b: Send reply
+    let replySent = true;
     if (decision.replyText) {
-      await this.#executeSendMessage({
+      replySent = await this.#executeSendMessage({
         runId, jobKey, encryptUid,
         candidateName: thread.name, candidateId,
         text: decision.replyText, stats, runner
@@ -418,10 +419,17 @@ class FollowupLoopService {
     }
 
     // Step 10c: Request resume if eligible and not yet received
-    if (canRequestResume && !attachmentState.present) {
-      await this.#executeResumeRequest({
-        runId, jobKey, encryptUid,
-        candidateName: thread.name, candidateId, stats, runner
+    if (replySent && canRequestResume && !attachmentState.present) {
+      await this.#requestResumeWhenReady({
+        runId,
+        jobKey,
+        encryptUid,
+        candidateName: thread.name,
+        candidateId,
+        replyText: '',
+        allowWarmupReply: !decision.replyText,
+        stats,
+        runner
       });
     }
   }
@@ -450,12 +458,12 @@ class FollowupLoopService {
       '## 判断要求',
       `可选动作：${actions.join(', ')}`,
       '- reply：需要回复候选人（附带 replyText，简洁专业）',
-      canRequestResume ? '- request_resume：候选人态度积极且已有实质沟通，可以索要简历' : '',
+      canRequestResume ? '- request_resume：候选人态度积极且已有实质沟通，可以索要简历；如果选择这个动作，replyText 也必须提供，先发一条自然回复再索要简历' : '',
       '- skip：不需要回复（对方只是已读、表情、或无实质内容）',
       '- 只能使用上面明确提供的岗位信息；如果缺少地点、薪资、班次等信息，就不要写。',
       '- 禁止输出`[工作地点]`、`[薪资]`这类占位符，也不要自行脑补未提供的信息。',
       '',
-      '返回纯 JSON：{"action":"reply"|"request_resume"|"skip","replyText":"回复内容(仅reply时需要)","reason":"简要原因"}'
+      '返回纯 JSON：{"action":"reply"|"request_resume"|"skip","replyText":"回复内容(reply 和 request_resume 时需要)","reason":"简要原因"}'
     ].filter(Boolean).join('\n');
 
     const raw = await this.llmEvaluator.chat({ systemPrompt, userPrompt });
@@ -631,7 +639,11 @@ class FollowupLoopService {
 
   async #executeSendMessage({ runId, jobKey, encryptUid, candidateName, candidateId, text, stats, runner }) {
     try {
-      await runner.sendChatMessage({ runId, text });
+      const sendResult = await runner.sendChatMessage({ runId, text });
+      if (!sendResult?.sent || sendResult?.verified !== true) {
+        throw new Error(sendResult?.method || 'boss_chat_send_unverified');
+      }
+
       stats.replied += 1;
 
       await this.agentService.recordMessage({
@@ -646,14 +658,27 @@ class FollowupLoopService {
         messageType: 'text',
         contentText: text
       });
+      return true;
     } catch (error) {
       stats.errors += 1;
+      await this.#recordEvent(runId, {
+        eventId: `followup-loop-send-error:${runId}:${encryptUid}`,
+        eventType: 'followup_loop_warning',
+        stage: 'followup_loop',
+        message: `reply send failed for ${candidateName}: ${error.message}`,
+        payload: { encryptUid, candidateName, error: error.message }
+      });
+      return false;
     }
   }
 
   async #executeResumeRequest({ runId, jobKey, encryptUid, candidateName, candidateId, stats, runner }) {
     try {
       const resumeResult = await runner.clickRequestResume({ runId });
+      if (!resumeResult?.requested || resumeResult?.confirmed !== true) {
+        throw new Error('boss_chat_request_resume_unconfirmed');
+      }
+
       const confirmed = resumeResult?.confirmed === true;
       stats.resumeRequested += 1;
 
@@ -678,7 +703,112 @@ class FollowupLoopService {
       });
     } catch (error) {
       stats.errors += 1;
+      await this.#recordEvent(runId, {
+        eventId: `followup-loop-resume-request-error:${runId}:${encryptUid}`,
+        eventType: 'followup_loop_warning',
+        stage: 'followup_loop',
+        message: `resume request failed for ${candidateName}: ${error.message}`,
+        payload: { encryptUid, candidateName, error: error.message }
+      });
     }
+  }
+
+  async #requestResumeWhenReady({
+    runId,
+    jobKey,
+    encryptUid,
+    candidateName,
+    candidateId,
+    replyText,
+    allowWarmupReply,
+    stats,
+    runner
+  }) {
+    let textToSend = replyText || '';
+    const initialState = await this.#inspectResumeRequestStateSafe({ runId, runner });
+
+    if (!textToSend && allowWarmupReply && initialState?.disabled) {
+      textToSend = this.#buildResumeRequestWarmupReply();
+    }
+
+    if (textToSend) {
+      const replySent = await this.#executeSendMessage({
+        runId,
+        jobKey,
+        encryptUid,
+        candidateName,
+        candidateId,
+        text: textToSend,
+        stats,
+        runner
+      });
+      if (!replySent) {
+        return false;
+      }
+    }
+
+    const readyState = await this.#waitForResumeRequestEnabled({
+      runId,
+      runner,
+      initialState: textToSend ? null : initialState
+    });
+
+    if (!readyState?.enabled) {
+      stats.errors += 1;
+      await this.#recordEvent(runId, {
+        eventId: `followup-loop-resume-request-blocked:${runId}:${encryptUid}`,
+        eventType: 'followup_loop_warning',
+        stage: 'followup_loop',
+        message: `resume request blocked for ${candidateName}: ${readyState?.hintText || readyState?.reason || 'button_not_enabled'}`,
+        payload: {
+          encryptUid,
+          candidateName,
+          state: readyState || null
+        }
+      });
+      return false;
+    }
+
+    await this.#executeResumeRequest({
+      runId,
+      jobKey,
+      encryptUid,
+      candidateName,
+      candidateId,
+      stats,
+      runner
+    });
+    return true;
+  }
+
+  async #inspectResumeRequestStateSafe({ runId, runner }) {
+    try {
+      return await runner.inspectResumeRequestState({ runId });
+    } catch (error) {
+      return { ok: false, enabled: false, disabled: false, reason: error.message };
+    }
+  }
+
+  async #waitForResumeRequestEnabled({ runId, runner, initialState = null, attempts = 20, intervalMs = 500 }) {
+    let state = initialState;
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (!state || attempt > 0) {
+        state = await this.#inspectResumeRequestStateSafe({ runId, runner });
+      }
+
+      if (state?.enabled) {
+        return state;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+
+    return state;
+  }
+
+  #buildResumeRequestWarmupReply() {
+    return '您好，方便的话也可以发我一份简历，我进一步看下。';
   }
 
   async #recordInboundMessage({ runId, jobKey, encryptUid, candidateId, message }) {

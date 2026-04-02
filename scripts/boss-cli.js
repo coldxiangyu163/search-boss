@@ -676,6 +676,20 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
     };
   }
 
+  if (options.command === 'chat-request-resume-state') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.inspectResumeRequestState({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
   if (options.command === 'resume-panel') {
     const session = await sessionStore.loadSession(options.runId);
     const resume = await browserCommands.evaluateJson({

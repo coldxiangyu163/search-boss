@@ -7,6 +7,7 @@ function createMockBossCliRunner({
   visibleThreads = [],
   threadStates = {},
   attachmentStates = {},
+  resumeRequestStates = {},
   consentStateMap = {},
   messageResults = {},
   previewMeta = {},
@@ -16,6 +17,9 @@ function createMockBossCliRunner({
 } = {}) {
   const calls = [];
   let lastClickedDataId = '';
+  const resumeRequestStateQueues = new Map(
+    Object.entries(resumeRequestStates).map(([key, value]) => [key, Array.isArray(value) ? value.slice() : value])
+  );
 
   return {
     calls,
@@ -66,11 +70,20 @@ function createMockBossCliRunner({
     },
     async sendChatMessage(opts) {
       calls.push({ command: 'sendChatMessage', ...opts });
-      return { ok: true, sent: true };
+      return { ok: true, sent: true, verified: true };
     },
     async clickRequestResume(opts) {
       calls.push({ command: 'clickRequestResume', ...opts });
-      return { ok: true, requested: true };
+      return { ok: true, requested: true, confirmed: true };
+    },
+    async inspectResumeRequestState(opts) {
+      calls.push({ command: 'inspectResumeRequestState', ...opts });
+      const state = resumeRequestStateQueues.get(lastClickedDataId);
+      if (Array.isArray(state)) {
+        const next = state.length > 1 ? state.shift() : state[0];
+        return next;
+      }
+      return state || { ok: true, found: true, enabled: true, disabled: false, hintText: '' };
     },
     async getResumePreviewMeta(opts) {
       calls.push({ command: 'getResumePreviewMeta', ...opts });
@@ -463,6 +476,126 @@ test('FollowupLoopService requests resume when LLM decides and followup-decision
   assert.ok(reqCall);
 
   assert.equal(agentService.actions[0].actionType, 'resume_request_sent');
+});
+
+test('FollowupLoopService does not record reply or request resume when send is unverified', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    visibleThreads: [
+      { name: '王五', dataId: '789-0', index: 0, hasUnread: true }
+    ],
+    messageResults: {
+      '789-0': {
+        ok: true,
+        messages: [
+          { from: 'me', type: 'text', text: '您好，有兴趣的话可以发份简历', time: '09:00' },
+          { from: '王五', type: 'text', text: '可以的，怎么发？', time: '10:00' }
+        ]
+      }
+    }
+  });
+  bossCliRunner.sendChatMessage = async (opts) => {
+    bossCliRunner.calls.push({ command: 'sendChatMessage', ...opts });
+    return { ok: true, sent: true, verified: false, method: 'button_click_unverified' };
+  };
+
+  const agentService = createMockAgentService();
+  const llmEvaluator = createMockLlmEvaluator([
+    { action: 'request_resume', replyText: '您好，方便发一份简历吗？', reason: 'candidate willing' }
+  ]);
+
+  const service = new FollowupLoopService({
+    bossCliRunner, agentService, llmEvaluator,
+    threadDelayMin: 0, threadDelayMax: 0
+  });
+
+  const result = await service.run({ runId: 352, jobKey: '面点师傅（B0038011）_8eca6cad' });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stats.replied, 0);
+  assert.equal(result.stats.resumeRequested, 0);
+  assert.equal(result.stats.errors, 1);
+  assert.equal(agentService.messages.filter((item) => item.direction === 'outbound').length, 0);
+  assert.equal(agentService.actions.length, 0);
+  assert.equal(bossCliRunner.calls.some((c) => c.command === 'clickRequestResume'), false);
+});
+
+test('FollowupLoopService does not record resume request when confirm dialog never appears', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    visibleThreads: [
+      { name: '王五', dataId: '789-0', index: 0, hasUnread: true }
+    ],
+    messageResults: {
+      '789-0': {
+        ok: true,
+        messages: [
+          { from: '王五', type: 'text', text: '可以的，怎么发？', time: '10:00' }
+        ]
+      }
+    }
+  });
+  bossCliRunner.clickRequestResume = async (opts) => {
+    bossCliRunner.calls.push({ command: 'clickRequestResume', ...opts });
+    return { ok: true, requested: false, confirmed: false };
+  };
+
+  const agentService = createMockAgentService();
+  const llmEvaluator = createMockLlmEvaluator([
+    { action: 'request_resume', reason: 'candidate willing' }
+  ]);
+
+  const service = new FollowupLoopService({
+    bossCliRunner, agentService, llmEvaluator,
+    threadDelayMin: 0, threadDelayMax: 0
+  });
+
+  const result = await service.run({ runId: 353, jobKey: '面点师傅（B0038011）_8eca6cad' });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stats.resumeRequested, 0);
+  assert.equal(result.stats.errors, 1);
+  assert.equal(agentService.actions.length, 0);
+});
+
+test('FollowupLoopService sends a warmup reply before requesting resume when button is disabled', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    visibleThreads: [
+      { name: '郭建敏', dataId: '31758964-0', index: 0, hasUnread: true }
+    ],
+    resumeRequestStates: {
+      '31758964-0': [
+        { ok: true, found: true, enabled: false, disabled: true, hintText: '双方回复后可用' },
+        { ok: true, found: true, enabled: true, disabled: false, hintText: '' }
+      ]
+    },
+    messageResults: {
+      '31758964-0': {
+        ok: true,
+        messages: [
+          { from: '郭建敏', type: 'text', text: '您好！希望您可以看一下我的资料，期待能有更深入地沟通！非常感谢！', time: '10:00' }
+        ]
+      }
+    }
+  });
+
+  const agentService = createMockAgentService();
+  const llmEvaluator = createMockLlmEvaluator([
+    { action: 'request_resume', reason: 'candidate willing' }
+  ]);
+
+  const service = new FollowupLoopService({
+    bossCliRunner, agentService, llmEvaluator,
+    threadDelayMin: 0, threadDelayMax: 0
+  });
+
+  const result = await service.run({ runId: 354, jobKey: '面点师傅（B0038011）_8eca6cad' });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stats.replied, 1);
+  assert.equal(result.stats.resumeRequested, 1);
+
+  const sendCall = bossCliRunner.calls.find((c) => c.command === 'sendChatMessage');
+  assert.equal(sendCall.text, '您好，方便的话也可以发我一份简历，我进一步看下。');
+  assert.equal(bossCliRunner.calls.some((c) => c.command === 'clickRequestResume'), true);
 });
 
 test('FollowupLoopService skips threads where last message is from self', async () => {

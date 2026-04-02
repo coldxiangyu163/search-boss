@@ -313,6 +313,14 @@ class BossCliRunner {
     ]);
   }
 
+  async inspectResumeRequestState({ runId }) {
+    return this.#run([
+      'chat-request-resume-state',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
   async inspectAttachmentState({ runId }) {
     return this.#run([
       'attachment-state',

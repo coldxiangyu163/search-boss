@@ -13,7 +13,9 @@ const {
   inspectChatThreadState,
   inspectAttachmentState,
   inspectResumeConsentState,
+  inspectResumeRequestState,
   acceptResumeConsent,
+  sendChatMessage,
   inspectResumePreviewMeta,
   downloadResumeAttachment,
   closeResumeDetail
@@ -290,6 +292,74 @@ test('inspectRecommendDetail returns current detail summary from nested resume i
   assert.match(cdpCalls[0].expression, /c-resume/);
   assert.match(cdpCalls[0].expression, /encrypt-geek-id/);
   assert.match(cdpCalls[0].expression, /btn-continue|font-hightlight/);
+});
+
+test('sendChatMessage uses native insert text and verifies the outbound message appears', async () => {
+  const evaluateResponses = [
+    { ok: true, messages: [{ from: 'other', text: '您好', time: '10:00', type: 'text' }], total: 1 },
+    { ok: true, tagName: 'DIV' },
+    { ok: true, editorTextLength: 4, submitActive: true, submitVisible: true },
+    { clicked: true },
+    { ok: true, len: 0, submitActive: false },
+    {
+      ok: true,
+      messages: [
+        { from: 'other', text: '您好', time: '10:00', type: 'text' },
+        { from: 'me', text: '测试消息', time: '10:01', type: 'text' }
+      ],
+      total: 2
+    }
+  ];
+  const cdpClient = {
+    inserted: [],
+    evaluate: async () => ({
+      type: 'string',
+      value: JSON.stringify(evaluateResponses.shift())
+    }),
+    dispatchInsertText: async ({ text }) => {
+      cdpClient.inserted.push(text);
+    },
+    dispatchKeyDown: async () => {
+      throw new Error('should not use enter fallback');
+    }
+  };
+
+  const result = await sendChatMessage({
+    cdpClient,
+    targetId: 'target-1',
+    text: '测试消息'
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.sent, true);
+  assert.equal(result.verified, true);
+  assert.equal(result.method, 'button_click');
+  assert.deepEqual(cdpClient.inserted, ['测试消息']);
+});
+
+test('inspectResumeRequestState reads disabled hint from the request button area', async () => {
+  const cdpClient = {
+    evaluate: async () => ({
+      type: 'string',
+      value: JSON.stringify({
+        ok: true,
+        found: true,
+        enabled: false,
+        disabled: true,
+        hintText: '双方回复后可用'
+      })
+    })
+  };
+
+  const result = await inspectResumeRequestState({
+    cdpClient,
+    targetId: 'target-1'
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.enabled, false);
+  assert.equal(result.disabled, true);
+  assert.equal(result.hintText, '双方回复后可用');
 });
 
 test('inspectRecommendDetail fails when the detail iframe payload is structurally empty', async () => {
