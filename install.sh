@@ -220,7 +220,6 @@ setup() {
     ensure_env_value "DB_USER" "search_boss"
     ensure_env_value "DB_NAME" "search_boss_ops"
     ensure_env_value "PORT" "3000"
-    ensure_env_value "BOSS_CDP_ENDPOINT" "http://host.docker.internal:9222"
     ensure_env_value "BOSS_CLI_ENABLED" "true"
     ensure_env_value "SOURCE_LOOP_ENABLED" "true"
   else
@@ -241,7 +240,6 @@ DB_NAME=search_boss_ops
 DB_PORT=5432
 AGENT_TOKEN=${agent_token}
 SESSION_SECRET=${session_secret}
-BOSS_CDP_ENDPOINT=http://host.docker.internal:9222
 BOSS_CLI_ENABLED=true
 SOURCE_LOOP_ENABLED=true
 EOF
@@ -280,7 +278,7 @@ EOF
     log_info "请在浏览器中打开: $url"
   fi
 
-  log_info "还需完成: 创建管理员 → 配置 LLM → 配置 Chrome"
+  log_info "还需完成: 创建管理员 → 配置 LLM → 登录 BOSS"
   echo ""
 }
 

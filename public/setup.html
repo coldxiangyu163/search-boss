@@ -174,28 +174,25 @@
       </div>
     </div>
 
-    <!-- Step 4: Chrome 配置 -->
+    <!-- Step 4: Chrome 状态 -->
     <div class="step-panel" id="step-4">
       <div class="card">
-        <h2>Step 4 · Chrome 浏览器配置</h2>
-        <p class="subtitle">在宿主机启动 Chrome 远程调试，用于 BOSS 招聘端自动化</p>
-        <div style="background: #f8fafc; border-radius: 8px; padding: 16px; margin-bottom: 16px; font-size: 13px; line-height: 1.8;">
-          <strong>请在服务器终端执行以下命令：</strong><br>
-          <code style="display:block; background:#1a1a2e; color:#e0e0e0; padding:12px; border-radius:6px; margin-top:8px; font-size:12px; white-space:pre-wrap;">google-chrome --remote-debugging-port=9222 --user-data-dir=$HOME/.chrome-boss-profile</code>
-          <br>
-          然后在 Chrome 中打开 <strong>zhipin.com</strong> 并完成登录。
-        </div>
+        <h2>Step 4 · Chrome 浏览器状态</h2>
+        <p class="subtitle">Chrome 已内置在容器中，系统启动时自动运行</p>
         <div class="check-item">
           <div class="check-icon wait" id="chk-chrome-icon">...</div>
           <div class="check-info">
-            <div class="name">Chrome CDP 连接</div>
-            <div class="detail" id="chk-chrome-detail">等待检测</div>
+            <div class="name">Chrome 浏览器</div>
+            <div class="detail" id="chk-chrome-detail">正在检测...</div>
           </div>
+        </div>
+        <div style="background: #f8fafc; border-radius: 8px; padding: 16px; margin-top: 16px; font-size: 13px; line-height: 1.8; display:none;" id="chrome-login-hint">
+          <strong>下一步：</strong>进入系统后，在管理后台「浏览器管理」中打开 BOSS 直聘页面，用手机扫码完成登录。
         </div>
         <div class="btn-row">
           <button class="btn btn-secondary" onclick="goStep(3)">上一步</button>
           <div>
-            <button class="btn btn-ghost" onclick="goStep(5)" style="margin-right:8px;">稍后配置</button>
+            <button class="btn btn-ghost" onclick="goStep(5)" style="margin-right:8px;">跳过</button>
             <button class="btn btn-primary" id="btn-check-chrome" onclick="checkChrome()">检测连接</button>
           </div>
         </div>
@@ -229,6 +226,7 @@ function goStep(n) {
   });
 
   currentStep = n;
+  if (n === 4) checkChrome();
 }
 
 function setCheck(id, status, detail) {
@@ -372,10 +370,11 @@ async function checkChrome() {
     const res = await fetch('/api/setup/check-chrome');
     const data = await res.json();
     if (data.ok) {
-      setCheck('chk-chrome', 'ok', 'Chrome ' + (data.browser || '') + ' 已连接');
-      setTimeout(function() { goStep(5); }, 800);
+      setCheck('chk-chrome', 'ok', 'Chrome ' + (data.browser || '') + ' 已就绪');
+      document.getElementById('chrome-login-hint').style.display = 'block';
+      setTimeout(function() { goStep(5); }, 1200);
     } else {
-      setCheck('chk-chrome', 'fail', data.message || 'Chrome 未连接');
+      setCheck('chk-chrome', 'fail', '正在启动中，请稍后重试');
     }
   } catch {
     setCheck('chk-chrome', 'fail', '检测失败');
