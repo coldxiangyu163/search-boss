@@ -6,6 +6,9 @@ const request = require('supertest');
 
 const { createApp } = require('../src/app');
 
+const repoRoot = path.resolve(__dirname, '..');
+const projectRootRuntimeLine = `本次运行只使用当前项目目录：PROJECT_ROOT="${repoRoot}"；回写 CLI="${path.join(repoRoot, 'scripts', 'agent-callback-cli.js')}"。不要猜测或探测其它历史路径。`;
+
 test('GET /api/dashboard/summary returns dashboard payload', async () => {
   const app = createApp({
     services: {
@@ -1454,7 +1457,7 @@ test('JobService triggerSync creates sync run and calls nanobot', async () => {
     nanobotCalls[0].message,
     [
       '/boss-sourcing --sync --run-id "33"',
-      '本次运行只使用当前项目目录：PROJECT_ROOT="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f"；回写 CLI="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/scripts/agent-callback-cli.js"。不要猜测或探测其它历史路径。',
+      projectRootRuntimeLine,
       '只执行岗位同步：采集职位列表和职位详情，并调用 /api/agent/jobs/batch 回写本地后台。禁止进入推荐牛人、打招呼、聊天跟进、下载简历。',
       '稳定性优先：以职位列表接口和当前页面可稳定读取的数据为准；如果详情接口中的 job 或 jdText 为空，允许保留空 jdText，并把原始详情放进 metadata/detailRaw，禁止为了补齐 JD 再打开编辑页、提取 HttpOnly cookie、写临时抓取脚本、复用浏览器 cookie 发起 Node 请求，或绕过 agent-callback-cli.js / 本地网络护栏。',
       '回写格式固定：bootstrap 先写 run-event；jobs-batch 直接写 jobs 数组，不要为确认 payload 再读取 job-service.js 或 tests/api.test.js。每个 job 至少包含 { jobKey, encryptJobId, jobName, city, salary, status, jdText?, metadata? }。',
@@ -2439,7 +2442,7 @@ test('AgentService runNanobotForSchedule sends source workflow guardrails in mes
     capturedMessage,
     [
       '/boss-sourcing --job "健康顾问_B0047007" --source --run-id "88"',
-      '本次运行只使用当前项目目录：PROJECT_ROOT="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f"；回写 CLI="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/scripts/agent-callback-cli.js"。不要猜测或探测其它历史路径。',
+      projectRootRuntimeLine,
       '本次任务的唯一后端岗位标识是 JOB_KEY="健康顾问_B0047007"。禁止根据 jobName、encryptJobId、页面标题或短 id 重新拼接、改写或替换 jobKey；如果页面恢复后落到其他岗位，必须先切回该 JOB_KEY 对应岗位再继续。',
       '如数据库中没有额外岗位定制要求，仅按 BOSS 职位信息正常执行寻源。',
       '回写格式固定：run-candidate 必须直接写顶层 { jobKey, bossEncryptGeekId, name, status, city?, education?, experience?, school?, metadata? }；其中 metadata 承载 decision/priority/facts/reasoning。run-action(greet_sent) 必须直接写顶层 { actionType, jobKey, bossEncryptGeekId, dedupeKey, payload }；不要写 candidate.displayName 这类嵌套自定义结构，也不要读取 tests/api.test.js 或 src/services/*.js 反推字段。',
@@ -2783,7 +2786,7 @@ test('AgentService runNanobotForSchedule includes run id for followup mode', asy
     capturedMessage,
     [
       '/boss-sourcing --job "健康顾问_B0047007" --followup --run-id "91"',
-      '本次运行只使用当前项目目录：PROJECT_ROOT="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f"；回写 CLI="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/scripts/agent-callback-cli.js"。不要猜测或探测其它历史路径。',
+      projectRootRuntimeLine,
       '本次任务的唯一后端岗位标识是 JOB_KEY="健康顾问_B0047007"。禁止根据 jobName、encryptJobId、页面标题或短 id 重新拼接、改写或替换 jobKey；如果页面恢复后落到其他岗位，必须先切回该 JOB_KEY 对应岗位再继续。',
       '回写格式固定：消息用 run-message；再次索简历前先 followup-decision；动作用 run-action；附件用 run-attachment；每次回写都显式携带 attemptId、eventId、sequence、jobKey。',
       '运行契约：必须复用调用方提供的 RUN_ID=91；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "91"。',
@@ -2838,7 +2841,7 @@ test('AgentService runNanobotForSchedule maps chat mode to chat workflow message
     capturedMessage,
     [
       '/boss-sourcing --job "健康顾问_B0047007" --chat --run-id "92"',
-      '本次运行只使用当前项目目录：PROJECT_ROOT="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f"；回写 CLI="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/scripts/agent-callback-cli.js"。不要猜测或探测其它历史路径。',
+      projectRootRuntimeLine,
       '本次任务的唯一后端岗位标识是 JOB_KEY="健康顾问_B0047007"。禁止根据 jobName、encryptJobId、页面标题或短 id 重新拼接、改写或替换 jobKey；如果页面恢复后落到其他岗位，必须先切回该 JOB_KEY 对应岗位再继续。',
       '回写格式固定：消息用 run-message；再次索简历前先 followup-decision；动作用 run-action；附件用 run-attachment；每次回写都显式携带 attemptId、eventId、sequence、jobKey。',
       '运行契约：必须复用调用方提供的 RUN_ID=92；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "92"。',
@@ -2885,7 +2888,7 @@ test('AgentService runNanobotForSchedule maps download mode to download workflow
     capturedMessage,
     [
       '/boss-sourcing --job "健康顾问_B0047007" --download --run-id "93"',
-      '本次运行只使用当前项目目录：PROJECT_ROOT="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f"；回写 CLI="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/scripts/agent-callback-cli.js"。不要猜测或探测其它历史路径。',
+      projectRootRuntimeLine,
       '本次任务的唯一后端岗位标识是 JOB_KEY="健康顾问_B0047007"。禁止根据 jobName、encryptJobId、页面标题或短 id 重新拼接、改写或替换 jobKey；如果页面恢复后落到其他岗位，必须先切回该 JOB_KEY 对应岗位再继续。',
       '回写格式固定：附件发现/下载都用 run-attachment，下载完成后再写 run-action(resume_downloaded)；优先补偿 pending/failed callback，避免盲目重下。',
       '运行契约：必须复用调用方提供的 RUN_ID=93；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "93"。',
@@ -2931,7 +2934,7 @@ test('AgentService runNanobotForSchedule maps status mode to status workflow mes
     capturedMessage,
     [
       '/boss-sourcing --status --job "健康顾问_B0047007" --run-id "94"',
-      '本次运行只使用当前项目目录：PROJECT_ROOT="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f"；回写 CLI="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/scripts/agent-callback-cli.js"。不要猜测或探测其它历史路径。',
+      projectRootRuntimeLine,
       '本次任务的唯一后端岗位标识是 JOB_KEY="健康顾问_B0047007"。禁止根据 jobName、encryptJobId、页面标题或短 id 重新拼接、改写或替换 jobKey；如果页面恢复后落到其他岗位，必须先切回该 JOB_KEY 对应岗位再继续。',
       '运行契约：必须复用调用方提供的 RUN_ID=94；禁止创建 replacement run，禁止调用 createRun 或 /api/agent/runs。所有写操作必须使用 agent-callback-cli.js 并显式传入 --run-id "94"。',
       '调用方已经显式给定 PROJECT_ROOT、RUN_ID 和回写 CLI；不要再 list_dir 项目根目录，也不要读取 AGENTS.md、tests/*、旧 tmp/run-*.json、历史失败文件或历史 session 来推断契约。',
@@ -2982,7 +2985,7 @@ test('AgentService runNanobotForSchedule includes custom requirement in source m
     capturedMessage,
     [
       '/boss-sourcing --job "健康顾问_B0047007" --source --run-id "99"',
-      '本次运行只使用当前项目目录：PROJECT_ROOT="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f"；回写 CLI="/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/scripts/agent-callback-cli.js"。不要猜测或探测其它历史路径。',
+      projectRootRuntimeLine,
       '本次任务的唯一后端岗位标识是 JOB_KEY="健康顾问_B0047007"。禁止根据 jobName、encryptJobId、页面标题或短 id 重新拼接、改写或替换 jobKey；如果页面恢复后落到其他岗位，必须先切回该 JOB_KEY 对应岗位再继续。',
       '执行寻源匹配时，除 BOSS 职位信息外，还必须叠加本地数据库维护的岗位定制要求；该要求不会同步回 BOSS，但会影响候选人筛选与判断。',
       '岗位定制要求：必须有电话销售经验',

@@ -88,12 +88,6 @@ init_env() {
   log_info "配置文件检查通过"
 }
 
-build() {
-  log_info "正在构建 $APP_NAME 镜像 (版本: $VERSION)..."
-  docker compose build --no-cache
-  log_info "镜像构建完成"
-}
-
 start() {
   init_env
   mkdir -p resumes license
@@ -142,6 +136,9 @@ db_setup() {
 }
 
 status() {
+  if [ -f .env ]; then
+    source .env 2>/dev/null || true
+  fi
   echo ""
   log_info "服务状态:"
   docker compose ps
@@ -167,24 +164,8 @@ logs() {
   docker compose logs -f --tail=100 "${@:-}"
 }
 
-export_images() {
-  mkdir -p images
-  log_info "正在导出镜像为离线包..."
-
-  docker compose build 2>/dev/null || true
-
-  log_info "  导出 search-boss:$VERSION"
-  docker save "search-boss:$VERSION" -o "images/search-boss-${VERSION}.tar"
-
-  log_info "  导出 postgres:16-alpine"
-  docker pull postgres:16-alpine 2>/dev/null || true
-  docker save postgres:16-alpine -o "images/postgres-16-alpine.tar"
-
-  log_info "离线镜像已导出到 images/ 目录"
-  ls -lh images/*.tar
-}
-
 backup() {
+  init_env
   local backup_dir="backups/$(date +%Y%m%d-%H%M%S)"
   mkdir -p "$backup_dir"
 
@@ -220,10 +201,8 @@ usage() {
   echo "  restart        重启所有服务"
   echo "  status         查看服务状态"
   echo "  logs [服务名]  查看日志 (可选: search-boss, postgres)"
-  echo "  build          构建 Docker 镜像"
   echo "  db-setup       初始化数据库表结构"
   echo "  load-images    导入离线 Docker 镜像"
-  echo "  export-images  导出 Docker 镜像为离线包"
   echo "  backup         备份数据库和简历文件"
   echo ""
 }
@@ -234,10 +213,8 @@ case "${1:-}" in
   restart)        restart ;;
   status)         status ;;
   logs)           shift; logs "$@" ;;
-  build)          check_docker; build ;;
   db-setup)       db_setup ;;
   load-images)    check_docker; load_images ;;
-  export-images)  check_docker; export_images ;;
   backup)         backup ;;
   *)              usage ;;
 esac

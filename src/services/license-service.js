@@ -3,16 +3,18 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const LICENSE_ALGORITHM = 'aes-256-cbc';
-const LICENSE_SECRET = 'sb-enterprise-license-2026-secret-key';
 const WARNING_DAYS = 30;
 const CACHE_TTL_MS = 60_000;
+const VENDOR_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAl5akcmQPRLdwq0w0+Tvu/gKkbhngw8ZmRgenZZnc8cU=
+-----END PUBLIC KEY-----`;
 
 class LicenseService {
-  constructor({ licensePath } = {}) {
+  constructor({ licensePath, publicKey = VENDOR_PUBLIC_KEY } = {}) {
     this.licensePath = licensePath
       || process.env.LICENSE_FILE
       || path.resolve(__dirname, '../../license/license.key');
+    this.publicKey = publicKey;
     this._cache = null;
     this._lastFileHash = null;
   }
@@ -22,6 +24,7 @@ class LicenseService {
     const cpuModel = cpus.length > 0 ? cpus[0].model : 'unknown';
     const interfaces = os.networkInterfaces();
     const macs = [];
+
     for (const iface of Object.values(interfaces)) {
       for (const info of iface) {
         if (!info.internal && info.mac && info.mac !== '00:00:00:00:00:00') {
@@ -29,12 +32,24 @@ class LicenseService {
         }
       }
     }
+
     macs.sort();
     const raw = `${os.hostname()}|${cpuModel}|${os.totalmem()}|${macs.join(',')}`;
     return crypto.createHash('sha256').update(raw).digest('hex');
   }
 
-  static generateLicense({ customerName, fingerprint, expiresAt, maxHrAccounts = 0, features = [] }) {
+  static generateLicense({
+    customerName,
+    fingerprint,
+    expiresAt,
+    maxHrAccounts = 0,
+    features = [],
+    privateKey
+  }) {
+    if (!privateKey) {
+      throw new Error('license_private_key_missing');
+    }
+
     const payload = {
       v: 1,
       customer: customerName,
@@ -45,43 +60,14 @@ class LicenseService {
       issuedAt: new Date().toISOString()
     };
 
-    const json = JSON.stringify(payload);
-    const key = crypto.createHash('sha256').update(LICENSE_SECRET).digest();
-    const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv(LICENSE_ALGORITHM, key, iv);
-    let encrypted = cipher.update(json, 'utf8', 'base64');
-    encrypted += cipher.final('base64');
+    const encodedPayload = encodeBase64Url(JSON.stringify(payload));
+    const signature = crypto.sign(
+      null,
+      Buffer.from(encodedPayload),
+      privateKey
+    );
 
-    const hmac = crypto.createHmac('sha256', LICENSE_SECRET)
-      .update(iv.toString('base64') + '.' + encrypted)
-      .digest('base64');
-
-    return `${iv.toString('base64')}.${encrypted}.${hmac}`;
-  }
-
-  _decrypt(licenseStr) {
-    const parts = licenseStr.trim().split('.');
-    if (parts.length !== 3) {
-      throw new Error('license_format_invalid');
-    }
-
-    const [ivB64, encrypted, hmac] = parts;
-
-    const expectedHmac = crypto.createHmac('sha256', LICENSE_SECRET)
-      .update(ivB64 + '.' + encrypted)
-      .digest('base64');
-
-    if (!crypto.timingSafeEqual(Buffer.from(hmac, 'base64'), Buffer.from(expectedHmac, 'base64'))) {
-      throw new Error('license_tampered');
-    }
-
-    const key = crypto.createHash('sha256').update(LICENSE_SECRET).digest();
-    const iv = Buffer.from(ivB64, 'base64');
-    const decipher = crypto.createDecipheriv(LICENSE_ALGORITHM, key, iv);
-    let decrypted = decipher.update(encrypted, 'base64', 'utf8');
-    decrypted += decipher.final('utf8');
-
-    return JSON.parse(decrypted);
+    return `${encodedPayload}.${encodeBase64Url(signature)}`;
   }
 
   validate() {
@@ -109,7 +95,7 @@ class LicenseService {
     try {
       if (!fs.existsSync(this.licensePath)) return this._lastFileHash !== null;
       const content = fs.readFileSync(this.licensePath, 'utf8');
-      const hash = crypto.createHash('md5').update(content).digest('hex');
+      const hash = crypto.createHash('sha256').update(content).digest('hex');
       if (this._lastFileHash === null) {
         this._lastFileHash = hash;
         return false;
@@ -132,9 +118,9 @@ class LicenseService {
     let payload;
     try {
       const content = fs.readFileSync(this.licensePath, 'utf8');
-      payload = this._decrypt(content);
+      payload = decodeAndVerifyLicense(content, this.publicKey);
     } catch (err) {
-      return { valid: false, error: 'license_decrypt_failed', message: '授权文件解密失败: ' + err.message };
+      return { valid: false, error: 'license_decrypt_failed', message: `授权文件校验失败: ${err.message}` };
     }
 
     if (payload.fingerprint && payload.fingerprint !== '*') {
@@ -191,6 +177,35 @@ class LicenseService {
   }
 }
 
+async function getHrAccountLicenseStatus({ pool, license }) {
+  const limit = Number(license?.maxHrAccounts || 0);
+
+  if (!license?.valid || !Number.isFinite(limit) || limit <= 0) {
+    return { allowed: true, limit: 0, activeCount: null };
+  }
+
+  const result = await pool.query(
+    "select count(*) from hr_accounts where status = 'active'"
+  );
+  const activeCount = Number(result.rows[0]?.count || 0);
+
+  if (activeCount >= limit) {
+    return {
+      allowed: false,
+      error: 'license_hr_account_limit_reached',
+      message: `授权允许的 HR 账号数量已达上限（${limit}个）`,
+      limit,
+      activeCount
+    };
+  }
+
+  return {
+    allowed: true,
+    limit,
+    activeCount
+  };
+}
+
 function licenseMiddleware(licenseService) {
   return (req, res, next) => {
     if (req.path === '/health'
@@ -218,7 +233,40 @@ function licenseMiddleware(licenseService) {
   };
 }
 
+function decodeAndVerifyLicense(licenseStr, publicKey) {
+  const parts = licenseStr.trim().split('.');
+  if (parts.length !== 2) {
+    throw new Error('license_format_invalid');
+  }
+
+  const [encodedPayload, encodedSignature] = parts;
+  const signature = decodeBase64Url(encodedSignature);
+  const verified = crypto.verify(
+    null,
+    Buffer.from(encodedPayload),
+    publicKey,
+    signature
+  );
+
+  if (!verified) {
+    throw new Error('license_signature_invalid');
+  }
+
+  return JSON.parse(decodeBase64Url(encodedPayload).toString('utf8'));
+}
+
+function encodeBase64Url(value) {
+  const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value, 'utf8');
+  return buffer.toString('base64url');
+}
+
+function decodeBase64Url(value) {
+  return Buffer.from(value, 'base64url');
+}
+
 module.exports = {
   LicenseService,
+  VENDOR_PUBLIC_KEY,
+  getHrAccountLicenseStatus,
   licenseMiddleware
 };

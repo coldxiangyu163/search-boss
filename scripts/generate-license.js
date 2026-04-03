@@ -25,6 +25,7 @@ generate 选项:
   --max-hr <数量>           最大 HR 账号数 (默认: 0 表示不限)
   --features <列表>         功能列表, 逗号分隔
   --output <路径>           输出文件路径 (默认: license/license.key)
+  --private-key-file <路径> 私钥文件路径 (默认读取环境变量)
 
 示例:
   # 获取目标机器指纹
@@ -41,6 +42,11 @@ generate 选项:
   node scripts/generate-license.js generate \\
     --customer "测试客户" \\
     --fingerprint "*"
+
+私钥来源:
+  优先级 1: --private-key-file
+  优先级 2: LICENSE_PRIVATE_KEY_FILE
+  优先级 3: LICENSE_PRIVATE_KEY
 `);
 }
 
@@ -53,8 +59,22 @@ function parseArgs(args) {
     else if (args[i] === '--max-hr' && args[i + 1]) opts.maxHr = Number(args[++i]);
     else if (args[i] === '--features' && args[i + 1]) opts.features = args[++i].split(',');
     else if (args[i] === '--output' && args[i + 1]) opts.output = args[++i];
+    else if (args[i] === '--private-key-file' && args[i + 1]) opts.privateKeyFile = args[++i];
   }
   return opts;
+}
+
+function readPrivateKey(opts) {
+  const filePath = opts.privateKeyFile || process.env.LICENSE_PRIVATE_KEY_FILE;
+  if (filePath) {
+    return fs.readFileSync(path.resolve(filePath), 'utf8');
+  }
+
+  if (process.env.LICENSE_PRIVATE_KEY) {
+    return process.env.LICENSE_PRIVATE_KEY;
+  }
+
+  throw new Error('缺少私钥，请通过 --private-key-file、LICENSE_PRIVATE_KEY_FILE 或 LICENSE_PRIVATE_KEY 提供');
 }
 
 const command = args[0];
@@ -77,13 +97,15 @@ if (command === 'fingerprint') {
   oneYearLater.setFullYear(oneYearLater.getFullYear() + 1);
 
   const expiresAt = opts.expires || oneYearLater.toISOString().split('T')[0] + 'T23:59:59Z';
+  const privateKey = readPrivateKey(opts);
 
   const license = LicenseService.generateLicense({
     customerName: opts.customer,
     fingerprint: opts.fingerprint || '*',
     expiresAt,
     maxHrAccounts: opts.maxHr || 0,
-    features: opts.features || []
+    features: opts.features || [],
+    privateKey
   });
 
   const outputPath = opts.output || path.resolve(__dirname, '../license/license.key');

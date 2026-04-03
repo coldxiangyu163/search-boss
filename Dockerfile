@@ -46,7 +46,7 @@ COPY package.json ./
 # Install bytenode in production for .jsc loading
 RUN npm install bytenode --no-save
 
-RUN mkdir -p resumes tmp
+RUN mkdir -p resumes tmp && chown -R node:node /app
 
 ENV NODE_ENV=production
 ENV PORT=3000

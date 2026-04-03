@@ -5,7 +5,11 @@ const express = require('express');
 const session = require('express-session');
 const PgStore = require('connect-pg-simple')(session);
 const { authMiddleware, requireRole, resolveHrScope, isSystemAdmin, isAdminRole } = require('./middleware/auth');
-const { LicenseService, licenseMiddleware } = require('./services/license-service');
+const {
+  LicenseService,
+  getHrAccountLicenseStatus,
+  licenseMiddleware
+} = require('./services/license-service');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const RESUMES_ROOT = path.join(REPO_ROOT, 'resumes');
@@ -994,6 +998,18 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
             });
           }
         }
+      }
+      const licenseStatus = await getHrAccountLicenseStatus({
+        pool,
+        license: req.license
+      });
+      if (!licenseStatus.allowed) {
+        return res.status(400).json({
+          error: licenseStatus.error,
+          message: licenseStatus.message,
+          limit: licenseStatus.limit,
+          activeCount: licenseStatus.activeCount
+        });
       }
       const result = await pool?.query(`
         insert into hr_accounts (user_id, department_id, manager_user_id, name, notes)

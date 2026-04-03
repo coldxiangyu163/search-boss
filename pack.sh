@@ -39,7 +39,7 @@ echo ""
 
 # --- Step 1: 构建 Docker 镜像 ---
 log_info "[1/5] 构建 Docker 镜像 (含 bytenode 源码编译)..."
-APP_VERSION="${VERSION}" docker compose build --no-cache
+docker build --no-cache -t "search-boss:${VERSION}" -f Dockerfile .
 docker tag "search-boss:${VERSION}" "search-boss:latest"
 log_info "  镜像构建完成: search-boss:${VERSION}"
 
@@ -100,6 +100,7 @@ echo "       --customer \"客户名称\" \\"
 echo "       --fingerprint \"客户机器指纹\" \\"
 echo "       --expires 2027-04-03 \\"
 echo "       --max-hr 10 \\"
+echo "       --private-key-file /path/to/vendor-license-private-key.pem \\"
 echo "       --output dist/${PACK_NAME}/license/license.key"
 echo ""
 echo "  2. 将 dist/${PACK_NAME}.tar.gz 交付给客户"

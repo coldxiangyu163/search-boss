@@ -1,6 +1,6 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { createPool } = require('../src/db/pool');
+const { Pool } = require('pg');
 const { resolveRuntimeEnv } = require('../src/runtime-env');
 const { exportExecutionData } = require('../src/services/execution-export-service');
 
@@ -21,7 +21,7 @@ async function executeCli(
     const options = parseArgs(argv);
     const databaseUrl = readRequiredEnv(runtimeEnv, 'DATABASE_URL');
 
-    pool = createPool(databaseUrl);
+    pool = new Pool({ connectionString: databaseUrl });
 
     const result = await exportExecutionDataImpl({
       pool,

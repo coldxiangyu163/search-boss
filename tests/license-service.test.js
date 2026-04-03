@@ -1,10 +1,18 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const { LicenseService } = require('../src/services/license-service');
+const {
+  LicenseService,
+  getHrAccountLicenseStatus
+} = require('../src/services/license-service');
+
+function createKeyPair() {
+  return crypto.generateKeyPairSync('ed25519');
+}
 
 test('getHardwareFingerprint returns a consistent sha256 hex string', () => {
   const fp1 = LicenseService.getHardwareFingerprint();
@@ -13,32 +21,47 @@ test('getHardwareFingerprint returns a consistent sha256 hex string', () => {
   assert.match(fp1, /^[0-9a-f]{64}$/);
 });
 
-test('generateLicense produces a 3-part base64 token', () => {
+test('generateLicense requires a private key', () => {
+  assert.throws(
+    () => LicenseService.generateLicense({
+      customerName: 'test-corp',
+      fingerprint: '*',
+      expiresAt: '2099-12-31T23:59:59Z'
+    }),
+    /license_private_key_missing/
+  );
+});
+
+test('generateLicense produces a signed 2-part token', () => {
+  const { privateKey } = createKeyPair();
   const license = LicenseService.generateLicense({
     customerName: 'test-corp',
     fingerprint: '*',
     expiresAt: '2099-12-31T23:59:59Z',
-    maxHrAccounts: 5
+    maxHrAccounts: 5,
+    privateKey
   });
 
   const parts = license.split('.');
-  assert.equal(parts.length, 3);
+  assert.equal(parts.length, 2);
 });
 
 test('validate succeeds with valid wildcard license', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'license-test-'));
   const licensePath = path.join(tmpDir, 'license.key');
+  const { publicKey, privateKey } = createKeyPair();
 
   const license = LicenseService.generateLicense({
     customerName: 'test-corp',
     fingerprint: '*',
     expiresAt: '2099-12-31T23:59:59Z',
-    maxHrAccounts: 10
+    maxHrAccounts: 10,
+    privateKey
   });
 
   fs.writeFileSync(licensePath, license);
 
-  const svc = new LicenseService({ licensePath });
+  const svc = new LicenseService({ licensePath, publicKey });
   const result = svc.validate();
 
   assert.equal(result.valid, true);
@@ -59,16 +82,18 @@ test('validate fails when license file is missing', () => {
 test('validate fails when license is expired', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'license-test-'));
   const licensePath = path.join(tmpDir, 'license.key');
+  const { publicKey, privateKey } = createKeyPair();
 
   const license = LicenseService.generateLicense({
     customerName: 'expired-corp',
     fingerprint: '*',
-    expiresAt: '2020-01-01T00:00:00Z'
+    expiresAt: '2020-01-01T00:00:00Z',
+    privateKey
   });
 
   fs.writeFileSync(licensePath, license);
 
-  const svc = new LicenseService({ licensePath });
+  const svc = new LicenseService({ licensePath, publicKey });
   const result = svc.validate();
 
   assert.equal(result.valid, false);
@@ -80,16 +105,18 @@ test('validate fails when license is expired', () => {
 test('validate fails when fingerprint does not match', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'license-test-'));
   const licensePath = path.join(tmpDir, 'license.key');
+  const { publicKey, privateKey } = createKeyPair();
 
   const license = LicenseService.generateLicense({
     customerName: 'wrong-machine',
     fingerprint: 'aaaa' + '0'.repeat(60),
-    expiresAt: '2099-12-31T23:59:59Z'
+    expiresAt: '2099-12-31T23:59:59Z',
+    privateKey
   });
 
   fs.writeFileSync(licensePath, license);
 
-  const svc = new LicenseService({ licensePath });
+  const svc = new LicenseService({ licensePath, publicKey });
   const result = svc.validate();
 
   assert.equal(result.valid, false);
@@ -101,17 +128,20 @@ test('validate fails when fingerprint does not match', () => {
 test('validate fails when license content is tampered', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'license-test-'));
   const licensePath = path.join(tmpDir, 'license.key');
+  const { publicKey, privateKey } = createKeyPair();
 
   const license = LicenseService.generateLicense({
     customerName: 'tampered',
     fingerprint: '*',
-    expiresAt: '2099-12-31T23:59:59Z'
+    expiresAt: '2099-12-31T23:59:59Z',
+    privateKey
   });
 
-  const tampered = license.slice(0, -5) + 'XXXXX';
+  const [payload, signature] = license.split('.');
+  const tampered = `${payload.slice(0, -4)}XXXX.${signature}`;
   fs.writeFileSync(licensePath, tampered);
 
-  const svc = new LicenseService({ licensePath });
+  const svc = new LicenseService({ licensePath, publicKey });
   const result = svc.validate();
 
   assert.equal(result.valid, false);
@@ -123,6 +153,7 @@ test('validate fails when license content is tampered', () => {
 test('validate returns warning when license expires within 30 days', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'license-test-'));
   const licensePath = path.join(tmpDir, 'license.key');
+  const { publicKey, privateKey } = createKeyPair();
 
   const soon = new Date();
   soon.setDate(soon.getDate() + 15);
@@ -130,12 +161,13 @@ test('validate returns warning when license expires within 30 days', () => {
   const license = LicenseService.generateLicense({
     customerName: 'expiring-corp',
     fingerprint: '*',
-    expiresAt: soon.toISOString()
+    expiresAt: soon.toISOString(),
+    privateKey
   });
 
   fs.writeFileSync(licensePath, license);
 
-  const svc = new LicenseService({ licensePath });
+  const svc = new LicenseService({ licensePath, publicKey });
   const result = svc.validate();
 
   assert.equal(result.valid, true);
@@ -150,16 +182,18 @@ test('validate returns warning when license expires within 30 days', () => {
 test('validate returns no warning when license has more than 30 days', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'license-test-'));
   const licensePath = path.join(tmpDir, 'license.key');
+  const { publicKey, privateKey } = createKeyPair();
 
   const license = LicenseService.generateLicense({
     customerName: 'safe-corp',
     fingerprint: '*',
-    expiresAt: '2099-12-31T23:59:59Z'
+    expiresAt: '2099-12-31T23:59:59Z',
+    privateKey
   });
 
   fs.writeFileSync(licensePath, license);
 
-  const svc = new LicenseService({ licensePath });
+  const svc = new LicenseService({ licensePath, publicKey });
   const result = svc.validate();
 
   assert.equal(result.valid, true);
@@ -172,15 +206,17 @@ test('validate returns no warning when license has more than 30 days', () => {
 test('reload picks up new license file without restart', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'license-test-'));
   const licensePath = path.join(tmpDir, 'license.key');
+  const { publicKey, privateKey } = createKeyPair();
 
   const oldLicense = LicenseService.generateLicense({
     customerName: 'old-corp',
     fingerprint: '*',
-    expiresAt: '2020-01-01T00:00:00Z'
+    expiresAt: '2020-01-01T00:00:00Z',
+    privateKey
   });
   fs.writeFileSync(licensePath, oldLicense);
 
-  const svc = new LicenseService({ licensePath });
+  const svc = new LicenseService({ licensePath, publicKey });
   assert.equal(svc.validate().valid, false);
   assert.equal(svc.validate().error, 'license_expired');
 
@@ -188,7 +224,8 @@ test('reload picks up new license file without restart', () => {
     customerName: 'renewed-corp',
     fingerprint: '*',
     expiresAt: '2099-12-31T23:59:59Z',
-    maxHrAccounts: 20
+    maxHrAccounts: 20,
+    privateKey
   });
   fs.writeFileSync(licensePath, newLicense);
 
@@ -203,21 +240,24 @@ test('reload picks up new license file without restart', () => {
 test('validate auto-detects file change within cache window', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'license-test-'));
   const licensePath = path.join(tmpDir, 'license.key');
+  const { publicKey, privateKey } = createKeyPair();
 
   const expiredLicense = LicenseService.generateLicense({
     customerName: 'auto-detect',
     fingerprint: '*',
-    expiresAt: '2020-01-01T00:00:00Z'
+    expiresAt: '2020-01-01T00:00:00Z',
+    privateKey
   });
   fs.writeFileSync(licensePath, expiredLicense);
 
-  const svc = new LicenseService({ licensePath });
+  const svc = new LicenseService({ licensePath, publicKey });
   assert.equal(svc.validate().valid, false);
 
   const freshLicense = LicenseService.generateLicense({
     customerName: 'auto-detect-renewed',
     fingerprint: '*',
-    expiresAt: '2099-12-31T23:59:59Z'
+    expiresAt: '2099-12-31T23:59:59Z',
+    privateKey
   });
   fs.writeFileSync(licensePath, freshLicense);
 
@@ -231,6 +271,7 @@ test('validate auto-detects file change within cache window', () => {
 test('validate succeeds with matching hardware fingerprint', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'license-test-'));
   const licensePath = path.join(tmpDir, 'license.key');
+  const { publicKey, privateKey } = createKeyPair();
 
   const fp = LicenseService.getHardwareFingerprint();
 
@@ -239,12 +280,13 @@ test('validate succeeds with matching hardware fingerprint', () => {
     fingerprint: fp,
     expiresAt: '2099-12-31T23:59:59Z',
     maxHrAccounts: 3,
-    features: ['source', 'followup']
+    features: ['source', 'followup'],
+    privateKey
   });
 
   fs.writeFileSync(licensePath, license);
 
-  const svc = new LicenseService({ licensePath });
+  const svc = new LicenseService({ licensePath, publicKey });
   const result = svc.validate();
 
   assert.equal(result.valid, true);
@@ -253,4 +295,34 @@ test('validate succeeds with matching hardware fingerprint', () => {
   assert.deepEqual(result.features, ['source', 'followup']);
 
   fs.rmSync(tmpDir, { recursive: true });
+});
+
+test('getHrAccountLicenseStatus allows creation when license has no cap', async () => {
+  const result = await getHrAccountLicenseStatus({
+    pool: {
+      async query() {
+        throw new Error('should not query without a cap');
+      }
+    },
+    license: { valid: true, maxHrAccounts: 0 }
+  });
+
+  assert.deepEqual(result, { allowed: true, limit: 0, activeCount: null });
+});
+
+test('getHrAccountLicenseStatus blocks creation when active HR accounts reach the license cap', async () => {
+  const result = await getHrAccountLicenseStatus({
+    pool: {
+      async query(sql) {
+        assert.match(sql, /from hr_accounts/i);
+        return { rows: [{ count: '3' }] };
+      }
+    },
+    license: { valid: true, maxHrAccounts: 3 }
+  });
+
+  assert.equal(result.allowed, false);
+  assert.equal(result.error, 'license_hr_account_limit_reached');
+  assert.equal(result.limit, 3);
+  assert.equal(result.activeCount, 3);
 });

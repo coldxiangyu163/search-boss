@@ -67,6 +67,7 @@ node scripts/generate-license.js generate \
   --fingerprint "*" \
   --expires 2026-07-01 \
   --max-hr 3 \
+  --private-key-file /path/to/vendor-license-private-key.pem \
   --output dist/search-boss-enterprise-v1.0.0/license/license.key
 ```
 
@@ -80,6 +81,7 @@ node scripts/generate-license.js generate \
   --fingerprint "客户提供的64位hex字符串" \
   --expires 2027-04-03 \
   --max-hr 10 \
+  --private-key-file /path/to/vendor-license-private-key.pem \
   --output dist/search-boss-enterprise-v1.0.0/license/license.key
 ```
 
@@ -91,6 +93,7 @@ node scripts/generate-license.js generate \
 | `--fingerprint` | 是 | 机器指纹，`*` 表示不绑定 |
 | `--expires` | 否 | 到期日期 YYYY-MM-DD，默认 1 年后 |
 | `--max-hr` | 否 | HR 账号上限，0 表示不限 |
+| `--private-key-file` | 否 | 供应商私钥文件路径；也可用环境变量提供 |
 | `--output` | 否 | 输出路径，默认 `license/license.key` |
 
 ## 3. 交付给客户

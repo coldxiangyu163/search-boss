@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { buildConfig, loadConfig } = require('../src/config');
+const repoRoot = path.resolve(__dirname, '..');
 
 test('buildConfig reads required runtime settings from env without machine defaults', () => {
   const runtimeEnv = {
@@ -53,7 +54,7 @@ test('buildConfig applies default BOSS CLI settings when optional env vars are a
 
   assert.equal(config.bossCdpEndpoint, 'http://127.0.0.1:9222');
   assert.equal(config.bossCdpTargetUrlPrefix, 'https://www.zhipin.com/');
-  assert.equal(config.bossCliSessionDir, path.join(path.resolve(__dirname, '..'), 'tmp'));
+  assert.equal(config.bossCliSessionDir, path.join(repoRoot, 'tmp'));
   assert.equal(config.bossCliEnabled, false);
 });
 
@@ -66,7 +67,7 @@ test('buildConfig resolves relative NANOBOT_CONFIG_PATH from repo root', () => {
 
   const config = buildConfig(runtimeEnv);
 
-  assert.equal(config.nanobotConfigPath, path.join(path.resolve(__dirname, '..'), '.nanobot-boss'));
+  assert.equal(config.nanobotConfigPath, path.join(repoRoot, '.nanobot-boss'));
 });
 
 test('loadConfig reads runtime settings from .env file when process env is empty', async () => {
@@ -82,7 +83,7 @@ test('loadConfig reads runtime settings from .env file when process env is empty
       'NANOBOT_CONFIG_PATH=/Users/coldxiangyu/.nanobot-boss/config.json',
       'BOSS_CDP_ENDPOINT=http://127.0.0.1:9444',
       'BOSS_CDP_TARGET_URL_PREFIX=https://www.zhipin.com/web/chat/recommend',
-      'BOSS_CLI_SESSION_DIR=/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/tmp',
+      `BOSS_CLI_SESSION_DIR=${path.join(repoRoot, 'tmp')}`,
       'BOSS_CLI_ENABLED=false'
     ].join('\n')
   );
@@ -104,9 +105,6 @@ test('loadConfig reads runtime settings from .env file when process env is empty
   assert.equal(config.nanobotConfigPath, '/Users/coldxiangyu/.nanobot-boss/config.json');
   assert.equal(config.bossCdpEndpoint, 'http://127.0.0.1:9444');
   assert.equal(config.bossCdpTargetUrlPrefix, 'https://www.zhipin.com/web/chat/recommend');
-  assert.equal(
-    config.bossCliSessionDir,
-    '/Users/coldxiangyu/.config/superpowers/worktrees/search-boss/restore-a65695f/tmp'
-  );
+  assert.equal(config.bossCliSessionDir, path.join(repoRoot, 'tmp'));
   assert.equal(config.bossCliEnabled, false);
 });

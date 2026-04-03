@@ -3,9 +3,6 @@ version: '3.8'
 services:
   search-boss:
     image: search-boss:${APP_VERSION:-latest}
-    build:
-      context: .
-      dockerfile: Dockerfile
     container_name: search-boss
     restart: unless-stopped
     ports:
