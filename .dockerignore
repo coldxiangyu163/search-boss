@@ -1,0 +1,17 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+.worktrees
+.env
+.env.local
+.env.*
+!.env.template
+tmp
+sessions
+resumes
+tests
+docs
+*.md
+!package.json
+!package-lock.json

@@ -9,7 +9,7 @@ function buildConfig(env = process.env) {
   const databaseUrl = readRequiredEnv(env, 'DATABASE_URL', missing);
   const agentToken = readRequiredEnv(env, 'AGENT_TOKEN', missing);
   const nanobotConfigPath = resolveRepoRelativePath(
-    readRequiredEnv(env, 'NANOBOT_CONFIG_PATH', missing)
+    readOptionalEnv(env, 'NANOBOT_CONFIG_PATH')
   );
 
   if (missing.length > 0) {
@@ -22,6 +22,7 @@ function buildConfig(env = process.env) {
     sourceDatabaseUrl: readOptionalEnv(env, 'SOURCE_DATABASE_URL'),
     agentToken,
     nanobotConfigPath,
+    licenseFile: readOptionalEnv(env, 'LICENSE_FILE'),
     bossCdpEndpoint: readOptionalEnv(env, 'BOSS_CDP_ENDPOINT') || 'http://127.0.0.1:9222',
     bossCdpTargetUrlPrefix:
       readOptionalEnv(env, 'BOSS_CDP_TARGET_URL_PREFIX') || 'https://www.zhipin.com/',

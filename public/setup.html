@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>初始化设置 - BOSS 寻源管理系统</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #f5f7fa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1a1a1a; }
+    .setup-container { max-width: 640px; margin: 40px auto; padding: 0 20px; }
+    .setup-header { text-align: center; margin-bottom: 32px; }
+    .setup-header .brand { display: inline-flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+    .setup-header .brand-mark { width: 48px; height: 48px; border-radius: 12px; background: #2563eb; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: bold; }
+    .setup-header h1 { font-size: 20px; }
+    .setup-header p { color: #666; font-size: 14px; margin-top: 4px; }
+
+    .steps { display: flex; gap: 4px; margin-bottom: 32px; }
+    .step-dot { flex: 1; height: 4px; border-radius: 2px; background: #e0e0e0; transition: background 0.3s; }
+    .step-dot.active { background: #2563eb; }
+    .step-dot.done { background: #16a34a; }
+
+    .card { background: #fff; border-radius: 12px; box-shadow: 0 1px 8px rgba(0,0,0,0.06); padding: 32px; margin-bottom: 24px; }
+    .card h2 { font-size: 18px; margin-bottom: 4px; }
+    .card .subtitle { color: #666; font-size: 13px; margin-bottom: 24px; }
+    .step-panel { display: none; }
+    .step-panel.active { display: block; }
+
+    .field { margin-bottom: 16px; }
+    .field label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #444; }
+    .field input { width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+    .field input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,0.1); }
+    .field .hint { font-size: 12px; color: #999; margin-top: 4px; }
+
+    .btn-row { display: flex; justify-content: space-between; margin-top: 24px; }
+    .btn { padding: 10px 24px; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; border: none; }
+    .btn-primary { background: #2563eb; color: #fff; }
+    .btn-primary:hover { background: #1d4ed8; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-secondary { background: #f3f4f6; color: #333; }
+    .btn-secondary:hover { background: #e5e7eb; }
+    .btn-ghost { background: none; color: #666; }
+
+    .check-item { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #f0f0f0; }
+    .check-item:last-child { border-bottom: none; }
+    .check-icon { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
+    .check-icon.ok { background: #dcfce7; color: #16a34a; }
+    .check-icon.fail { background: #fee2e2; color: #dc2626; }
+    .check-icon.wait { background: #f3f4f6; color: #999; }
+    .check-info { flex: 1; }
+    .check-info .name { font-size: 14px; font-weight: 500; }
+    .check-info .detail { font-size: 12px; color: #666; margin-top: 2px; }
+
+    .success-panel { text-align: center; padding: 20px 0; }
+    .success-icon { font-size: 48px; margin-bottom: 16px; }
+    .success-panel h2 { margin-bottom: 8px; }
+    .success-panel p { color: #666; font-size: 14px; }
+    .success-panel .btn { margin-top: 24px; }
+
+    .error-msg { color: #dc2626; font-size: 13px; margin-top: 8px; min-height: 20px; }
+  </style>
+</head>
+<body>
+  <div class="setup-container">
+    <div class="setup-header">
+      <div class="brand">
+        <div class="brand-mark">聘</div>
+        <div>
+          <h1>BOSS 寻源管理系统</h1>
+          <p>首次安装设置</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="steps" id="steps">
+      <div class="step-dot active"></div>
+      <div class="step-dot"></div>
+      <div class="step-dot"></div>
+      <div class="step-dot"></div>
+      <div class="step-dot"></div>
+    </div>
+
+    <!-- Step 1: 环境检查 -->
+    <div class="step-panel active" id="step-1">
+      <div class="card">
+        <h2>Step 1 · 环境检查</h2>
+        <p class="subtitle">正在检测系统运行环境...</p>
+        <div id="checks">
+          <div class="check-item">
+            <div class="check-icon wait" id="chk-api-icon">...</div>
+            <div class="check-info">
+              <div class="name">后台服务</div>
+              <div class="detail" id="chk-api-detail">检测中</div>
+            </div>
+          </div>
+          <div class="check-item">
+            <div class="check-icon wait" id="chk-db-icon">...</div>
+            <div class="check-info">
+              <div class="name">数据库</div>
+              <div class="detail" id="chk-db-detail">检测中</div>
+            </div>
+          </div>
+          <div class="check-item">
+            <div class="check-icon wait" id="chk-license-icon">...</div>
+            <div class="check-info">
+              <div class="name">授权状态</div>
+              <div class="detail" id="chk-license-detail">检测中</div>
+            </div>
+          </div>
+        </div>
+        <div class="btn-row">
+          <span></span>
+          <button class="btn btn-primary" id="btn-step1-next" disabled onclick="goStep(2)">下一步</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 2: 创建管理员 -->
+    <div class="step-panel" id="step-2">
+      <div class="card">
+        <h2>Step 2 · 创建管理员账号</h2>
+        <p class="subtitle">设置系统管理员，用于登录管理后台</p>
+        <div class="field">
+          <label>姓名</label>
+          <input type="text" id="admin-name" placeholder="管理员姓名" />
+        </div>
+        <div class="field">
+          <label>邮箱</label>
+          <input type="email" id="admin-email" placeholder="admin@company.com" />
+          <div class="hint">用于登录系统</div>
+        </div>
+        <div class="field">
+          <label>密码</label>
+          <input type="password" id="admin-password" placeholder="至少 6 位" />
+        </div>
+        <div class="field">
+          <label>确认密码</label>
+          <input type="password" id="admin-password2" placeholder="再次输入密码" />
+        </div>
+        <div class="error-msg" id="admin-error"></div>
+        <div class="btn-row">
+          <button class="btn btn-secondary" onclick="goStep(1)">上一步</button>
+          <button class="btn btn-primary" id="btn-create-admin" onclick="createAdmin()">创建管理员</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 3: LLM 配置 -->
+    <div class="step-panel" id="step-3">
+      <div class="card">
+        <h2>Step 3 · AI 模型配置</h2>
+        <p class="subtitle">配置 LLM 接口，用于候选人智能评估</p>
+        <div class="field">
+          <label>接口地址</label>
+          <input type="text" id="llm-api-base" placeholder="https://api.openai.com/v1" />
+          <div class="hint">OpenAI 兼容接口，以 /v1 结尾</div>
+        </div>
+        <div class="field">
+          <label>接口密钥</label>
+          <input type="password" id="llm-api-key" placeholder="sk-..." />
+        </div>
+        <div class="field">
+          <label>模型名称</label>
+          <input type="text" id="llm-model" placeholder="gpt-5.4" value="gpt-5.4" />
+        </div>
+        <div class="error-msg" id="llm-error"></div>
+        <div class="btn-row">
+          <button class="btn btn-secondary" onclick="goStep(2)">上一步</button>
+          <div>
+            <button class="btn btn-ghost" onclick="goStep(4)" style="margin-right:8px;">稍后配置</button>
+            <button class="btn btn-primary" id="btn-save-llm" onclick="saveLlmConfig()">保存配置</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 4: Chrome 状态 -->
+    <div class="step-panel" id="step-4">
+      <div class="card">
+        <h2>Step 4 · Chrome 浏览器状态</h2>
+        <p class="subtitle">Chrome 已内置在容器中，系统启动时自动运行</p>
+        <div class="check-item">
+          <div class="check-icon wait" id="chk-chrome-icon">...</div>
+          <div class="check-info">
+            <div class="name">Chrome 浏览器</div>
+            <div class="detail" id="chk-chrome-detail">正在检测...</div>
+          </div>
+        </div>
+        <div style="background: #f8fafc; border-radius: 8px; padding: 16px; margin-top: 16px; font-size: 13px; line-height: 1.8; display:none;" id="chrome-login-hint">
+          <strong>下一步：</strong>进入系统后，在管理后台「浏览器管理」中打开 BOSS 直聘页面，用手机扫码完成登录。
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-secondary" onclick="goStep(3)">上一步</button>
+          <div>
+            <button class="btn btn-ghost" onclick="goStep(5)" style="margin-right:8px;">跳过</button>
+            <button class="btn btn-primary" id="btn-check-chrome" onclick="checkChrome()">检测连接</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 5: 完成 -->
+    <div class="step-panel" id="step-5">
+      <div class="card">
+        <div class="success-panel">
+          <div class="success-icon">&#10003;</div>
+          <h2>设置完成</h2>
+          <p>系统已就绪，可以开始使用。</p>
+          <button class="btn btn-primary" onclick="window.location.href='/login.html'" style="margin-top:24px;">进入系统</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+let currentStep = 1;
+
+function goStep(n) {
+  document.querySelectorAll('.step-panel').forEach(el => el.classList.remove('active'));
+  document.getElementById('step-' + n).classList.add('active');
+
+  document.querySelectorAll('.step-dot').forEach((dot, i) => {
+    dot.className = 'step-dot';
+    if (i + 1 < n) dot.classList.add('done');
+    else if (i + 1 === n) dot.classList.add('active');
+  });
+
+  currentStep = n;
+  if (n === 4) checkChrome();
+}
+
+function setCheck(id, status, detail) {
+  const icon = document.getElementById(id + '-icon');
+  const detailEl = document.getElementById(id + '-detail');
+  icon.className = 'check-icon ' + status;
+  icon.textContent = status === 'ok' ? '\u2713' : status === 'fail' ? '\u2717' : '...';
+  detailEl.textContent = detail;
+}
+
+async function runChecks() {
+  let allOk = true;
+
+  try {
+    const res = await fetch('/health');
+    const data = await res.json();
+    if (data.status === 'ok') {
+      setCheck('chk-api', 'ok', '运行正常');
+    } else {
+      setCheck('chk-api', 'fail', '异常');
+      allOk = false;
+    }
+  } catch {
+    setCheck('chk-api', 'fail', '无法连接');
+    allOk = false;
+  }
+
+  try {
+    const res = await fetch('/api/setup/status');
+    const data = await res.json();
+    if (data.dbReady) {
+      setCheck('chk-db', 'ok', '已连接');
+    } else {
+      setCheck('chk-db', 'fail', '未就绪');
+      allOk = false;
+    }
+    if (data.hasAdmin) {
+      setCheck('chk-db', 'ok', '已连接 (管理员已存在)');
+    }
+  } catch {
+    setCheck('chk-db', 'fail', '检测失败');
+    allOk = false;
+  }
+
+  try {
+    const res = await fetch('/api/license');
+    const data = await res.json();
+    if (data.valid) {
+      const info = data.warning
+        ? data.warning.message
+        : '有效期至 ' + data.expiresAt;
+      setCheck('chk-license', 'ok', data.customer + ' - ' + info);
+    } else {
+      setCheck('chk-license', 'fail', data.message || '授权无效');
+      allOk = false;
+    }
+  } catch {
+    setCheck('chk-license', 'ok', '未启用授权校验');
+  }
+
+  document.getElementById('btn-step1-next').disabled = !allOk;
+}
+
+async function createAdmin() {
+  const name = document.getElementById('admin-name').value.trim();
+  const email = document.getElementById('admin-email').value.trim();
+  const password = document.getElementById('admin-password').value;
+  const password2 = document.getElementById('admin-password2').value;
+  const errorEl = document.getElementById('admin-error');
+  const btn = document.getElementById('btn-create-admin');
+  errorEl.textContent = '';
+
+  if (!name) { errorEl.textContent = '请输入姓名'; return; }
+  if (!email) { errorEl.textContent = '请输入邮箱'; return; }
+  if (password.length < 6) { errorEl.textContent = '密码至少 6 位'; return; }
+  if (password !== password2) { errorEl.textContent = '两次密码不一致'; return; }
+
+  btn.disabled = true;
+  btn.textContent = '创建中...';
+
+  try {
+    const res = await fetch('/api/setup/create-admin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email, password })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      goStep(3);
+    } else {
+      errorEl.textContent = data.message || '创建失败';
+    }
+  } catch {
+    errorEl.textContent = '网络错误';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '创建管理员';
+  }
+}
+
+async function saveLlmConfig() {
+  const apiBase = document.getElementById('llm-api-base').value.trim();
+  const apiKey = document.getElementById('llm-api-key').value.trim();
+  const model = document.getElementById('llm-model').value.trim();
+  const errorEl = document.getElementById('llm-error');
+  const btn = document.getElementById('btn-save-llm');
+  errorEl.textContent = '';
+
+  if (!apiKey) { errorEl.textContent = '请填写接口密钥'; return; }
+
+  btn.disabled = true;
+  btn.textContent = '保存中...';
+
+  try {
+    const res = await fetch('/api/setup/save-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ llmApiBase: apiBase, llmApiKey: apiKey, llmModel: model })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      goStep(4);
+    } else {
+      errorEl.textContent = data.message || '保存失败';
+    }
+  } catch {
+    errorEl.textContent = '网络错误';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '保存配置';
+  }
+}
+
+async function checkChrome() {
+  const btn = document.getElementById('btn-check-chrome');
+  btn.disabled = true;
+  btn.textContent = '检测中...';
+  setCheck('chk-chrome', 'wait', '正在检测...');
+
+  try {
+    const res = await fetch('/api/setup/check-chrome');
+    const data = await res.json();
+    if (data.ok) {
+      setCheck('chk-chrome', 'ok', 'Chrome ' + (data.browser || '') + ' 已就绪');
+      document.getElementById('chrome-login-hint').style.display = 'block';
+      setTimeout(function() { goStep(5); }, 1200);
+    } else {
+      setCheck('chk-chrome', 'fail', '正在启动中，请稍后重试');
+    }
+  } catch {
+    setCheck('chk-chrome', 'fail', '检测失败');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '检测连接';
+  }
+}
+
+runChecks();
+</script>
+</body>
+</html>

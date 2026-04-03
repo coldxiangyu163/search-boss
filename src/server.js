@@ -19,9 +19,9 @@ const { LlmEvaluator } = require('./services/llm-evaluator');
 const { BrowserInstanceManager } = require('./services/browser-instance-manager');
 const { ChromeLauncher } = require('./services/chrome-launcher');
 
-const nanobotRunner = new NanobotRunner({
-  configPath: config.nanobotConfigPath
-});
+const nanobotRunner = config.nanobotConfigPath
+  ? new NanobotRunner({ configPath: config.nanobotConfigPath })
+  : null;
 
 const bossCliRunner = config.bossCliEnabled
   ? new BossCliRunner()
@@ -44,7 +44,14 @@ agentService.deterministicContextService = new DeterministicContextService({
 });
 agentService.runOrchestrator = new RunOrchestrator({ agentService });
 
-const llmEvaluator = config.llmApiKey
+async function getDbConfig(key) {
+  try {
+    const result = await pool.query('select value from system_config where key = $1', [key]);
+    return result.rows[0]?.value || null;
+  } catch { return null; }
+}
+
+let _llmEvaluator = config.llmApiKey
   ? new LlmEvaluator({
     apiBase: config.llmApiBase,
     apiKey: config.llmApiKey,
@@ -52,22 +59,47 @@ const llmEvaluator = config.llmApiKey
   })
   : null;
 
-const sourceLoopService = (config.sourceLoopEnabled && bossCliRunner && llmEvaluator)
+async function getLlmEvaluator() {
+  if (_llmEvaluator) return _llmEvaluator;
+  const apiKey = await getDbConfig('llm_api_key');
+  if (!apiKey) return null;
+  const apiBase = (await getDbConfig('llm_api_base')) || 'https://www.openclaudecode.cn/v1';
+  const model = (await getDbConfig('llm_model')) || 'gpt-5.4';
+  _llmEvaluator = new LlmEvaluator({ apiBase, apiKey, model });
+  return _llmEvaluator;
+}
+
+function resetLlmEvaluator() { _llmEvaluator = null; }
+
+const llmEvaluatorProxy = {
+  async evaluateCandidate(...args) {
+    const evaluator = await getLlmEvaluator();
+    if (!evaluator) throw new Error('LLM 未配置，请在系统设置中配置 LLM 接口');
+    return evaluator.evaluateCandidate(...args);
+  },
+  async chat(...args) {
+    const evaluator = await getLlmEvaluator();
+    if (!evaluator) throw new Error('LLM 未配置');
+    return evaluator.chat(...args);
+  }
+};
+
+const sourceLoopService = (config.sourceLoopEnabled && bossCliRunner)
   ? new SourceLoopService({
     bossCliRunner,
     agentService,
-    llmEvaluator,
+    llmEvaluator: llmEvaluatorProxy,
     targetCount: config.sourceLoopTargetCount,
     candidateDelayMin: config.loopDelayMin,
     candidateDelayMax: config.loopDelayMax
   })
   : null;
 
-const followupLoopService = (config.sourceLoopEnabled && bossCliRunner && llmEvaluator)
+const followupLoopService = (config.sourceLoopEnabled && bossCliRunner)
   ? new FollowupLoopService({
     bossCliRunner,
     agentService,
-    llmEvaluator,
+    llmEvaluator: llmEvaluatorProxy,
     maxThreads: config.followupLoopMaxThreads,
     threadDelayMin: config.loopDelayMin,
     threadDelayMax: config.loopDelayMax
@@ -96,16 +128,20 @@ const app = createApp({
 const port = config.port;
 
 async function ensureBrowserInstances() {
-  const result = await pool.query(`
-    select bi.id, bi.cdp_endpoint, bi.user_data_dir, bi.download_dir,
-           bi.debug_port, bi.host, bi.instance_name
-    from browser_instances bi
-    join boss_accounts ba on ba.id = bi.boss_account_id
-    where ba.status = 'active'
-    order by bi.id
-  `);
-
-  const instances = result.rows;
+  let instances = [];
+  try {
+    const result = await pool.query(`
+      select bi.id, bi.cdp_endpoint, bi.user_data_dir, bi.download_dir,
+             bi.debug_port, bi.host, bi.instance_name
+      from browser_instances bi
+      join boss_accounts ba on ba.id = bi.boss_account_id
+      where ba.status = 'active'
+      order by bi.id
+    `);
+    instances = result.rows;
+  } catch (err) {
+    console.log(`[startup] browser_instances query failed (table may not exist yet): ${err.message}`);
+  }
 
   if (instances.length === 0) {
     console.log('[startup] No browser instances configured in database, using global config fallback');

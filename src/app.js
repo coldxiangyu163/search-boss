@@ -5,6 +5,11 @@ const express = require('express');
 const session = require('express-session');
 const PgStore = require('connect-pg-simple')(session);
 const { authMiddleware, requireRole, resolveHrScope, isSystemAdmin, isAdminRole } = require('./middleware/auth');
+const {
+  LicenseService,
+  getHrAccountLicenseStatus,
+  licenseMiddleware
+} = require('./services/license-service');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const RESUMES_ROOT = path.join(REPO_ROOT, 'resumes');
@@ -14,6 +19,19 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.use(express.json());
 
+  if (config.licenseFile) {
+    const licenseService = new LicenseService({ licensePath: config.licenseFile });
+    app.use(licenseMiddleware(licenseService));
+    app.get('/api/license', (req, res) => {
+      const result = licenseService.validate();
+      res.json(result);
+    });
+    app.post('/api/license/reload', (req, res) => {
+      const result = licenseService.reload();
+      res.json(result);
+    });
+  }
+
   if (pool) {
     app.use(session({
       store: new PgStore({ pool, createTableIfMissing: true }),
@@ -22,7 +40,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
       saveUninitialized: false,
       cookie: {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: process.env.COOKIE_SECURE === 'true',
         maxAge: 24 * 60 * 60 * 1000
       }
     }));
@@ -55,7 +73,135 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
     });
   }
 
+  // --- Setup first-run detection (must be before static middleware) ---
+  let _setupComplete = null;
+
+  async function isSetupComplete() {
+    if (!pool) return true;
+    if (_setupComplete === true) return true;
+    try {
+      const result = await pool.query("select count(*) from users where role in ('system_admin', 'enterprise_admin')");
+      _setupComplete = Number(result.rows[0].count) > 0;
+      return _setupComplete;
+    } catch {
+      return false;
+    }
+  }
+
+  if (pool) {
+    app.use(async (req, _res, next) => {
+      if (req.path.startsWith('/api/')
+        || req.path === '/setup.html'
+        || req.path === '/health'
+        || req.path.endsWith('.css')
+        || req.path.endsWith('.js')
+        || req.path.endsWith('.png')
+        || req.path.endsWith('.ico')) {
+        return next();
+      }
+      if (!(await isSetupComplete())) {
+        return _res.redirect('/setup.html');
+      }
+      next();
+    });
+  }
+
   app.use(express.static('public'));
+
+  // --- Setup routes (first-run wizard, no auth required) ---
+  if (pool) {
+    app.get('/api/setup/status', async (req, res) => {
+      try {
+        let dbReady = false;
+        try {
+          await pool.query('select 1');
+          dbReady = true;
+        } catch {}
+
+        const hasAdmin = await isSetupComplete();
+        res.json({ dbReady, hasAdmin, setupRequired: !hasAdmin });
+      } catch (error) {
+        res.json({ dbReady: false, hasAdmin: false, setupRequired: true });
+      }
+    });
+
+    app.post('/api/setup/create-admin', async (req, res, next) => {
+      try {
+        if (await isSetupComplete()) {
+          return res.status(400).json({ ok: false, message: '管理员已存在，无法重复创建' });
+        }
+
+        const { name, email, password } = req.body;
+        if (!name || !email || !password || password.length < 6) {
+          return res.status(400).json({ ok: false, message: '请填写完整信息，密码至少 6 位' });
+        }
+
+        let deptResult = await pool.query("select id from departments limit 1");
+        if (deptResult.rows.length === 0) {
+          deptResult = await pool.query("insert into departments (name) values ('默认部门') returning id");
+        }
+        const departmentId = deptResult.rows[0].id;
+
+        const user = await services.auth.createUser({
+          name,
+          email,
+          password,
+          role: 'system_admin',
+          departmentId
+        });
+
+        _setupComplete = true;
+        res.json({ ok: true, user });
+      } catch (error) {
+        if (error.code === '23505') {
+          return res.status(400).json({ ok: false, message: '该邮箱已被注册' });
+        }
+        next(error);
+      }
+    });
+
+    app.post('/api/setup/save-config', async (req, res, next) => {
+      try {
+        const { llmApiBase, llmApiKey, llmModel } = req.body;
+        if (!llmApiKey) {
+          return res.status(400).json({ ok: false, message: '请填写 LLM 接口密钥' });
+        }
+
+        const entries = [
+          ['llm_api_base', llmApiBase || 'https://www.openclaudecode.cn/v1'],
+          ['llm_api_key', llmApiKey],
+          ['llm_model', llmModel || 'gpt-5.4']
+        ];
+
+        for (const [key, value] of entries) {
+          await pool.query(
+            `insert into system_config (key, value, updated_at) values ($1, $2, now())
+             on conflict (key) do update set value = $2, updated_at = now()`,
+            [key, value]
+          );
+        }
+
+        res.json({ ok: true });
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.get('/api/setup/check-chrome', async (req, res) => {
+      const endpoint = config.bossCdpEndpoint || 'http://127.0.0.1:9222';
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        const resp = await fetch(`${endpoint}/json/version`, { signal: controller.signal });
+        clearTimeout(timeout);
+        const data = await resp.json();
+        res.json({ ok: true, browser: data.Browser || 'unknown', endpoint });
+      } catch {
+        res.json({ ok: false, message: `无法连接 Chrome (${endpoint})`, endpoint });
+      }
+    });
+
+  }
 
   // --- Auth routes (no auth required) ---
   app.post('/api/auth/login', async (req, res, next) => {
@@ -980,6 +1126,18 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
             });
           }
         }
+      }
+      const licenseStatus = await getHrAccountLicenseStatus({
+        pool,
+        license: req.license
+      });
+      if (!licenseStatus.allowed) {
+        return res.status(400).json({
+          error: licenseStatus.error,
+          message: licenseStatus.message,
+          limit: licenseStatus.limit,
+          activeCount: licenseStatus.activeCount
+        });
       }
       const result = await pool?.query(`
         insert into hr_accounts (user_id, department_id, manager_user_id, name, notes)

@@ -4,6 +4,7 @@ node_modules/
 .env.*
 !.env.example
 !.env*.example
+!.env.template
 
 coverage/
 dist/
@@ -27,5 +28,7 @@ Thumbs.db
 .nanobot-boss/workspace/memory/HISTORY.md
 .nanobot-boss/workspace/memory/MEMORY.md
 resumes/
+license/
+.keys/
 
 .worktrees/

@@ -1,0 +1,55 @@
+services:
+  search-boss:
+    image: search-boss:${APP_VERSION:-latest}
+    container_name: search-boss
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgresql://${DB_USER:-search_boss}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-search_boss_ops}
+      AGENT_TOKEN: ${AGENT_TOKEN}
+      SESSION_SECRET: ${SESSION_SECRET}
+      BOSS_CDP_ENDPOINT: http://127.0.0.1:9222
+      BOSS_CLI_ENABLED: ${BOSS_CLI_ENABLED:-true}
+      SOURCE_LOOP_ENABLED: ${SOURCE_LOOP_ENABLED:-true}
+      LLM_API_BASE: ${LLM_API_BASE}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_MODEL: ${LLM_MODEL:-gpt-5.4}
+      CHROME_AUTO_START: "true"
+      LICENSE_FILE: /app/license/license.key
+    volumes:
+      - ./resumes:/app/resumes
+      - ./license:/app/license:ro
+      - chrome-profile:/app/.chrome-profile
+      - chrome-downloads:/app/.chrome-downloads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    shm_size: '2gb'
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: search-boss-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-search_boss}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-search_boss_ops}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-search_boss} -d ${DB_NAME:-search_boss_ops}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
+    driver: local
+  chrome-profile:
+    driver: local
+  chrome-downloads:
+    driver: local
