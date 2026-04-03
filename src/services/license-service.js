@@ -5,6 +5,8 @@ const path = require('node:path');
 
 const LICENSE_ALGORITHM = 'aes-256-cbc';
 const LICENSE_SECRET = 'sb-enterprise-license-2026-secret-key';
+const WARNING_DAYS = 30;
+const CACHE_TTL_MS = 60_000;
 
 class LicenseService {
   constructor({ licensePath } = {}) {
@@ -12,6 +14,7 @@ class LicenseService {
       || process.env.LICENSE_FILE
       || path.resolve(__dirname, '../../license/license.key');
     this._cache = null;
+    this._lastFileHash = null;
   }
 
   static getHardwareFingerprint() {
@@ -82,13 +85,43 @@ class LicenseService {
   }
 
   validate() {
-    if (this._cache && this._cache.checkedAt > Date.now() - 60_000) {
+    const fileChanged = this._hasFileChanged();
+    if (fileChanged) {
+      this._cache = null;
+    }
+
+    if (this._cache && this._cache.checkedAt > Date.now() - CACHE_TTL_MS) {
       return this._cache.result;
     }
 
     const result = this._doValidate();
     this._cache = { result, checkedAt: Date.now() };
     return result;
+  }
+
+  reload() {
+    this._cache = null;
+    this._lastFileHash = null;
+    return this.validate();
+  }
+
+  _hasFileChanged() {
+    try {
+      if (!fs.existsSync(this.licensePath)) return this._lastFileHash !== null;
+      const content = fs.readFileSync(this.licensePath, 'utf8');
+      const hash = crypto.createHash('md5').update(content).digest('hex');
+      if (this._lastFileHash === null) {
+        this._lastFileHash = hash;
+        return false;
+      }
+      if (hash !== this._lastFileHash) {
+        this._lastFileHash = hash;
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
   }
 
   _doValidate() {
@@ -119,7 +152,9 @@ class LicenseService {
 
     if (payload.expiresAt) {
       const expires = new Date(payload.expiresAt);
-      if (expires < new Date()) {
+      const now = new Date();
+
+      if (expires < now) {
         return {
           valid: false,
           error: 'license_expired',
@@ -127,6 +162,22 @@ class LicenseService {
           expiresAt: payload.expiresAt
         };
       }
+
+      const daysRemaining = Math.ceil((expires - now) / (1000 * 60 * 60 * 24));
+      const warning = daysRemaining <= WARNING_DAYS
+        ? { expiresSoon: true, daysRemaining, message: `授权将在 ${daysRemaining} 天后到期` }
+        : null;
+
+      return {
+        valid: true,
+        customer: payload.customer,
+        expiresAt: payload.expiresAt,
+        maxHrAccounts: payload.maxHrAccounts || 0,
+        features: payload.features || [],
+        issuedAt: payload.issuedAt,
+        daysRemaining,
+        ...(warning && { warning })
+      };
     }
 
     return {
@@ -142,7 +193,10 @@ class LicenseService {
 
 function licenseMiddleware(licenseService) {
   return (req, res, next) => {
-    if (req.path === '/health' || req.path.startsWith('/api/auth/')) {
+    if (req.path === '/health'
+      || req.path.startsWith('/api/auth/')
+      || req.path === '/api/license'
+      || req.path === '/api/license/reload') {
       return next();
     }
 
@@ -152,6 +206,11 @@ function licenseMiddleware(licenseService) {
         error: result.error,
         message: result.message
       });
+    }
+
+    if (result.warning) {
+      res.set('X-License-Warning', result.warning.message);
+      res.set('X-License-Days-Remaining', String(result.daysRemaining));
     }
 
     req.license = result;

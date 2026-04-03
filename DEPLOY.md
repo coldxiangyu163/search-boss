@@ -339,7 +339,7 @@ curl http://127.0.0.1:9222/json/version
 curl http://localhost:3000/api/license
 ```
 
-返回示例：
+返回示例（正常）：
 
 ```json
 {
@@ -347,7 +347,37 @@ curl http://localhost:3000/api/license
   "customer": "某某公司",
   "expiresAt": "2027-04-03",
   "maxHrAccounts": 10,
-  "features": []
+  "features": [],
+  "daysRemaining": 365
+}
+```
+
+返回示例（即将到期，剩余不足 30 天时自动出现 warning）：
+
+```json
+{
+  "valid": true,
+  "customer": "某某公司",
+  "expiresAt": "2026-04-20",
+  "maxHrAccounts": 10,
+  "daysRemaining": 17,
+  "warning": {
+    "expiresSoon": true,
+    "daysRemaining": 17,
+    "message": "授权将在 17 天后到期"
+  }
+}
+```
+
+> 到期预警期间所有 API 响应头会附带 `X-License-Warning` 和 `X-License-Days-Remaining`，前端可据此弹窗提醒管理员续期。
+
+返回示例（已过期，所有业务 API 返回 403）：
+
+```json
+{
+  "valid": false,
+  "error": "license_expired",
+  "message": "授权已过期 (2026-04-01)"
 }
 ```
 
@@ -359,12 +389,73 @@ curl http://localhost:3000/api/license
 docker compose exec search-boss node scripts/generate-license.js fingerprint
 ```
 
-将输出的指纹字符串提供给授权方，用于生成绑定该机器的授权文件。
+将输出的指纹字符串提供给供应商，用于生成绑定该机器的授权文件。
 
-### 更换授权文件
+### 授权续期（License 到期后操作）
 
-1. 将新的 `license.key` 放入 `license/` 目录
-2. 重启服务：`./install.sh restart`
+**整个续期过程无需停机，不影响数据库和简历文件。**
+
+```text
+客户                              供应商
+ │                                  │
+ │  1. 发现即将到期/已到期            │
+ │     curl /api/license            │
+ │                                  │
+ │  2. 联系供应商，提供机器指纹       │
+ │ ───────────────────────────────> │
+ │                                  │  3. 生成新授权文件
+ │                                  │     node scripts/generate-license.js generate \
+ │                                  │       --customer "客户名" \
+ │                                  │       --fingerprint "指纹" \
+ │                                  │       --expires 2028-04-03 \
+ │                                  │       --max-hr 10
+ │  4. 收到新 license.key            │
+ │ <─────────────────────────────── │
+ │                                  │
+ │  5. 替换文件并生效 (二选一)        │
+ │     方式 A: 热加载（不重启）      │
+ │     方式 B: 重启服务              │
+ └──────────────────────────────────┘
+```
+
+**方式 A：热加载（推荐，零停机）**
+
+```bash
+# 替换授权文件
+cp /path/to/new-license.key license/license.key
+
+# 通知服务重新加载（无需重启）
+curl -X POST http://localhost:3000/api/license/reload
+```
+
+服务会自动读取新文件并立即生效。返回新的授权信息即表示续期成功。
+
+**方式 B：重启服务**
+
+```bash
+cp /path/to/new-license.key license/license.key
+./install.sh restart
+```
+
+**验证续期结果：**
+
+```bash
+curl http://localhost:3000/api/license
+# 确认 valid=true，expiresAt 为新的到期日期
+```
+
+### 授权状态对照表
+
+| 状态 | API 表现 | 用户影响 | 处理方式 |
+|------|----------|----------|----------|
+| 正常 (>30天) | 正常响应 | 无 | 无需操作 |
+| 即将到期 (<=30天) | 正常响应 + Warning 响应头 | 前端可弹窗提醒 | 联系供应商续期 |
+| 已过期 | 所有业务 API 返回 403 | 无法使用 | 替换 license.key 后热加载 |
+| 文件缺失 | 所有业务 API 返回 403 | 无法使用 | 放入 license.key |
+| 文件被篡改 | 所有业务 API 返回 403 | 无法使用 | 使用原始 license.key |
+| 机器指纹不匹配 | 所有业务 API 返回 403 | 无法使用 | 联系供应商重新生成 |
+
+> `/health` 和 `/api/auth/*` 不受授权状态影响，始终可用。
 
 ## 九、备份与恢复
 

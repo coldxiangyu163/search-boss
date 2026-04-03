@@ -22,6 +22,10 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
       const result = licenseService.validate();
       res.json(result);
     });
+    app.post('/api/license/reload', (req, res) => {
+      const result = licenseService.reload();
+      res.json(result);
+    });
   }
 
   if (pool) {
