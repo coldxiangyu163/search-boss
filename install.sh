@@ -37,19 +37,55 @@ check_docker() {
   log_info "Docker 环境检查通过"
 }
 
+detect_arch() {
+  local arch
+  arch=$(uname -m)
+  case "$arch" in
+    x86_64|amd64)  echo "amd64" ;;
+    aarch64|arm64) echo "arm64" ;;
+    *)             echo "amd64" ;;
+  esac
+}
+
 load_images() {
-  if [ -d "images" ]; then
-    log_info "正在导入离线镜像..."
-    for tarfile in images/*.tar; do
-      if [ -f "$tarfile" ]; then
-        log_info "  导入 $(basename "$tarfile")"
-        docker load -i "$tarfile"
-      fi
-    done
-    log_info "离线镜像导入完成"
-  else
+  if [ ! -d "images" ]; then
     log_warn "未找到 images/ 目录，将在线拉取镜像"
+    return
   fi
+
+  local arch
+  arch=$(detect_arch)
+  log_info "检测到系统架构: ${arch}"
+  log_info "正在导入离线镜像..."
+
+  # 优先加载当前架构的镜像，找不到则加载通用镜像
+  for tarfile in images/*.tar; do
+    [ -f "$tarfile" ] || continue
+    local basename
+    basename=$(basename "$tarfile")
+
+    # 跳过其他架构的镜像
+    if echo "$basename" | grep -qE '-(amd64|arm64)\.tar$'; then
+      local file_arch
+      file_arch=$(echo "$basename" | grep -oE '(amd64|arm64)' | tail -1)
+      if [ "$file_arch" != "$arch" ]; then
+        continue
+      fi
+    fi
+
+    log_info "  导入 ${basename}"
+    docker load -i "$tarfile"
+  done
+
+  # 确保正确的 tag 存在 (search-boss:1.0.0-arm64 -> search-boss:1.0.0)
+  local version_tag
+  version_tag=$(grep -oP 'APP_VERSION:-\K[^}]+' docker-compose.yml 2>/dev/null || echo "latest")
+  if docker image inspect "search-boss:${version_tag}-${arch}" &>/dev/null 2>&1; then
+    docker tag "search-boss:${version_tag}-${arch}" "search-boss:${version_tag}"
+    log_info "  已标记 search-boss:${version_tag}-${arch} → search-boss:${version_tag}"
+  fi
+
+  log_info "离线镜像导入完成"
 }
 
 init_env() {
