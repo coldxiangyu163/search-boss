@@ -42,8 +42,8 @@ LABEL maintainer="search-boss-enterprise"
 ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
-# Install Node.js + Chrome/Chromium + Xvfb + fonts
-# Google Chrome only available on amd64; ARM64 uses Debian Chromium via deb.debian.org
+# Install Node.js + Chromium (from Debian Bookworm) + Xvfb + fonts
+# Using Debian Chromium for both amd64/arm64 to avoid Google Chrome download dependency
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       curl ca-certificates gnupg wget xvfb \
@@ -53,19 +53,10 @@ RUN apt-get update \
       libpango-1.0-0 libcairo2 libasound2 libxshmfence1 \
  && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
  && apt-get install -y --no-install-recommends nodejs \
- && ARCH=$(dpkg --print-architecture) \
- && if [ "$ARCH" = "amd64" ]; then \
-      wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
-      && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
-      && apt-get update \
-      && apt-get install -y --no-install-recommends google-chrome-stable; \
-    else \
-      echo "deb http://deb.debian.org/debian bookworm main" > /etc/apt/sources.list.d/debian-chromium.list \
-      && wget -q -O - https://ftp-master.debian.org/keys/archive-key-12.asc | gpg --dearmor -o /usr/share/keyrings/debian-archive.gpg \
-      && echo "deb [signed-by=/usr/share/keyrings/debian-archive.gpg] http://deb.debian.org/debian bookworm main" > /etc/apt/sources.list.d/debian-chromium.list \
-      && apt-get update \
-      && apt-get install -y --no-install-recommends chromium; \
-    fi \
+ && wget -q -O - https://ftp-master.debian.org/keys/archive-key-12.asc | gpg --dearmor -o /usr/share/keyrings/debian-archive.gpg \
+ && echo "deb [signed-by=/usr/share/keyrings/debian-archive.gpg] http://deb.debian.org/debian bookworm main" > /etc/apt/sources.list.d/debian-chromium.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends chromium \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=deps /app/node_modules ./node_modules
