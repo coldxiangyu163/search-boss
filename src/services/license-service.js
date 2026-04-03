@@ -211,7 +211,10 @@ function licenseMiddleware(licenseService) {
     if (req.path === '/health'
       || req.path.startsWith('/api/auth/')
       || req.path === '/api/license'
-      || req.path === '/api/license/reload') {
+      || req.path === '/api/license/reload'
+      || req.path.startsWith('/api/setup/')
+      || req.path === '/setup.html'
+      || req.path === '/login.html') {
       return next();
     }
 

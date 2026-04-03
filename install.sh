@@ -95,11 +95,11 @@ start() {
   log_info "正在启动服务..."
   docker compose up -d
 
-  log_info "等待服务就绪..."
+  log_info "等待容器启动..."
   local retries=30
   while [ $retries -gt 0 ]; do
     if curl -sf http://127.0.0.1:${PORT:-3000}/health >/dev/null 2>&1; then
-      log_info "服务已就绪"
+      log_info "容器已启动"
       break
     fi
     retries=$((retries - 1))
@@ -107,12 +107,12 @@ start() {
   done
 
   if [ $retries -eq 0 ]; then
-    log_warn "服务启动超时，请检查日志: docker compose logs search-boss"
+    log_warn "容器启动超时，请检查日志: docker compose logs search-boss"
   fi
 
   echo ""
   log_info "=============================="
-  log_info " $APP_NAME 已启动"
+  log_info " $APP_NAME 容器已启动"
   log_info " 访问地址: http://localhost:${PORT:-3000}"
   log_info "=============================="
 }
@@ -200,8 +200,29 @@ generate_random() {
 setup() {
   check_docker
 
-  if [ -f .env ] && ! grep -q '请替换' .env 2>/dev/null; then
-    log_warn ".env 已存在且已配置，跳过配置生成"
+  if [ -f .env ]; then
+    log_info ".env 已存在，检查并补充缺失的随机值..."
+
+    ensure_env_value() {
+      local key="$1" default_val="$2"
+      if ! grep -q "^${key}=" .env 2>/dev/null; then
+        echo "${key}=${default_val}" >> .env
+        log_info "  补充 ${key}"
+      elif grep -q "请替换" <<< "$(grep "^${key}=" .env)"; then
+        sed -i.bak "s|^${key}=.*|${key}=${default_val}|" .env && rm -f .env.bak
+        log_info "  替换 ${key} 占位符"
+      fi
+    }
+
+    ensure_env_value "DB_PASSWORD" "$(generate_random)"
+    ensure_env_value "AGENT_TOKEN" "$(generate_random)"
+    ensure_env_value "SESSION_SECRET" "$(generate_random)"
+    ensure_env_value "DB_USER" "search_boss"
+    ensure_env_value "DB_NAME" "search_boss_ops"
+    ensure_env_value "PORT" "3000"
+    ensure_env_value "BOSS_CDP_ENDPOINT" "http://host.docker.internal:9222"
+    ensure_env_value "BOSS_CLI_ENABLED" "true"
+    ensure_env_value "SOURCE_LOOP_ENABLED" "true"
   else
     log_info "正在生成配置文件..."
 
@@ -245,7 +266,7 @@ EOF
 
   echo ""
   log_info "========================================="
-  log_info " 服务已就绪，正在打开浏览器..."
+  log_info " 容器已启动，请在浏览器中完成初始化配置"
   log_info "========================================="
   echo ""
 
@@ -260,7 +281,7 @@ EOF
     log_info "请在浏览器中打开: $url"
   fi
 
-  log_info "请按照页面引导完成配置。"
+  log_info "还需完成: 创建管理员 → 配置 LLM → 配置 Chrome"
   echo ""
 }
 
