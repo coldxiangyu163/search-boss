@@ -75,6 +75,97 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.use(express.static('public'));
 
+  // --- Setup routes (first-run wizard, no auth required) ---
+  if (pool) {
+    let _setupComplete = null;
+
+    async function isSetupComplete() {
+      if (_setupComplete === true) return true;
+      try {
+        const result = await pool.query("select count(*) from users where role in ('system_admin', 'enterprise_admin')");
+        _setupComplete = Number(result.rows[0].count) > 0;
+        return _setupComplete;
+      } catch {
+        return false;
+      }
+    }
+
+    app.get('/api/setup/status', async (req, res) => {
+      try {
+        let dbReady = false;
+        try {
+          await pool.query('select 1');
+          dbReady = true;
+        } catch {}
+
+        const hasAdmin = await isSetupComplete();
+        res.json({ dbReady, hasAdmin, setupRequired: !hasAdmin });
+      } catch (error) {
+        res.json({ dbReady: false, hasAdmin: false, setupRequired: true });
+      }
+    });
+
+    app.post('/api/setup/create-admin', async (req, res, next) => {
+      try {
+        if (await isSetupComplete()) {
+          return res.status(400).json({ ok: false, message: '管理员已存在，无法重复创建' });
+        }
+
+        const { name, email, password } = req.body;
+        if (!name || !email || !password || password.length < 6) {
+          return res.status(400).json({ ok: false, message: '请填写完整信息，密码至少 6 位' });
+        }
+
+        let deptResult = await pool.query("select id from departments limit 1");
+        if (deptResult.rows.length === 0) {
+          deptResult = await pool.query("insert into departments (name) values ('默认部门') returning id");
+        }
+        const departmentId = deptResult.rows[0].id;
+
+        const user = await services.auth.createUser({
+          name,
+          email,
+          password,
+          role: 'system_admin',
+          departmentId
+        });
+
+        _setupComplete = true;
+        res.json({ ok: true, user });
+      } catch (error) {
+        if (error.code === '23505') {
+          return res.status(400).json({ ok: false, message: '该邮箱已被注册' });
+        }
+        next(error);
+      }
+    });
+
+    app.get('/api/setup/check-chrome', async (req, res) => {
+      const endpoint = config.bossCdpEndpoint || 'http://127.0.0.1:9222';
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        const resp = await fetch(`${endpoint}/json/version`, { signal: controller.signal });
+        clearTimeout(timeout);
+        const data = await resp.json();
+        res.json({ ok: true, browser: data.Browser || 'unknown', endpoint });
+      } catch {
+        res.json({ ok: false, message: `无法连接 Chrome (${endpoint})`, endpoint });
+      }
+    });
+
+    // Redirect to setup wizard if no admin exists
+    app.use(async (req, _res, next) => {
+      if (req.path.startsWith('/api/') || req.path.startsWith('/setup') || req.path.includes('.')) {
+        return next();
+      }
+      if (!(await isSetupComplete())) {
+        return _res.redirect('/setup.html');
+      }
+      next();
+    });
+  }
+
   // --- Auth routes (no auth required) ---
   app.post('/api/auth/login', async (req, res, next) => {
     try {

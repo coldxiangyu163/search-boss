@@ -189,6 +189,90 @@ backup() {
   ls -lh "$backup_dir/"
 }
 
+generate_random() {
+  if command -v openssl &>/dev/null; then
+    openssl rand -hex 32
+  else
+    head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+  fi
+}
+
+setup() {
+  check_docker
+
+  if [ -f .env ] && ! grep -q '请替换' .env 2>/dev/null; then
+    log_warn ".env 已存在且已配置，跳过配置生成"
+  else
+    log_info "正在生成配置文件..."
+
+    local db_password
+    local agent_token
+    local session_secret
+    db_password=$(generate_random)
+    agent_token=$(generate_random)
+    session_secret=$(generate_random)
+
+    local llm_api_base=""
+    local llm_api_key=""
+    local llm_model="gpt-5.4"
+
+    echo ""
+    echo "========================================"
+    echo " LLM 配置 (用于 AI 候选人评估)"
+    echo "========================================"
+    echo ""
+    echo "如果暂时没有 LLM 端点，可直接回车跳过，后续在 .env 中补填。"
+    echo ""
+
+    read -rp "LLM 接口地址 (如 https://your-llm/v1): " llm_api_base
+    if [ -n "$llm_api_base" ]; then
+      read -rp "LLM 接口密钥: " llm_api_key
+      read -rp "LLM 模型名称 [${llm_model}]: " input_model
+      [ -n "$input_model" ] && llm_model="$input_model"
+    fi
+
+    cat > .env <<EOF
+APP_VERSION=${VERSION}
+PORT=3000
+DB_USER=search_boss
+DB_PASSWORD=${db_password}
+DB_NAME=search_boss_ops
+DB_PORT=5432
+AGENT_TOKEN=${agent_token}
+SESSION_SECRET=${session_secret}
+BOSS_CDP_ENDPOINT=http://host.docker.internal:9222
+BOSS_CLI_ENABLED=true
+SOURCE_LOOP_ENABLED=true
+LLM_API_BASE=${llm_api_base}
+LLM_API_KEY=${llm_api_key}
+LLM_MODEL=${llm_model}
+EOF
+
+    log_info "配置文件已生成: .env"
+    log_info "  数据库密码、Token、Session 密钥已自动生成"
+  fi
+
+  # 导入镜像
+  load_images
+
+  # 启动
+  start
+
+  # 初始化数据库
+  log_info "正在初始化数据库..."
+  docker compose exec search-boss node scripts/setup-db.js
+  log_info "数据库初始化完成"
+
+  echo ""
+  log_info "========================================="
+  log_info " 安装完成!"
+  log_info "========================================="
+  echo ""
+  log_info "请在浏览器中打开: http://localhost:${PORT:-3000}"
+  log_info "按照页面引导完成管理员账号创建和 Chrome 配置。"
+  echo ""
+}
+
 usage() {
   echo ""
   echo "search-boss 企业版安装管理工具"
@@ -196,6 +280,7 @@ usage() {
   echo "用法: ./install.sh <命令>"
   echo ""
   echo "命令:"
+  echo "  setup          首次安装引导 (生成配置 → 启动 → 建库，一步完成)"
   echo "  start          启动所有服务"
   echo "  stop           停止所有服务"
   echo "  restart        重启所有服务"
@@ -208,6 +293,7 @@ usage() {
 }
 
 case "${1:-}" in
+  setup)          setup ;;
   start)          check_docker; start ;;
   stop)           stop ;;
   restart)        restart ;;
