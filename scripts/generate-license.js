@@ -2,6 +2,7 @@
 'use strict';
 
 const { LicenseService } = require('../src/services/license-service');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -15,6 +16,7 @@ search-boss 企业版授权生成工具
   node scripts/generate-license.js <命令> [参数]
 
 命令:
+  keygen [--output <目录>]              生成 Ed25519 密钥对（首次使用前执行一次）
   fingerprint                           获取当前机器的硬件指纹
   generate --customer <名称> [选项]     生成授权文件
 
@@ -79,7 +81,43 @@ function readPrivateKey(opts) {
 
 const command = args[0];
 
-if (command === 'fingerprint') {
+if (command === 'keygen') {
+  const opts = parseArgs(args.slice(1));
+  const outputDir = opts.output || path.resolve(__dirname, '../.keys');
+
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+
+  const privatePath = path.join(outputDir, 'license-private.pem');
+  const publicPath = path.join(outputDir, 'license-public.pem');
+
+  if (fs.existsSync(privatePath)) {
+    console.error(`错误: 私钥已存在 ${privatePath}`);
+    console.error('如需重新生成，请先手动删除旧密钥文件');
+    process.exit(1);
+  }
+
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519', {
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+  });
+
+  fs.writeFileSync(privatePath, privateKey, { mode: 0o600 });
+  fs.writeFileSync(publicPath, publicKey);
+
+  console.log('Ed25519 密钥对已生成:');
+  console.log(`  私钥: ${privatePath} (妥善保管，切勿泄露)`);
+  console.log(`  公钥: ${publicPath}`);
+  console.log('');
+  console.log('下一步:');
+  console.log('  1. 将公钥内容替换到 src/services/license-service.js 的 VENDOR_PUBLIC_KEY');
+  console.log('  2. 生成授权时通过 --private-key-file 指定私钥:');
+  console.log(`     node scripts/generate-license.js generate --customer "客户名" --private-key-file ${privatePath}`);
+  console.log('  3. 或设置环境变量:');
+  console.log(`     export LICENSE_PRIVATE_KEY_FILE=${privatePath}`);
+
+} else if (command === 'fingerprint') {
   const fp = LicenseService.getHardwareFingerprint();
   console.log('当前机器硬件指纹:');
   console.log(fp);
