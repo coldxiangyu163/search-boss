@@ -1,133 +1,179 @@
-# search-boss 企业版部署指南
-
-本文档分两部分：
-
-- **供应商侧**（你）：从源码构建交付包、生成授权
-- **客户侧**：拿到交付包后从零部署上线
+# search-boss 企业版 — 交付与部署手册
 
 ---
 
-## 〇、供应商侧：构建与交付
+## 全局角色说明
 
-> 以下操作在你的开发机上执行，客户不需要看这一节。
+| 角色 | 说明 |
+|------|------|
+| **供应商** | 拥有源码，负责构建镜像、生成授权、交付安装包 |
+| **客户** | 拥有服务器，负责安装部署、日常运维、浏览器登录 |
 
-### 0.1 前置条件
+---
 
-- 本机已安装 Docker 并启动
-- 本机已 clone 本仓库源码，切到 `feature/enterprise-deploy` 分支
+# 第一部分：供应商操作
 
-### 0.2 一键构建交付包
+> 本部分在供应商开发机上执行，客户不需要阅读。
+
+## 1. 构建交付包
+
+### 前置条件
+
+- 已 clone 源码仓库
+- 本机 Docker 已启动
+
+### 执行构建
 
 ```bash
 ./pack.sh 1.0.0
 ```
 
-脚本自动完成：
+构建过程（全自动）：
 
-1. Docker 多阶段构建（bytenode 编译 JS 为 V8 字节码 → 生产镜像）
-2. 导出 `search-boss` 和 `postgres` 离线镜像 tar 包
-3. 复制 `docker-compose.yml`、`install.sh`、`.env.template`、`DEPLOY.md`
-4. 打包为 `dist/search-boss-enterprise-v1.0.0.tar.gz`
-
-产出物中**不包含任何 JS 源码**，只有编译后的 `.jsc` 字节码。
-
-### 0.3 为客户生成授权文件
-
-**获取客户机器指纹**（让客户在目标机器上执行后发给你）：
-
-```bash
-# 客户机器上执行（部署后也可在容器内执行）
-docker compose exec search-boss node scripts/generate-license.js fingerprint
+```
+源码 JS 文件
+  → Docker 内 bytenode 编译为 V8 字节码 (.jsc)
+  → 生成生产镜像 search-boss:1.0.0
+  → 导出 search-boss + postgres 离线镜像 tar
+  → 组装交付目录
+  → 打包为 dist/search-boss-enterprise-v1.0.0.tar.gz
 ```
 
-**生成授权**（在你的开发机上执行）：
+产出物中不包含任何可读 JS 源码。
+
+### 交付包内容
+
+```
+search-boss-enterprise-v1.0.0/
+├── docker-compose.yml        # 容器编排
+├── install.sh                # 一键管理脚本
+├── .env.template             # 配置模板
+├── DEPLOY.md                 # 部署文档
+├── images/                   # 离线 Docker 镜像
+│   ├── search-boss-1.0.0.tar
+│   └── postgres-16-alpine.tar
+├── license/                  # 授权文件目录（待放入）
+├── resumes/                  # 简历存储目录
+└── backups/                  # 备份目录
+```
+
+## 2. 生成授权文件
+
+### 场景 A：试用 / POC（不绑定机器）
 
 ```bash
-# 绑定指纹 + 有效期 + HR 账号上限
 node scripts/generate-license.js generate \
   --customer "某某公司" \
-  --fingerprint "客户提供的指纹字符串" \
+  --fingerprint "*" \
+  --expires 2026-07-01 \
+  --max-hr 3 \
+  --output dist/search-boss-enterprise-v1.0.0/license/license.key
+```
+
+### 场景 B：正式交付（绑定机器指纹）
+
+先让客户在目标服务器上获取指纹（见第二部分步骤 5），拿到指纹后：
+
+```bash
+node scripts/generate-license.js generate \
+  --customer "某某公司" \
+  --fingerprint "客户提供的64位hex字符串" \
   --expires 2027-04-03 \
   --max-hr 10 \
   --output dist/search-boss-enterprise-v1.0.0/license/license.key
-
-# 如果不绑定机器（用于试用/POC），指纹传 *
-node scripts/generate-license.js generate \
-  --customer "试用客户" \
-  --fingerprint "*" \
-  --expires 2026-07-01 \
-  --max-hr 3
 ```
 
-### 0.4 交付给客户
+### 参数说明
 
-将以下文件发给客户：
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `--customer` | 是 | 客户名称 |
+| `--fingerprint` | 是 | 机器指纹，`*` 表示不绑定 |
+| `--expires` | 否 | 到期日期 YYYY-MM-DD，默认 1 年后 |
+| `--max-hr` | 否 | HR 账号上限，0 表示不限 |
+| `--output` | 否 | 输出路径，默认 `license/license.key` |
+
+## 3. 交付给客户
+
+将以下内容发送给客户：
 
 ```
-dist/search-boss-enterprise-v1.0.0.tar.gz   # 交付包（含离线镜像）
-license/license.key                           # 授权文件（单独发送或放入包内）
+search-boss-enterprise-v1.0.0.tar.gz    # 安装包
 ```
 
-客户收到后按下文部署。
+授权文件已包含在包内 `license/license.key`。如需单独发送，客户放入 `license/` 目录即可。
 
 ---
 
-## 以下为客户侧部署文档
+# 第二部分：客户部署
 
----
+> 以下所有操作在客户服务器上执行。
 
-## 一、环境要求
+## 运行架构
 
-| 项目 | 最低要求 |
-|------|----------|
+```
+┌─────────────────────────────────────────────┐
+│                 客户服务器                    │
+│                                             │
+│  ┌─── Docker ─────────────────────────┐     │
+│  │                                    │     │
+│  │  search-boss 容器 (:3000)          │     │
+│  │    └─ 管理后台 + API + 自动化引擎   │     │
+│  │                                    │     │
+│  │  PostgreSQL 容器 (:5432)           │     │
+│  │    └─ 业务数据                     │     │
+│  │                                    │     │
+│  └────────────────────────────────────┘     │
+│                    │                         │
+│                    │ CDP (9222)               │
+│                    ▼                         │
+│  Chrome 浏览器（宿主机运行）                  │
+│    └─ BOSS 招聘端登录态                      │
+│                                             │
+│  resumes/  ← 简历文件（本地磁盘）             │
+│  license/  ← 授权文件（本地磁盘）             │
+└─────────────────────────────────────────────┘
+                    │
+                    │ HTTPS（仅此一个外部连接）
+                    ▼
+            私有化 LLM 端点
+```
+
+所有数据留在客户本地，唯一的外部请求是 LLM 推理接口（可部署在客户内网）。
+
+## 环境要求
+
+| 项目 | 要求 |
+|------|------|
 | 操作系统 | Windows 10/11、Ubuntu 20.04+、macOS 12+ |
-| Docker | 20.10+ (含 Docker Compose V2) |
+| Docker | 20.10+，含 Docker Compose V2 |
 | 内存 | 4 GB+ |
 | 磁盘 | 20 GB+ |
-| Chrome 浏览器 | 宿主机安装，用于 BOSS 招聘端登录 |
-| 网络 | 可访问 LLM API 端点（私有化部署可纯内网） |
+| Chrome | 宿主机安装 |
+| 网络 | 内网即可（LLM 端点可内网部署） |
 
-## 二、交付物清单
+## 部署步骤
 
-```
-search-boss-enterprise-v<版本号>/
-├── docker-compose.yml          # 服务编排
-├── install.sh                  # 一键管理脚本
-├── .env.template               # 配置模板
-├── DEPLOY.md                   # 本文档
-├── images/                     # 离线 Docker 镜像（可选）
-│   ├── search-boss-<版本号>.tar
-│   └── postgres-16-alpine.tar
-└── license/
-    └── license.key             # 授权文件
-```
-
-## 三、快速部署（6 步完成）
-
-### 步骤 0：解压交付包
+### 步骤 1：解压安装包
 
 ```bash
 tar xzf search-boss-enterprise-v1.0.0.tar.gz
 cd search-boss-enterprise-v1.0.0
 ```
 
-### 步骤 1：安装 Docker
+### 步骤 2：安装 Docker（已有则跳过）
 
-**Linux (Ubuntu/Debian)：**
+**Linux：**
 
 ```bash
 curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker $USER
-# 重新登录终端使 docker 组生效
+# 重新登录终端
 ```
 
-**Windows：**
+**Windows / macOS：**
 
-安装 [Docker Desktop](https://docs.docker.com/desktop/install/windows-install/)，启动后确认 Docker Engine 运行中。
-
-**macOS：**
-
-安装 [Docker Desktop](https://docs.docker.com/desktop/install/mac-install/)。
+安装 Docker Desktop 并启动。
 
 **验证：**
 
@@ -136,53 +182,35 @@ docker --version
 docker compose version
 ```
 
-### 步骤 2：创建配置文件
+### 步骤 3：填写配置
 
 ```bash
 cp .env.template .env
 ```
 
-编辑 `.env`，填写以下必填项：
+编辑 `.env`，填写必填项：
 
-| 配置项 | 说明 | 示例 |
-|--------|------|------|
-| `DB_PASSWORD` | 数据库密码 | `MyStr0ngP@ssw0rd` |
-| `AGENT_TOKEN` | 内部认证令牌，随机字符串 | `a1b2c3d4e5f6...` |
-| `SESSION_SECRET` | Session 密钥，随机字符串 | `x9y8z7w6v5u4...` |
-| `LLM_API_BASE` | LLM 接口地址 | `https://your-llm/v1` |
-| `LLM_API_KEY` | LLM 接口密钥 | `sk-...` |
+| 配置项 | 说明 | 生成方式 |
+|--------|------|----------|
+| `DB_PASSWORD` | 数据库密码 | 自定义强密码 |
+| `AGENT_TOKEN` | 内部认证令牌 | `openssl rand -hex 32` |
+| `SESSION_SECRET` | Session 密钥 | `openssl rand -hex 32` |
+| `LLM_API_BASE` | LLM 接口地址 | 向 LLM 提供方获取 |
+| `LLM_API_KEY` | LLM 接口密钥 | 向 LLM 提供方获取 |
 
-> 生成随机字符串：`openssl rand -hex 32`
+其他参数均有默认值，通常无需修改。完整参数见附录 A。
 
-### 步骤 3：放置授权文件
-
-将收到的 `license.key` 放入 `license/` 目录：
+### 步骤 4：导入镜像并启动
 
 ```bash
-mkdir -p license
-cp /path/to/license.key license/
-```
-
-### 步骤 4：启动服务
-
-**在线环境（可访问 Docker Hub）：**
-
-```bash
-./install.sh start
-```
-
-**离线环境（使用离线镜像包）：**
-
-```bash
+# 导入离线镜像（离线环境必须，在线环境可跳过）
 ./install.sh load-images
+
+# 启动服务
 ./install.sh start
 ```
 
-首次启动会自动：
-- 拉取/加载 Docker 镜像
-- 启动 PostgreSQL 数据库
-- 启动 search-boss 服务
-- 等待服务就绪
+脚本自动完成：校验配置 → 启动 PostgreSQL → 启动 search-boss → 等待健康检查通过。
 
 ### 步骤 5：初始化数据库
 
@@ -190,9 +218,19 @@ cp /path/to/license.key license/
 ./install.sh db-setup
 ```
 
-### 步骤 6：启动 Chrome 并登录 BOSS
+### 步骤 6：获取机器指纹（按需）
 
-Chrome 需要在**宿主机**运行（非 Docker 内），因为需要手动扫码/登录 BOSS 招聘端。
+如果供应商要求提供机器指纹用于授权绑定：
+
+```bash
+docker compose exec search-boss node scripts/generate-license.js fingerprint
+```
+
+将输出的 64 位字符串发送给供应商。供应商据此生成绑定本机的授权文件。
+
+### 步骤 7：启动 Chrome 并登录
+
+Chrome 必须在宿主机运行（需要手动扫码登录 BOSS 招聘端）。
 
 **macOS：**
 
@@ -218,15 +256,15 @@ google-chrome \
   --user-data-dir=$HOME/.chrome-boss-profile
 ```
 
-在 Chrome 窗口中打开 `https://www.zhipin.com`，完成登录，保持窗口不要关闭。
+在打开的 Chrome 中访问 `https://www.zhipin.com`，完成登录，**保持窗口不要关闭**。
 
-### 部署完成验证
+### 步骤 8：验证部署
 
 ```bash
 ./install.sh status
 ```
 
-全部正常时输出：
+预期输出：
 
 ```
 [INFO]  服务状态:
@@ -237,109 +275,76 @@ google-chrome \
 [INFO]  Chrome CDP: 在线
 ```
 
-访问 `http://localhost:3000` 即可使用管理后台。
+访问 `http://localhost:3000` 进入管理后台。
 
 ---
 
-## 四、Chrome 浏览器配置（补充说明）
+# 第三部分：日常运维
 
-> 步骤 6 已覆盖基本启动流程，本节为补充说明。
+## 管理命令
 
-### 开机自启（可选）
-
-可将 Chrome 启动命令加入系统启动项，避免每次重启后手动操作。
-
-**Linux (systemd)：**
-
-```bash
-# /etc/systemd/system/chrome-boss.service
-[Unit]
-Description=Chrome for BOSS CDP
-After=network.target
-
-[Service]
-ExecStart=/usr/bin/google-chrome --remote-debugging-port=9222 --user-data-dir=/home/user/.chrome-boss-profile --no-first-run
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-```
-
-**Windows：**
-
-将 Chrome 启动快捷方式（带 `--remote-debugging-port=9222`）放入 `shell:startup` 文件夹。
-
-### 验证 Chrome 连通性
-
-```bash
-curl http://127.0.0.1:9222/json/version
-```
-
-应返回包含 `Browser` 字段的 JSON。
-
-## 五、管理命令一览
-
-所有操作通过 `install.sh` 完成：
-
-```bash
-./install.sh start          # 启动所有服务
-./install.sh stop           # 停止所有服务
-./install.sh restart        # 重启所有服务
-./install.sh status         # 查看服务状态 + 健康检查
-./install.sh logs           # 查看所有日志（实时）
-./install.sh logs search-boss  # 仅查看应用日志
-./install.sh logs postgres     # 仅查看数据库日志
-./install.sh db-setup       # 初始化数据库表结构
-./install.sh backup         # 备份数据库 + 简历文件
-./install.sh build          # 重新构建镜像
-./install.sh export-images  # 导出离线镜像包
-./install.sh load-images    # 导入离线镜像包
-```
-
-## 六、数据目录说明
-
-| 目录 | 用途 | 持久化方式 |
-|------|------|------------|
-| `resumes/` | 简历文件存储 | 宿主机目录挂载 |
-| `license/` | 授权文件 | 宿主机目录挂载（只读） |
-| `backups/` | 备份文件 | 宿主机本地 |
-| Docker Volume `pgdata` | PostgreSQL 数据 | Docker 命名卷 |
-
-## 七、配置参数详解
-
-### 必填参数
-
-| 参数 | 说明 |
+| 命令 | 说明 |
 |------|------|
-| `DB_PASSWORD` | PostgreSQL 数据库密码 |
-| `AGENT_TOKEN` | 内部 Agent 回调认证令牌 |
-| `SESSION_SECRET` | 用户 Session 加密密钥 |
+| `./install.sh start` | 启动所有服务 |
+| `./install.sh stop` | 停止所有服务 |
+| `./install.sh restart` | 重启所有服务 |
+| `./install.sh status` | 服务状态 + 健康检查 |
+| `./install.sh logs` | 查看全部日志（实时） |
+| `./install.sh logs search-boss` | 仅查看应用日志 |
+| `./install.sh logs postgres` | 仅查看数据库日志 |
+| `./install.sh db-setup` | 初始化/升级数据库 |
+| `./install.sh backup` | 备份数据库 + 简历 |
+| `./install.sh load-images` | 导入离线镜像 |
 
-### 可选参数
+## 备份与恢复
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `PORT` | `3000` | 服务端口 |
-| `DB_USER` | `search_boss` | 数据库用户名 |
-| `DB_NAME` | `search_boss_ops` | 数据库名 |
-| `DB_PORT` | `5432` | 数据库外部映射端口 |
-| `BOSS_CDP_ENDPOINT` | `http://host.docker.internal:9222` | Chrome CDP 地址 |
-| `BOSS_CLI_ENABLED` | `true` | 是否启用浏览器自动化 |
-| `SOURCE_LOOP_ENABLED` | `true` | 是否启用寻源循环 |
-| `LLM_API_BASE` | - | LLM 接口地址 |
-| `LLM_API_KEY` | - | LLM 接口密钥 |
-| `LLM_MODEL` | `gpt-5.4` | LLM 模型名称 |
-| `APP_VERSION` | `latest` | 镜像版本标签 |
+### 备份
 
-## 八、授权管理
+```bash
+./install.sh backup
+```
 
-### 查看授权状态
+产出在 `backups/<日期时间>/`：
+
+| 文件 | 内容 |
+|------|------|
+| `database.sql` | 完整数据库转储 |
+| `resumes.tar.gz` | 简历文件归档 |
+| `env.backup` | 当前配置 |
+
+### 恢复
+
+```bash
+# 恢复数据库
+cat backups/20260403-120000/database.sql | \
+  docker compose exec -T postgres psql -U search_boss search_boss_ops
+
+# 恢复简历
+tar xzf backups/20260403-120000/resumes.tar.gz
+```
+
+## 数据目录
+
+| 目录 | 用途 | 说明 |
+|------|------|------|
+| `resumes/` | 简历文件 | 挂载到宿主机，容器删除不丢失 |
+| `license/` | 授权文件 | 只读挂载到容器 |
+| `backups/` | 备份文件 | 宿主机本地 |
+| Docker Volume `pgdata` | 数据库 | Docker 命名卷管理 |
+
+---
+
+# 第四部分：授权管理与续期
+
+## 查看授权状态
 
 ```bash
 curl http://localhost:3000/api/license
 ```
 
-返回示例（正常）：
+三种状态：
+
+**正常（剩余 > 30 天）：**
 
 ```json
 {
@@ -347,19 +352,17 @@ curl http://localhost:3000/api/license
   "customer": "某某公司",
   "expiresAt": "2027-04-03",
   "maxHrAccounts": 10,
-  "features": [],
   "daysRemaining": 365
 }
 ```
 
-返回示例（即将到期，剩余不足 30 天时自动出现 warning）：
+**即将到期（剩余 <= 30 天，服务正常但有预警）：**
 
 ```json
 {
   "valid": true,
   "customer": "某某公司",
   "expiresAt": "2026-04-20",
-  "maxHrAccounts": 10,
   "daysRemaining": 17,
   "warning": {
     "expiresSoon": true,
@@ -369,9 +372,9 @@ curl http://localhost:3000/api/license
 }
 ```
 
-> 到期预警期间所有 API 响应头会附带 `X-License-Warning` 和 `X-License-Days-Remaining`，前端可据此弹窗提醒管理员续期。
+此时所有 API 响应头附带 `X-License-Warning` 和 `X-License-Days-Remaining`。
 
-返回示例（已过期，所有业务 API 返回 403）：
+**已过期（所有业务 API 返回 403）：**
 
 ```json
 {
@@ -381,229 +384,226 @@ curl http://localhost:3000/api/license
 }
 ```
 
-### 获取机器指纹
+## 续期流程
 
-如果授权绑定了硬件指纹，需要先获取目标机器指纹：
-
-```bash
-docker compose exec search-boss node scripts/generate-license.js fingerprint
+```
+客户                                 供应商
+ │                                    │
+ │  1. curl /api/license 发现到期      │
+ │                                    │
+ │  2. 获取机器指纹                    │
+ │     docker compose exec            │
+ │       search-boss node             │
+ │       scripts/generate-license.js  │
+ │       fingerprint                  │
+ │                                    │
+ │  3. 将指纹发送给供应商              │
+ │  ────────────────────────────────> │
+ │                                    │  4. 生成新授权
+ │                                    │     node scripts/generate-license.js
+ │                                    │       generate
+ │                                    │       --customer "客户名"
+ │                                    │       --fingerprint "指纹"
+ │                                    │       --expires 2028-04-03
+ │                                    │       --max-hr 10
+ │  5. 收到新 license.key              │
+ │  <──────────────────────────────── │
+ │                                    │
+ │  6. 替换文件                        │
+ │     cp new-license.key             │
+ │        license/license.key         │
+ │                                    │
+ │  7. 生效（二选一）                   │
+ │     A) 热加载: curl -X POST        │
+ │        localhost:3000              │
+ │        /api/license/reload         │
+ │     B) 重启: ./install.sh restart  │
+ │                                    │
+ │  8. 验证                            │
+ │     curl /api/license              │
+ │     确认 valid=true                 │
+ └────────────────────────────────────┘
 ```
 
-将输出的指纹字符串提供给供应商，用于生成绑定该机器的授权文件。
-
-### 授权续期（License 到期后操作）
-
-**整个续期过程无需停机，不影响数据库和简历文件。**
-
-```text
-客户                              供应商
- │                                  │
- │  1. 发现即将到期/已到期            │
- │     curl /api/license            │
- │                                  │
- │  2. 联系供应商，提供机器指纹       │
- │ ───────────────────────────────> │
- │                                  │  3. 生成新授权文件
- │                                  │     node scripts/generate-license.js generate \
- │                                  │       --customer "客户名" \
- │                                  │       --fingerprint "指纹" \
- │                                  │       --expires 2028-04-03 \
- │                                  │       --max-hr 10
- │  4. 收到新 license.key            │
- │ <─────────────────────────────── │
- │                                  │
- │  5. 替换文件并生效 (二选一)        │
- │     方式 A: 热加载（不重启）      │
- │     方式 B: 重启服务              │
- └──────────────────────────────────┘
-```
-
-**方式 A：热加载（推荐，零停机）**
+### 热加载续期（推荐，零停机）
 
 ```bash
-# 替换授权文件
 cp /path/to/new-license.key license/license.key
-
-# 通知服务重新加载（无需重启）
 curl -X POST http://localhost:3000/api/license/reload
 ```
 
-服务会自动读取新文件并立即生效。返回新的授权信息即表示续期成功。
+返回 `valid: true` 即续期成功，无需重启，不影响正在使用的用户。
 
-**方式 B：重启服务**
+### 重启续期
 
 ```bash
 cp /path/to/new-license.key license/license.key
 ./install.sh restart
 ```
 
-**验证续期结果：**
-
-```bash
-curl http://localhost:3000/api/license
-# 确认 valid=true，expiresAt 为新的到期日期
-```
-
-### 授权状态对照表
+## 授权状态速查表
 
 | 状态 | API 表现 | 用户影响 | 处理方式 |
 |------|----------|----------|----------|
-| 正常 (>30天) | 正常响应 | 无 | 无需操作 |
-| 即将到期 (<=30天) | 正常响应 + Warning 响应头 | 前端可弹窗提醒 | 联系供应商续期 |
-| 已过期 | 所有业务 API 返回 403 | 无法使用 | 替换 license.key 后热加载 |
-| 文件缺失 | 所有业务 API 返回 403 | 无法使用 | 放入 license.key |
-| 文件被篡改 | 所有业务 API 返回 403 | 无法使用 | 使用原始 license.key |
-| 机器指纹不匹配 | 所有业务 API 返回 403 | 无法使用 | 联系供应商重新生成 |
+| 正常 (>30天) | 正常 | 无 | 无需操作 |
+| 即将到期 (<=30天) | 正常 + Warning 头 | 前端可弹窗提醒 | 联系供应商续期 |
+| 已过期 | 业务 API 403 | 无法操作 | 替换 license.key + 热加载 |
+| 文件缺失 | 业务 API 403 | 无法操作 | 放入 license.key |
+| 被篡改 | 业务 API 403 | 无法操作 | 使用原始 license.key |
+| 指纹不匹配 | 业务 API 403 | 无法操作 | 联系供应商重新生成 |
 
-> `/health` 和 `/api/auth/*` 不受授权状态影响，始终可用。
+> `/health` 和登录接口不受授权限制，始终可用。
 
-## 九、备份与恢复
+---
 
-### 备份
+# 第五部分：多 HR 账号 / 多浏览器实例
 
-```bash
-./install.sh backup
-```
+每个 HR 绑定独立 BOSS 账号，每个 BOSS 账号对应独立 Chrome 实例。
 
-备份内容保存在 `backups/<日期时间>/` 目录下，包含：
-- `database.sql` — 完整数据库转储
-- `resumes.tar.gz` — 简历文件归档
-- `env.backup` — 当前配置备份
-
-### 恢复数据库
+### 启动多个 Chrome 实例
 
 ```bash
-cat backups/<日期时间>/database.sql | \
-  docker compose exec -T postgres psql -U search_boss search_boss_ops
-```
-
-### 恢复简历文件
-
-```bash
-tar xzf backups/<日期时间>/resumes.tar.gz
-```
-
-## 十、多 HR 账号部署
-
-系统支持多 HR 账号，每个 HR 绑定独立的 BOSS 账号和浏览器实例。
-
-### 多浏览器实例
-
-每个 BOSS 账号需要独立的 Chrome 实例，使用不同的调试端口：
-
-```bash
-# HR 账号 A
+# HR-张三
 chrome --remote-debugging-port=9222 --user-data-dir=$HOME/.chrome-boss-a
 
-# HR 账号 B
+# HR-李四
 chrome --remote-debugging-port=9223 --user-data-dir=$HOME/.chrome-boss-b
 
-# HR 账号 C
+# HR-王五
 chrome --remote-debugging-port=9224 --user-data-dir=$HOME/.chrome-boss-c
 ```
 
-在管理后台的「浏览器实例」页面中配置每个实例的 CDP 地址。
+每个 Chrome 窗口单独登录对应的 BOSS 账号。
 
-## 十一、离线部署
+### 在管理后台配置
 
-适用于无法访问互联网的内网环境。
+进入管理后台 → 浏览器实例，为每个 HR 账号添加对应的 CDP 地址：
 
-### 在联网机器上准备离线包
+| HR 账号 | CDP 地址 |
+|---------|----------|
+| 张三 | `http://host.docker.internal:9222` |
+| 李四 | `http://host.docker.internal:9223` |
+| 王五 | `http://host.docker.internal:9224` |
 
-```bash
-# 构建镜像并导出
-./install.sh build
-./install.sh export-images
+---
 
-# 打包交付物
-tar czf search-boss-enterprise-offline.tar.gz \
-  docker-compose.yml install.sh .env.template DEPLOY.md images/ license/
-```
-
-### 在目标机器上部署
+# 第六部分：版本升级
 
 ```bash
-# 解压
-tar xzf search-boss-enterprise-offline.tar.gz
+# 1. 备份
+./install.sh backup
 
-# 导入镜像
+# 2. 解压新版本（保留旧的 .env、license/、resumes/）
+tar xzf search-boss-enterprise-v1.1.0.tar.gz
+cp /old/.env search-boss-enterprise-v1.1.0/
+cp -r /old/license search-boss-enterprise-v1.1.0/
+cd search-boss-enterprise-v1.1.0
+
+# 3. 导入新镜像
 ./install.sh load-images
 
-# 配置并启动
-cp .env.template .env
-# 编辑 .env ...
-./install.sh start
+# 4. 重启
+./install.sh restart
+
+# 5. 如有数据库变更
 ./install.sh db-setup
 ```
 
-## 十二、常见问题
+---
+
+# 第七部分：卸载
+
+```bash
+# 停止服务
+./install.sh stop
+
+# 彻底清除数据库（不可逆）
+docker volume rm search-boss_pgdata
+```
+
+`resumes/` 目录保留在宿主机，不随容器删除。
+
+---
+
+# 附录
+
+## 附录 A：完整配置参数
+
+| 参数 | 必填 | 默认值 | 说明 |
+|------|------|--------|------|
+| `DB_PASSWORD` | 是 | — | 数据库密码 |
+| `AGENT_TOKEN` | 是 | — | 内部认证令牌 |
+| `SESSION_SECRET` | 是 | — | Session 密钥 |
+| `LLM_API_BASE` | 按需 | — | LLM 接口地址 |
+| `LLM_API_KEY` | 按需 | — | LLM 接口密钥 |
+| `PORT` | 否 | `3000` | 服务端口 |
+| `DB_USER` | 否 | `search_boss` | 数据库用户名 |
+| `DB_NAME` | 否 | `search_boss_ops` | 数据库名 |
+| `DB_PORT` | 否 | `5432` | 数据库外部端口 |
+| `BOSS_CDP_ENDPOINT` | 否 | `http://host.docker.internal:9222` | Chrome CDP 地址 |
+| `BOSS_CLI_ENABLED` | 否 | `true` | 启用浏览器自动化 |
+| `SOURCE_LOOP_ENABLED` | 否 | `true` | 启用寻源循环 |
+| `LLM_MODEL` | 否 | `gpt-5.4` | LLM 模型 |
+| `APP_VERSION` | 否 | `latest` | 镜像版本标签 |
+
+## 附录 B：常见问题
 
 ### 服务启动失败
 
 ```bash
-# 查看详细日志
 ./install.sh logs search-boss
-
-# 检查配置是否完整
-./install.sh status
 ```
+
+常见原因：`.env` 必填项未填写、Docker 未启动、端口被占用。
 
 ### Chrome CDP 连接不上
 
-1. 确认 Chrome 已带 `--remote-debugging-port=9222` 启动
-2. 确认端口未被占用：`curl http://127.0.0.1:9222/json/version`
-3. Docker 内通过 `host.docker.internal` 访问宿主机，确认该地址可达
-
-**Windows 特别注意**：如果使用 WSL2 后端的 Docker Desktop，`host.docker.internal` 应能自动解析。如果不行，尝试在 `.env` 中将 `BOSS_CDP_ENDPOINT` 改为宿主机实际 IP。
-
-### 授权文件无效
-
-```bash
-# 检查授权状态
-curl http://localhost:3000/api/license
-
-# 常见错误：
-# license_file_not_found    — license/license.key 文件不存在
-# license_expired            — 授权已过期，联系供应商续期
-# license_fingerprint_mismatch — 机器指纹不匹配，需重新生成授权
-# license_tampered           — 授权文件被篡改
-```
+1. 确认 Chrome 带 `--remote-debugging-port=9222` 启动
+2. 验证端口：`curl http://127.0.0.1:9222/json/version`
+3. Windows WSL2 场景下 `host.docker.internal` 不通时，改用宿主机 IP
 
 ### 数据库连接失败
 
 ```bash
-# 检查 PostgreSQL 容器状态
 docker compose ps postgres
-
-# 手动连接测试
 docker compose exec postgres psql -U search_boss -d search_boss_ops -c "SELECT 1"
 ```
 
 ### 端口冲突
 
-如果 3000 或 5432 端口已被占用，修改 `.env`：
+修改 `.env`：
 
 ```bash
-PORT=3001        # 修改服务端口
-DB_PORT=5433     # 修改数据库外部端口
+PORT=3001
+DB_PORT=5433
 ```
 
-## 十三、升级
+## 附录 C：Chrome 开机自启（可选）
 
-1. 备份当前数据：`./install.sh backup`
-2. 替换交付物文件（保留 `.env`、`license/`、`resumes/`）
-3. 导入新镜像：`./install.sh load-images`
-4. 重启服务：`./install.sh restart`
-5. 如有数据库变更：`./install.sh db-setup`
+**Linux (systemd)：**
 
-## 十四、卸载
+```ini
+# /etc/systemd/system/chrome-boss.service
+[Unit]
+Description=Chrome for BOSS CDP
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/google-chrome \
+  --remote-debugging-port=9222 \
+  --user-data-dir=/home/user/.chrome-boss-profile \
+  --no-first-run
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
 
 ```bash
-# 停止并移除容器
-./install.sh stop
-
-# 如需彻底清除数据库数据
-docker volume rm search-boss_pgdata
+sudo systemctl enable chrome-boss
+sudo systemctl start chrome-boss
 ```
 
-简历文件保存在本地 `resumes/` 目录，不会随容器删除。
+**Windows：**
+
+创建 Chrome 快捷方式，目标追加 `--remote-debugging-port=9222 --user-data-dir=C:\chrome-boss-profile`，放入 `shell:startup` 文件夹。
