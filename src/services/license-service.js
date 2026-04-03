@@ -208,13 +208,15 @@ async function getHrAccountLicenseStatus({ pool, license }) {
 
 function licenseMiddleware(licenseService) {
   return (req, res, next) => {
+    const ext = req.path.split('.').pop();
     if (req.path === '/health'
       || req.path.startsWith('/api/auth/')
       || req.path === '/api/license'
       || req.path === '/api/license/reload'
       || req.path.startsWith('/api/setup/')
       || req.path === '/setup.html'
-      || req.path === '/login.html') {
+      || req.path === '/login.html'
+      || ['css', 'js', 'png', 'jpg', 'svg', 'ico', 'woff', 'woff2'].includes(ext)) {
       return next();
     }
 
