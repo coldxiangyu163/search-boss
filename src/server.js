@@ -128,16 +128,20 @@ const app = createApp({
 const port = config.port;
 
 async function ensureBrowserInstances() {
-  const result = await pool.query(`
-    select bi.id, bi.cdp_endpoint, bi.user_data_dir, bi.download_dir,
-           bi.debug_port, bi.host, bi.instance_name
-    from browser_instances bi
-    join boss_accounts ba on ba.id = bi.boss_account_id
-    where ba.status = 'active'
-    order by bi.id
-  `);
-
-  const instances = result.rows;
+  let instances = [];
+  try {
+    const result = await pool.query(`
+      select bi.id, bi.cdp_endpoint, bi.user_data_dir, bi.download_dir,
+             bi.debug_port, bi.host, bi.instance_name
+      from browser_instances bi
+      join boss_accounts ba on ba.id = bi.boss_account_id
+      where ba.status = 'active'
+      order by bi.id
+    `);
+    instances = result.rows;
+  } catch (err) {
+    console.log(`[startup] browser_instances query failed (table may not exist yet): ${err.message}`);
+  }
 
   if (instances.length === 0) {
     console.log('[startup] No browser instances configured in database, using global config fallback');
