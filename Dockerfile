@@ -42,22 +42,30 @@ LABEL maintainer="search-boss-enterprise"
 ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
-# Install Node.js + Chrome + Xvfb + fonts
+# Install Node.js + Chrome/Chromium + Xvfb + fonts
+# Google Chrome only available on amd64; ARM64 uses Debian Chromium via deb.debian.org
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       curl ca-certificates gnupg wget xvfb \
-      fonts-liberation fonts-noto-cjk \
+      fonts-liberation \
       libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
       libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 \
       libpango-1.0-0 libcairo2 libasound2 libxshmfence1 \
  && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
  && apt-get install -y --no-install-recommends nodejs \
- && (wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
-     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
-     && apt-get update \
-     && apt-get install -y --no-install-recommends google-chrome-stable) \
- || (echo "Chrome repo failed, trying Chromium..." \
-     && apt-get install -y --no-install-recommends chromium-browser || apt-get install -y --no-install-recommends chromium) \
+ && ARCH=$(dpkg --print-architecture) \
+ && if [ "$ARCH" = "amd64" ]; then \
+      wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
+      && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
+      && apt-get update \
+      && apt-get install -y --no-install-recommends google-chrome-stable; \
+    else \
+      echo "deb http://deb.debian.org/debian bookworm main" > /etc/apt/sources.list.d/debian-chromium.list \
+      && wget -q -O - https://ftp-master.debian.org/keys/archive-key-12.asc | gpg --dearmor -o /usr/share/keyrings/debian-archive.gpg \
+      && echo "deb [signed-by=/usr/share/keyrings/debian-archive.gpg] http://deb.debian.org/debian bookworm main" > /etc/apt/sources.list.d/debian-chromium.list \
+      && apt-get update \
+      && apt-get install -y --no-install-recommends chromium; \
+    fi \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=deps /app/node_modules ./node_modules
