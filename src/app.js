@@ -73,23 +73,43 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
     });
   }
 
+  // --- Setup first-run detection (must be before static middleware) ---
+  let _setupComplete = null;
+
+  async function isSetupComplete() {
+    if (!pool) return true;
+    if (_setupComplete === true) return true;
+    try {
+      const result = await pool.query("select count(*) from users where role in ('system_admin', 'enterprise_admin')");
+      _setupComplete = Number(result.rows[0].count) > 0;
+      return _setupComplete;
+    } catch {
+      return false;
+    }
+  }
+
+  if (pool) {
+    app.use(async (req, _res, next) => {
+      if (req.path.startsWith('/api/')
+        || req.path === '/setup.html'
+        || req.path === '/health'
+        || req.path.endsWith('.css')
+        || req.path.endsWith('.js')
+        || req.path.endsWith('.png')
+        || req.path.endsWith('.ico')) {
+        return next();
+      }
+      if (!(await isSetupComplete())) {
+        return _res.redirect('/setup.html');
+      }
+      next();
+    });
+  }
+
   app.use(express.static('public'));
 
   // --- Setup routes (first-run wizard, no auth required) ---
   if (pool) {
-    let _setupComplete = null;
-
-    async function isSetupComplete() {
-      if (_setupComplete === true) return true;
-      try {
-        const result = await pool.query("select count(*) from users where role in ('system_admin', 'enterprise_admin')");
-        _setupComplete = Number(result.rows[0].count) > 0;
-        return _setupComplete;
-      } catch {
-        return false;
-      }
-    }
-
     app.get('/api/setup/status', async (req, res) => {
       try {
         let dbReady = false;
@@ -181,16 +201,6 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
       }
     });
 
-    // Redirect to setup wizard if no admin exists
-    app.use(async (req, _res, next) => {
-      if (req.path.startsWith('/api/') || req.path.startsWith('/setup') || req.path.includes('.')) {
-        return next();
-      }
-      if (!(await isSetupComplete())) {
-        return _res.redirect('/setup.html');
-      }
-      next();
-    });
   }
 
   // --- Auth routes (no auth required) ---
