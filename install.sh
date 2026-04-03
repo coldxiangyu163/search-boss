@@ -65,13 +65,10 @@ load_images() {
     basename=$(basename "$tarfile")
 
     # 跳过其他架构的镜像
-    if echo "$basename" | grep -qE '-(amd64|arm64)\.tar$'; then
-      local file_arch
-      file_arch=$(echo "$basename" | grep -oE '(amd64|arm64)' | tail -1)
-      if [ "$file_arch" != "$arch" ]; then
-        continue
-      fi
-    fi
+    case "$basename" in
+      *-amd64.tar) [ "$arch" != "amd64" ] && continue ;;
+      *-arm64.tar) [ "$arch" != "arm64" ] && continue ;;
+    esac
 
     log_info "  导入 ${basename}"
     docker load -i "$tarfile"
@@ -79,7 +76,8 @@ load_images() {
 
   # 确保正确的 tag 存在 (search-boss:1.0.0-arm64 -> search-boss:1.0.0)
   local version_tag
-  version_tag=$(grep -oP 'APP_VERSION:-\K[^}]+' docker-compose.yml 2>/dev/null || echo "latest")
+  version_tag=$(sed -n 's/.*APP_VERSION:-\([^}]*\)}.*/\1/p' docker-compose.yml 2>/dev/null | head -1)
+  version_tag="${version_tag:-latest}"
   if docker image inspect "search-boss:${version_tag}-${arch}" &>/dev/null 2>&1; then
     docker tag "search-boss:${version_tag}-${arch}" "search-boss:${version_tag}"
     log_info "  已标记 search-boss:${version_tag}-${arch} → search-boss:${version_tag}"
