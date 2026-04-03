@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   search-boss:
     image: search-boss:${APP_VERSION:-latest}

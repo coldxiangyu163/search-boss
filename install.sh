@@ -234,7 +234,6 @@ setup() {
     session_secret=$(generate_random)
 
     cat > .env <<EOF
-APP_VERSION=${VERSION}
 PORT=3000
 DB_USER=search_boss
 DB_PASSWORD=${db_password}
