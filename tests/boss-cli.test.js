@@ -141,7 +141,7 @@ test('target inspect returns the bound session plus the current url', async () =
   assert.equal(payload.currentUrl, 'https://www.zhipin.com/web/chat/index');
 });
 
-test('joblist reads jobs through bossFetch using the bound target', async () => {
+test('joblist reads jobs through DOM extraction from recommend iframe', async () => {
   const calls = [];
   const stdout = createWritable();
 
@@ -161,19 +161,17 @@ test('joblist reads jobs through bossFetch using the bound target', async () => 
         })
       },
       browserCommands: {
-        bossFetch: async (payload) => {
+        evaluateJson: async (payload) => {
           calls.push(payload);
-          return {
-            zpData: [
-              {
-                jobName: '健康顾问',
-                salaryDesc: '8-10K',
-                address: '重庆',
-                jobOnlineStatus: 1,
-                encryptJobId: 'enc-job-1'
-              }
-            ]
-          };
+          return [
+            {
+              jobName: '健康顾问',
+              city: '重庆',
+              salary: '8-10K',
+              encryptJobId: 'enc-job-1',
+              status: 'online'
+            }
+          ];
         }
       }
     }
@@ -183,10 +181,7 @@ test('joblist reads jobs through bossFetch using the bound target', async () => 
 
   assert.equal(result.exitCode, 0);
   assert.equal(calls[0].targetId, 'boss-1');
-  assert.equal(
-    calls[0].url,
-    'https://www.zhipin.com/wapi/zpjob/job/chatted/jobList'
-  );
+  assert.ok(calls[0].expression.includes('.job-item'));
   assert.equal(payload.jobs[0].jobName, '健康顾问');
   assert.equal(payload.jobs[0].encryptJobId, 'enc-job-1');
 });

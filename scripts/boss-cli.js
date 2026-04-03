@@ -132,24 +132,44 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
 
   if (options.command === 'joblist') {
     const session = await sessionStore.loadSession(options.runId);
-    const data = await browserCommands.bossFetch({
+    const domJobs = await browserCommands.evaluateJson({
       cdpClient,
       targetId: session.targetId,
       urlPrefix: config.bossCdpTargetUrlPrefix,
-      url: 'https://www.zhipin.com/wapi/zpjob/job/chatted/jobList'
+      expression: `(() => {
+        try {
+          var fr = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"], iframe');
+          if (!fr || !fr.contentDocument) return JSON.stringify({ err: 'no-iframe' });
+          var d = fr.contentDocument;
+          var items = Array.from(d.querySelectorAll('.job-item'));
+          if (!items.length) return JSON.stringify({ err: 'no-items' });
+          var result = items.map(function(el) {
+            var jobId = el.getAttribute('value') || '';
+            var labelEl = el.querySelector('.label');
+            var text = labelEl ? (labelEl.textContent || '').trim().replace(/[ \\t]+/g, ' ') : '';
+            var parts = text.split(' _ ');
+            var title = parts[0] ? parts[0].trim() : '';
+            var company = parts[1] ? parts[1].trim() : '';
+            var last = parts[2] ? parts[2].trim() : '';
+            var spIdx = last.indexOf(' ');
+            var city = spIdx > 0 ? last.substring(0, spIdx) : last;
+            var salary = spIdx > 0 ? last.substring(spIdx + 1).trim() : '';
+            return { jobName: title, city: city, salary: salary, encryptJobId: jobId, status: 'online' };
+          });
+          return JSON.stringify(result);
+        } catch (err) {
+          return JSON.stringify({ err: err.message || String(err) });
+        }
+      })()`
     });
+
+    if (domJobs?.err) {
+      throw new Error('boss_joblist_dom_extract_failed: ' + domJobs.err);
+    }
 
     return {
       ok: true,
-      jobs: Array.isArray(data?.zpData)
-        ? data.zpData.map((job) => ({
-          jobName: job.jobName || '',
-          salary: job.salaryDesc || '',
-          city: job.address || '',
-          status: Number(job.jobOnlineStatus) === 1 ? 'online' : 'closed',
-          encryptJobId: job.encryptJobId || ''
-        }))
-        : []
+      jobs: Array.isArray(domJobs) ? domJobs : []
     };
   }
 
