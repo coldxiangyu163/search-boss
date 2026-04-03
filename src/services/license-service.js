@@ -6,7 +6,7 @@ const path = require('node:path');
 const WARNING_DAYS = 30;
 const CACHE_TTL_MS = 60_000;
 const VENDOR_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAl5akcmQPRLdwq0w0+Tvu/gKkbhngw8ZmRgenZZnc8cU=
+MCowBQYDK2VwAyEAi7smF4jqVPZ7pA4Q/Plr8XnFyEyd1r6LtehChdmbPMM=
 -----END PUBLIC KEY-----`;
 
 class LicenseService {
