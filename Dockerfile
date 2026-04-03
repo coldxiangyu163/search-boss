@@ -18,14 +18,16 @@ COPY public/ public/
 RUN find src -name '*.js' -exec sh -c 'bytenode -c "$1" && rm "$1"' _ {} \; \
  && find scripts -name '*.js' -exec sh -c 'bytenode -c "$1" && rm "$1"' _ {} \;
 
-# Generate loader stubs: each .js re-exports the .jsc via bytenode
+# Generate loader stubs: each .js re-exports the sibling .jsc via bytenode
 RUN find src -name '*.jsc' -exec sh -c ' \
       stub="${1%.jsc}.js"; \
-      echo "\"use strict\"; require(\"bytenode\"); module.exports = require(\"$1\");" > "$stub" \
+      base="$(basename "$1")"; \
+      echo "\"use strict\"; require(\"bytenode\"); module.exports = require(\"./$base\");" > "$stub" \
     ' _ {} \; \
  && find scripts -name '*.jsc' -exec sh -c ' \
       stub="${1%.jsc}.js"; \
-      echo "\"use strict\"; require(\"bytenode\"); module.exports = require(\"$1\");" > "$stub" \
+      base="$(basename "$1")"; \
+      echo "\"use strict\"; require(\"bytenode\"); module.exports = require(\"./$base\");" > "$stub" \
     ' _ {} \;
 
 # ---- Stage 3: Final production image ----

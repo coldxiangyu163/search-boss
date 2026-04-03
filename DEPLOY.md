@@ -1,5 +1,81 @@
 # search-boss 企业版部署指南
 
+本文档分两部分：
+
+- **供应商侧**（你）：从源码构建交付包、生成授权
+- **客户侧**：拿到交付包后从零部署上线
+
+---
+
+## 〇、供应商侧：构建与交付
+
+> 以下操作在你的开发机上执行，客户不需要看这一节。
+
+### 0.1 前置条件
+
+- 本机已安装 Docker 并启动
+- 本机已 clone 本仓库源码，切到 `feature/enterprise-deploy` 分支
+
+### 0.2 一键构建交付包
+
+```bash
+./pack.sh 1.0.0
+```
+
+脚本自动完成：
+
+1. Docker 多阶段构建（bytenode 编译 JS 为 V8 字节码 → 生产镜像）
+2. 导出 `search-boss` 和 `postgres` 离线镜像 tar 包
+3. 复制 `docker-compose.yml`、`install.sh`、`.env.template`、`DEPLOY.md`
+4. 打包为 `dist/search-boss-enterprise-v1.0.0.tar.gz`
+
+产出物中**不包含任何 JS 源码**，只有编译后的 `.jsc` 字节码。
+
+### 0.3 为客户生成授权文件
+
+**获取客户机器指纹**（让客户在目标机器上执行后发给你）：
+
+```bash
+# 客户机器上执行（部署后也可在容器内执行）
+docker compose exec search-boss node scripts/generate-license.js fingerprint
+```
+
+**生成授权**（在你的开发机上执行）：
+
+```bash
+# 绑定指纹 + 有效期 + HR 账号上限
+node scripts/generate-license.js generate \
+  --customer "某某公司" \
+  --fingerprint "客户提供的指纹字符串" \
+  --expires 2027-04-03 \
+  --max-hr 10 \
+  --output dist/search-boss-enterprise-v1.0.0/license/license.key
+
+# 如果不绑定机器（用于试用/POC），指纹传 *
+node scripts/generate-license.js generate \
+  --customer "试用客户" \
+  --fingerprint "*" \
+  --expires 2026-07-01 \
+  --max-hr 3
+```
+
+### 0.4 交付给客户
+
+将以下文件发给客户：
+
+```
+dist/search-boss-enterprise-v1.0.0.tar.gz   # 交付包（含离线镜像）
+license/license.key                           # 授权文件（单独发送或放入包内）
+```
+
+客户收到后按下文部署。
+
+---
+
+## 以下为客户侧部署文档
+
+---
+
 ## 一、环境要求
 
 | 项目 | 最低要求 |
@@ -26,7 +102,14 @@ search-boss-enterprise-v<版本号>/
     └── license.key             # 授权文件
 ```
 
-## 三、快速部署（5 步完成）
+## 三、快速部署（6 步完成）
+
+### 步骤 0：解压交付包
+
+```bash
+tar xzf search-boss-enterprise-v1.0.0.tar.gz
+cd search-boss-enterprise-v1.0.0
+```
 
 ### 步骤 1：安装 Docker
 
@@ -107,13 +190,9 @@ cp /path/to/license.key license/
 ./install.sh db-setup
 ```
 
-服务现在可以通过 `http://localhost:3000` 访问。
+### 步骤 6：启动 Chrome 并登录 BOSS
 
-## 四、Chrome 浏览器配置
-
-Chrome 需要在**宿主机**运行（非 Docker 内），因为需要手动登录 BOSS 招聘端。
-
-### 启动 Chrome 远程调试
+Chrome 需要在**宿主机**运行（非 Docker 内），因为需要手动扫码/登录 BOSS 招聘端。
 
 **macOS：**
 
@@ -139,12 +218,56 @@ google-chrome \
   --user-data-dir=$HOME/.chrome-boss-profile
 ```
 
-### 登录 BOSS 招聘端
+在 Chrome 窗口中打开 `https://www.zhipin.com`，完成登录，保持窗口不要关闭。
 
-1. 在上述 Chrome 窗口中打开 `https://www.zhipin.com`
-2. 完成登录（扫码或账号密码）
-3. 确认进入招聘端首页
-4. 保持 Chrome 窗口不要关闭
+### 部署完成验证
+
+```bash
+./install.sh status
+```
+
+全部正常时输出：
+
+```
+[INFO]  服务状态:
+ NAME              STATUS
+ search-boss       running
+ search-boss-db    running
+[INFO]  API 健康检查: 正常
+[INFO]  Chrome CDP: 在线
+```
+
+访问 `http://localhost:3000` 即可使用管理后台。
+
+---
+
+## 四、Chrome 浏览器配置（补充说明）
+
+> 步骤 6 已覆盖基本启动流程，本节为补充说明。
+
+### 开机自启（可选）
+
+可将 Chrome 启动命令加入系统启动项，避免每次重启后手动操作。
+
+**Linux (systemd)：**
+
+```bash
+# /etc/systemd/system/chrome-boss.service
+[Unit]
+Description=Chrome for BOSS CDP
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/google-chrome --remote-debugging-port=9222 --user-data-dir=/home/user/.chrome-boss-profile --no-first-run
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Windows：**
+
+将 Chrome 启动快捷方式（带 `--remote-debugging-port=9222`）放入 `shell:startup` 文件夹。
 
 ### 验证 Chrome 连通性
 
