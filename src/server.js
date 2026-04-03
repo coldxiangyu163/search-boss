@@ -44,7 +44,14 @@ agentService.deterministicContextService = new DeterministicContextService({
 });
 agentService.runOrchestrator = new RunOrchestrator({ agentService });
 
-const llmEvaluator = config.llmApiKey
+async function getDbConfig(key) {
+  try {
+    const result = await pool.query('select value from system_config where key = $1', [key]);
+    return result.rows[0]?.value || null;
+  } catch { return null; }
+}
+
+let _llmEvaluator = config.llmApiKey
   ? new LlmEvaluator({
     apiBase: config.llmApiBase,
     apiKey: config.llmApiKey,
@@ -52,22 +59,47 @@ const llmEvaluator = config.llmApiKey
   })
   : null;
 
-const sourceLoopService = (config.sourceLoopEnabled && bossCliRunner && llmEvaluator)
+async function getLlmEvaluator() {
+  if (_llmEvaluator) return _llmEvaluator;
+  const apiKey = await getDbConfig('llm_api_key');
+  if (!apiKey) return null;
+  const apiBase = (await getDbConfig('llm_api_base')) || 'https://www.openclaudecode.cn/v1';
+  const model = (await getDbConfig('llm_model')) || 'gpt-5.4';
+  _llmEvaluator = new LlmEvaluator({ apiBase, apiKey, model });
+  return _llmEvaluator;
+}
+
+function resetLlmEvaluator() { _llmEvaluator = null; }
+
+const llmEvaluatorProxy = {
+  async evaluateCandidate(...args) {
+    const evaluator = await getLlmEvaluator();
+    if (!evaluator) throw new Error('LLM 未配置，请在系统设置中配置 LLM 接口');
+    return evaluator.evaluateCandidate(...args);
+  },
+  async chat(...args) {
+    const evaluator = await getLlmEvaluator();
+    if (!evaluator) throw new Error('LLM 未配置');
+    return evaluator.chat(...args);
+  }
+};
+
+const sourceLoopService = (config.sourceLoopEnabled && bossCliRunner)
   ? new SourceLoopService({
     bossCliRunner,
     agentService,
-    llmEvaluator,
+    llmEvaluator: llmEvaluatorProxy,
     targetCount: config.sourceLoopTargetCount,
     candidateDelayMin: config.loopDelayMin,
     candidateDelayMax: config.loopDelayMax
   })
   : null;
 
-const followupLoopService = (config.sourceLoopEnabled && bossCliRunner && llmEvaluator)
+const followupLoopService = (config.sourceLoopEnabled && bossCliRunner)
   ? new FollowupLoopService({
     bossCliRunner,
     agentService,
-    llmEvaluator,
+    llmEvaluator: llmEvaluatorProxy,
     maxThreads: config.followupLoopMaxThreads,
     threadDelayMin: config.loopDelayMin,
     threadDelayMax: config.loopDelayMax

@@ -123,3 +123,10 @@ begin
     check (role in ('system_admin', 'enterprise_admin', 'dept_admin', 'hr'));
 exception when others then null;
 end $$;
+
+-- system_config: runtime key-value settings (LLM, etc.)
+create table if not exists system_config (
+  key text primary key,
+  value text,
+  updated_at timestamptz not null default now()
+);

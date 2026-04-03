@@ -140,6 +140,33 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
       }
     });
 
+    app.post('/api/setup/save-config', async (req, res, next) => {
+      try {
+        const { llmApiBase, llmApiKey, llmModel } = req.body;
+        if (!llmApiKey) {
+          return res.status(400).json({ ok: false, message: '请填写 LLM 接口密钥' });
+        }
+
+        const entries = [
+          ['llm_api_base', llmApiBase || 'https://www.openclaudecode.cn/v1'],
+          ['llm_api_key', llmApiKey],
+          ['llm_model', llmModel || 'gpt-5.4']
+        ];
+
+        for (const [key, value] of entries) {
+          await pool.query(
+            `insert into system_config (key, value, updated_at) values ($1, $2, now())
+             on conflict (key) do update set value = $2, updated_at = now()`,
+            [key, value]
+          );
+        }
+
+        res.json({ ok: true });
+      } catch (error) {
+        next(error);
+      }
+    });
+
     app.get('/api/setup/check-chrome', async (req, res) => {
       const endpoint = config.bossCdpEndpoint || 'http://127.0.0.1:9222';
       try {

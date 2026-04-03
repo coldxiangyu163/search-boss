@@ -212,25 +212,6 @@ setup() {
     agent_token=$(generate_random)
     session_secret=$(generate_random)
 
-    local llm_api_base=""
-    local llm_api_key=""
-    local llm_model="gpt-5.4"
-
-    echo ""
-    echo "========================================"
-    echo " LLM 配置 (用于 AI 候选人评估)"
-    echo "========================================"
-    echo ""
-    echo "如果暂时没有 LLM 端点，可直接回车跳过，后续在 .env 中补填。"
-    echo ""
-
-    read -rp "LLM 接口地址 (如 https://your-llm/v1): " llm_api_base
-    if [ -n "$llm_api_base" ]; then
-      read -rp "LLM 接口密钥: " llm_api_key
-      read -rp "LLM 模型名称 [${llm_model}]: " input_model
-      [ -n "$input_model" ] && llm_model="$input_model"
-    fi
-
     cat > .env <<EOF
 APP_VERSION=${VERSION}
 PORT=3000
@@ -243,9 +224,6 @@ SESSION_SECRET=${session_secret}
 BOSS_CDP_ENDPOINT=http://host.docker.internal:9222
 BOSS_CLI_ENABLED=true
 SOURCE_LOOP_ENABLED=true
-LLM_API_BASE=${llm_api_base}
-LLM_API_KEY=${llm_api_key}
-LLM_MODEL=${llm_model}
 EOF
 
     log_info "配置文件已生成: .env"
@@ -263,13 +241,26 @@ EOF
   docker compose exec search-boss node scripts/setup-db.js
   log_info "数据库初始化完成"
 
+  local url="http://localhost:${PORT:-3000}"
+
   echo ""
   log_info "========================================="
-  log_info " 安装完成!"
+  log_info " 服务已就绪，正在打开浏览器..."
   log_info "========================================="
   echo ""
-  log_info "请在浏览器中打开: http://localhost:${PORT:-3000}"
-  log_info "按照页面引导完成管理员账号创建和 Chrome 配置。"
+
+  # 尝试自动打开浏览器
+  if command -v xdg-open &>/dev/null; then
+    xdg-open "$url" 2>/dev/null &
+  elif command -v open &>/dev/null; then
+    open "$url" 2>/dev/null &
+  elif command -v start &>/dev/null; then
+    start "$url" 2>/dev/null &
+  else
+    log_info "请在浏览器中打开: $url"
+  fi
+
+  log_info "请按照页面引导完成配置。"
   echo ""
 }
 

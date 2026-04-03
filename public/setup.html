@@ -77,12 +77,13 @@
       <div class="step-dot"></div>
       <div class="step-dot"></div>
       <div class="step-dot"></div>
+      <div class="step-dot"></div>
     </div>
 
     <!-- Step 1: 环境检查 -->
     <div class="step-panel active" id="step-1">
       <div class="card">
-        <h2>环境检查</h2>
+        <h2>Step 1 · 环境检查</h2>
         <p class="subtitle">正在检测系统运行环境...</p>
         <div id="checks">
           <div class="check-item">
@@ -117,7 +118,7 @@
     <!-- Step 2: 创建管理员 -->
     <div class="step-panel" id="step-2">
       <div class="card">
-        <h2>创建管理员账号</h2>
+        <h2>Step 2 · 创建管理员账号</h2>
         <p class="subtitle">设置系统管理员，用于登录管理后台</p>
         <div class="field">
           <label>姓名</label>
@@ -144,10 +145,39 @@
       </div>
     </div>
 
-    <!-- Step 3: Chrome 配置 -->
+    <!-- Step 3: LLM 配置 -->
     <div class="step-panel" id="step-3">
       <div class="card">
-        <h2>Chrome 浏览器配置</h2>
+        <h2>Step 3 · AI 模型配置</h2>
+        <p class="subtitle">配置 LLM 接口，用于候选人智能评估</p>
+        <div class="field">
+          <label>接口地址</label>
+          <input type="text" id="llm-api-base" placeholder="https://api.openai.com/v1" />
+          <div class="hint">OpenAI 兼容接口，以 /v1 结尾</div>
+        </div>
+        <div class="field">
+          <label>接口密钥</label>
+          <input type="password" id="llm-api-key" placeholder="sk-..." />
+        </div>
+        <div class="field">
+          <label>模型名称</label>
+          <input type="text" id="llm-model" placeholder="gpt-5.4" value="gpt-5.4" />
+        </div>
+        <div class="error-msg" id="llm-error"></div>
+        <div class="btn-row">
+          <button class="btn btn-secondary" onclick="goStep(2)">上一步</button>
+          <div>
+            <button class="btn btn-ghost" onclick="goStep(4)" style="margin-right:8px;">稍后配置</button>
+            <button class="btn btn-primary" id="btn-save-llm" onclick="saveLlmConfig()">保存配置</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 4: Chrome 配置 -->
+    <div class="step-panel" id="step-4">
+      <div class="card">
+        <h2>Step 4 · Chrome 浏览器配置</h2>
         <p class="subtitle">在宿主机启动 Chrome 远程调试，用于 BOSS 招聘端自动化</p>
         <div style="background: #f8fafc; border-radius: 8px; padding: 16px; margin-bottom: 16px; font-size: 13px; line-height: 1.8;">
           <strong>请在服务器终端执行以下命令：</strong><br>
@@ -163,17 +193,17 @@
           </div>
         </div>
         <div class="btn-row">
-          <button class="btn btn-secondary" onclick="goStep(2)">上一步</button>
+          <button class="btn btn-secondary" onclick="goStep(3)">上一步</button>
           <div>
-            <button class="btn btn-ghost" onclick="goStep(4)" style="margin-right:8px;">稍后配置</button>
+            <button class="btn btn-ghost" onclick="goStep(5)" style="margin-right:8px;">稍后配置</button>
             <button class="btn btn-primary" id="btn-check-chrome" onclick="checkChrome()">检测连接</button>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Step 4: 完成 -->
-    <div class="step-panel" id="step-4">
+    <!-- Step 5: 完成 -->
+    <div class="step-panel" id="step-5">
       <div class="card">
         <div class="success-panel">
           <div class="success-icon">&#10003;</div>
@@ -299,6 +329,39 @@ async function createAdmin() {
   }
 }
 
+async function saveLlmConfig() {
+  const apiBase = document.getElementById('llm-api-base').value.trim();
+  const apiKey = document.getElementById('llm-api-key').value.trim();
+  const model = document.getElementById('llm-model').value.trim();
+  const errorEl = document.getElementById('llm-error');
+  const btn = document.getElementById('btn-save-llm');
+  errorEl.textContent = '';
+
+  if (!apiKey) { errorEl.textContent = '请填写接口密钥'; return; }
+
+  btn.disabled = true;
+  btn.textContent = '保存中...';
+
+  try {
+    const res = await fetch('/api/setup/save-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ llmApiBase: apiBase, llmApiKey: apiKey, llmModel: model })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      goStep(4);
+    } else {
+      errorEl.textContent = data.message || '保存失败';
+    }
+  } catch {
+    errorEl.textContent = '网络错误';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '保存配置';
+  }
+}
+
 async function checkChrome() {
   const btn = document.getElementById('btn-check-chrome');
   btn.disabled = true;
@@ -310,6 +373,7 @@ async function checkChrome() {
     const data = await res.json();
     if (data.ok) {
       setCheck('chk-chrome', 'ok', 'Chrome ' + (data.browser || '') + ' 已连接');
+      setTimeout(function() { goStep(5); }, 800);
     } else {
       setCheck('chk-chrome', 'fail', data.message || 'Chrome 未连接');
     }
