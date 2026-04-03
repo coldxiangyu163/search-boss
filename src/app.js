@@ -5,6 +5,7 @@ const express = require('express');
 const session = require('express-session');
 const PgStore = require('connect-pg-simple')(session);
 const { authMiddleware, requireRole, resolveHrScope, isSystemAdmin, isAdminRole } = require('./middleware/auth');
+const { LicenseService, licenseMiddleware } = require('./services/license-service');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const RESUMES_ROOT = path.join(REPO_ROOT, 'resumes');
@@ -13,6 +14,15 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
   const app = express();
 
   app.use(express.json());
+
+  if (config.licenseFile) {
+    const licenseService = new LicenseService({ licensePath: config.licenseFile });
+    app.use(licenseMiddleware(licenseService));
+    app.get('/api/license', (req, res) => {
+      const result = licenseService.validate();
+      res.json(result);
+    });
+  }
 
   if (pool) {
     app.use(session({

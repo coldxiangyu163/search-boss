@@ -37,7 +37,7 @@ test('buildConfig throws when required runtime settings are missing', () => {
       buildConfig({
         PORT: '3000'
       }),
-    /Missing required environment variables: DATABASE_URL, AGENT_TOKEN, NANOBOT_CONFIG_PATH/
+    /Missing required environment variables: DATABASE_URL, AGENT_TOKEN/
   );
 });
 

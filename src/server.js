@@ -19,9 +19,9 @@ const { LlmEvaluator } = require('./services/llm-evaluator');
 const { BrowserInstanceManager } = require('./services/browser-instance-manager');
 const { ChromeLauncher } = require('./services/chrome-launcher');
 
-const nanobotRunner = new NanobotRunner({
-  configPath: config.nanobotConfigPath
-});
+const nanobotRunner = config.nanobotConfigPath
+  ? new NanobotRunner({ configPath: config.nanobotConfigPath })
+  : null;
 
 const bossCliRunner = config.bossCliEnabled
   ? new BossCliRunner()
