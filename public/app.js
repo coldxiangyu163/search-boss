@@ -64,10 +64,13 @@ const state = {
     item: null,
     saving: false,
     savingError: '',
+    savingSuccess: '',
     savingKnowledge: false,
     savingKnowledgeError: '',
+    savingKnowledgeSuccess: '',
     savingFilters: false,
     savingFiltersError: '',
+    savingFiltersSuccess: '',
     filtersExpanded: false,
     pendingFilters: null
   },
@@ -380,10 +383,13 @@ async function openJobDetailModal(jobKey) {
     item: null,
     saving: false,
     savingError: '',
+    savingSuccess: '',
     savingKnowledge: false,
     savingKnowledgeError: '',
+    savingKnowledgeSuccess: '',
     savingFilters: false,
     savingFiltersError: '',
+    savingFiltersSuccess: '',
     filtersExpanded: false,
     pendingFilters: null
   };
@@ -397,6 +403,7 @@ async function openJobDetailModal(jobKey) {
 
     state.jobDetailModal.loading = false;
     state.jobDetailModal.item = result.item;
+    state.jobDetailModal.pendingFilters = normalizeFiltersForUI(result.item.recommend_filters || {});
     render();
   } catch (error) {
     if (state.jobDetailModal.jobKey !== jobKey) {
@@ -418,10 +425,13 @@ function closeJobDetailModal() {
     item: null,
     saving: false,
     savingError: '',
+    savingSuccess: '',
     savingKnowledge: false,
     savingKnowledgeError: '',
+    savingKnowledgeSuccess: '',
     savingFilters: false,
     savingFiltersError: '',
+    savingFiltersSuccess: '',
     filtersExpanded: false,
     pendingFilters: null
   };
@@ -440,7 +450,8 @@ async function saveJobCustomRequirement() {
 
   state.jobDetailModal.saving = true;
   state.jobDetailModal.savingError = '';
-  render();
+  state.jobDetailModal.savingSuccess = '';
+  renderPreservingModalScroll();
 
   try {
     const result = await fetchJson(
@@ -462,11 +473,13 @@ async function saveJobCustomRequirement() {
         ? { ...job, custom_requirement: result.item.custom_requirement }
         : job
     ));
+    state.jobDetailModal.savingSuccess = '保存成功';
+    setTimeout(() => { state.jobDetailModal.savingSuccess = ''; renderPreservingModalScroll(); }, 2000);
   } catch (error) {
     state.jobDetailModal.savingError = error.message;
   } finally {
     state.jobDetailModal.saving = false;
-    render();
+    renderPreservingModalScroll();
   }
 }
 
@@ -482,7 +495,8 @@ async function saveJobEnterpriseKnowledge() {
 
   state.jobDetailModal.savingKnowledge = true;
   state.jobDetailModal.savingKnowledgeError = '';
-  render();
+  state.jobDetailModal.savingKnowledgeSuccess = '';
+  renderPreservingModalScroll();
 
   try {
     const result = await fetchJson(
@@ -504,11 +518,13 @@ async function saveJobEnterpriseKnowledge() {
         ? { ...job, enterprise_knowledge: result.item.enterprise_knowledge }
         : job
     ));
+    state.jobDetailModal.savingKnowledgeSuccess = '保存成功';
+    setTimeout(() => { state.jobDetailModal.savingKnowledgeSuccess = ''; renderPreservingModalScroll(); }, 2000);
   } catch (error) {
     state.jobDetailModal.savingKnowledgeError = error.message;
   } finally {
     state.jobDetailModal.savingKnowledge = false;
-    render();
+    renderPreservingModalScroll();
   }
 }
 
@@ -690,6 +706,7 @@ function renderRecommendFiltersPanel(item) {
       ${renderMultiSelectRow('经验要求', 'experience', opts.experience)}
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border,#e0e0e0)">
         <button class="button-secondary button-muted" onclick="resetRecommendFilters()">清除筛选</button>
+        <button class="button-secondary" onclick="saveJobRecommendFilters()" ${state.jobDetailModal.savingFilters ? 'disabled' : ''}>${state.jobDetailModal.savingFilters ? '保存中...' : '保存筛选'}</button>
       </div>
     </div>
   `;
@@ -765,6 +782,7 @@ async function saveJobRecommendFilters() {
 
   state.jobDetailModal.savingFilters = true;
   state.jobDetailModal.savingFiltersError = '';
+  state.jobDetailModal.savingFiltersSuccess = '';
   renderPreservingModalScroll();
 
   try {
@@ -784,6 +802,8 @@ async function saveJobRecommendFilters() {
         ? { ...job, recommend_filters: result.item.recommend_filters }
         : job
     ));
+    state.jobDetailModal.savingFiltersSuccess = '保存成功';
+    setTimeout(() => { state.jobDetailModal.savingFiltersSuccess = ''; renderPreservingModalScroll(); }, 2000);
   } catch (error) {
     state.jobDetailModal.savingFiltersError = error.message;
   } finally {
@@ -3779,6 +3799,7 @@ function renderJobDetailModal() {
               </div>
               <p class="card-subtitle job-detail-tip">该内容仅保存在本地，不会被 BOSS 职位同步覆盖，寻源调用 nanobot 时会一并带上。</p>
               ${state.jobDetailModal.savingError ? `<div class="inline-status inline-status-error">${escapeHtml(state.jobDetailModal.savingError)}</div>` : ''}
+              ${state.jobDetailModal.savingSuccess ? `<div class="inline-status inline-status-success">${escapeHtml(state.jobDetailModal.savingSuccess)}</div>` : ''}
               <textarea
                 id="job-custom-requirement-input"
                 class="job-detail-textarea"
@@ -3801,6 +3822,7 @@ function renderJobDetailModal() {
               </div>
               <p class="card-subtitle job-detail-tip">企业相关信息（如公司介绍、福利政策、工作环境等），大模型回答候选人问题时会作为参考依据。</p>
               ${state.jobDetailModal.savingKnowledgeError ? `<div class="inline-status inline-status-error">${escapeHtml(state.jobDetailModal.savingKnowledgeError)}</div>` : ''}
+              ${state.jobDetailModal.savingKnowledgeSuccess ? `<div class="inline-status inline-status-success">${escapeHtml(state.jobDetailModal.savingKnowledgeSuccess)}</div>` : ''}
               <textarea
                 id="job-enterprise-knowledge-input"
                 class="job-detail-textarea"
@@ -3813,19 +3835,11 @@ function renderJobDetailModal() {
                   <p class="eyebrow">BOSS 推荐筛选</p>
                   <h4 class="card-title job-detail-section-title">推荐牛人筛选条件</h4>
                 </div>
-                <div style="display:flex;align-items:center;gap:8px">
-                  <button
-                    class="button-secondary"
-                    onclick="event.stopPropagation(); saveJobRecommendFilters()"
-                    ${state.jobDetailModal.savingFilters ? 'disabled' : ''}
-                  >
-                    ${state.jobDetailModal.savingFilters ? '保存中...' : '保存筛选'}
-                  </button>
-                  <span style="font-size:12px;color:var(--text-muted,#999)">${state.jobDetailModal.filtersExpanded ? '▲ 收起' : '▼ 展开'}</span>
-                </div>
+                <span style="font-size:12px;color:var(--text-muted,#999)">${state.jobDetailModal.filtersExpanded ? '▲ 收起' : '▼ 展开'}</span>
               </div>
               <p class="card-subtitle job-detail-tip">与 BOSS 直聘推荐牛人页面筛选一致，寻源时自动应用到推荐页面。</p>
               ${state.jobDetailModal.savingFiltersError ? `<div class="inline-status inline-status-error">${escapeHtml(state.jobDetailModal.savingFiltersError)}</div>` : ''}
+              ${state.jobDetailModal.savingFiltersSuccess ? `<div class="inline-status inline-status-success">${escapeHtml(state.jobDetailModal.savingFiltersSuccess)}</div>` : ''}
               ${state.jobDetailModal.filtersExpanded ? renderRecommendFiltersPanel(item) : ''}
             </section>
             <section class="job-detail-section">

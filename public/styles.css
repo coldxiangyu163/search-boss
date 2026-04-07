@@ -453,6 +453,12 @@ tbody tr:hover {
   color: #b93535;
 }
 
+.inline-status-success {
+  background: rgba(52, 168, 83, 0.08);
+  border-color: rgba(52, 168, 83, 0.18);
+  color: #1e7e34;
+}
+
 .highlight-panel {
   background: linear-gradient(180deg, #fbfcff 0%, #f4f8ff 100%);
   border: 1px solid #dbe6fb;
