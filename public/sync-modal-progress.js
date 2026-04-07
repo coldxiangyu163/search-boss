@@ -27,6 +27,13 @@ function resolveSyncTerminalStatus(event = {}) {
     };
   }
 
+  if (eventType === 'run_stopped') {
+    return {
+      status: 'stopped',
+      error: ''
+    };
+  }
+
   if (['run_failed', 'sync_failed'].includes(eventType)) {
     return {
       status: 'failed',
@@ -47,6 +54,13 @@ function resolveSyncTerminalStatusFromRun(run = {}) {
     };
   }
 
+  if (status === 'stopped') {
+    return {
+      status: 'stopped',
+      error: ''
+    };
+  }
+
   if (status === 'failed') {
     return {
       status: 'failed',
@@ -63,6 +77,8 @@ function buildSyncStages({ runId, status, error, progress }) {
   const hasNanobot = resolvedProgress.hasNanobotOutput;
   const hasCompleted = status === 'completed';
   const hasFailed = status === 'failed';
+  const hasStopped = status === 'stopped';
+  const isTerminal = hasCompleted || hasFailed || hasStopped;
 
   return [
     {
@@ -75,15 +91,15 @@ function buildSyncStages({ runId, status, error, progress }) {
       label: '启动小聘AGENT',
       desc: hasNanobot
         ? '已接收到小聘AGENT实时输出。'
-        : (hasCompleted || hasFailed ? '任务已结束，本次未采集到实时流式日志。' : '等待小聘AGENT输出...'),
-      active: hasRequested && !hasNanobot && !hasCompleted && !hasFailed,
-      done: hasNanobot || hasCompleted || hasFailed
+        : (isTerminal ? '任务已结束，本次未采集到实时流式日志。' : '等待小聘AGENT输出...'),
+      active: hasRequested && !hasNanobot && !isTerminal,
+      done: hasNanobot || isTerminal
     },
     {
-      label: hasFailed ? '执行异常' : '完成执行',
-      desc: hasFailed ? (error || '任务执行出现异常。') : (hasCompleted ? '任务已执行完成。' : '等待最终结果...'),
-      active: !hasCompleted && !hasFailed && hasNanobot,
-      done: hasCompleted || hasFailed
+      label: hasFailed ? '执行异常' : (hasStopped ? '已手动停止' : '完成执行'),
+      desc: hasFailed ? (error || '任务执行出现异常。') : (hasStopped ? '任务已被手动停止。' : (hasCompleted ? '任务已执行完成。' : '等待最终结果...')),
+      active: !isTerminal && hasNanobot,
+      done: isTerminal
     }
   ];
 }

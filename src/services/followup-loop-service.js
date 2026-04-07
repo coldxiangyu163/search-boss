@@ -19,13 +19,13 @@ class FollowupLoopService {
     this.threadDelayMax = threadDelayMax;
   }
 
-  async run({ runId, jobKey, mode = 'followup', maxThreads: overrideMaxThreads, bossCliRunner: runnerOverride } = {}) {
+  async run({ runId, jobKey, mode = 'followup', maxThreads: overrideMaxThreads, bossCliRunner: runnerOverride, signal } = {}) {
     const runner = runnerOverride || this.bossCliRunner;
     const effectiveMaxThreads = overrideMaxThreads || this.maxThreads;
-    return this.#runImpl({ runId, jobKey, mode, effectiveMaxThreads, runner });
+    return this.#runImpl({ runId, jobKey, mode, effectiveMaxThreads, runner, signal });
   }
 
-  async #runImpl({ runId, jobKey, mode, effectiveMaxThreads, runner }) {
+  async #runImpl({ runId, jobKey, mode, effectiveMaxThreads, runner, signal }) {
     const stats = {
       processed: 0,
       replied: 0,
@@ -164,6 +164,7 @@ class FollowupLoopService {
 
     // Phase 6: Process each thread with anti-risk delays
     for (let i = 0; i < threads.length; i++) {
+      if (signal?.aborted) break;
       const thread = threads[i];
       if (stats.processed >= effectiveMaxThreads) {
         break;
@@ -194,6 +195,30 @@ class FollowupLoopService {
         message: `checkpoint after thread ${stats.processed}`,
         payload: { ...stats, lastThread: thread.name }
       });
+    }
+
+    // Handle manual stop
+    if (signal?.aborted) {
+      await this.#resetChatPageAfterCompletion({ runId, runner });
+
+      const stoppedSummary = { ...stats, reason: 'manually_stopped' };
+
+      await this.#recordEvent(runId, {
+        eventId: `followup-loop-stopped:${runId}`,
+        eventType: 'followup_loop_stopped',
+        stage: 'followup_loop',
+        message: '跟进任务已手动停止',
+        payload: stoppedSummary
+      });
+
+      const stopFn = this.agentService.stopRun || this.agentService.failRun;
+      await stopFn.call(this.agentService, {
+        runId,
+        message: 'manually_stopped',
+        payload: stoppedSummary
+      });
+
+      return { ok: false, stats: stoppedSummary, reason: 'manually_stopped' };
     }
 
     // Phase 7: Complete

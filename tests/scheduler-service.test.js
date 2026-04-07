@@ -428,6 +428,101 @@ test('SchedulerService releases task lock after execution completes', async () =
   assert.equal(taskLock.isBusy(), false);
 });
 
+test('SchedulerService stopRun aborts running task and finalizes scheduled run', async () => {
+  const taskLock = new TaskLock();
+  const queryCalls = [];
+  let sourceLoopResolve = null;
+  let sourceLoopSignal = null;
+
+  const pool = {
+    async query(sql, params = []) {
+      queryCalls.push({ sql, params });
+
+      if (sql.includes('from scheduled_jobs') && sql.includes('id = $1')) {
+        return { rows: [{ id: 10, job_key: '测试岗位', task_type: 'source', payload: { targetCount: 3 }, hr_account_id: null }] };
+      }
+
+      if (sql.includes('update sourcing_runs')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes('insert into scheduled_job_runs')) {
+        return { rows: [{ id: 20 }] };
+      }
+
+      if (sql.includes('update scheduled_job_runs')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes('update scheduled_jobs')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes('from sourcing_runs') && sql.includes('hr_account_id')) {
+        return { rows: [{ hr_account_id: null }] };
+      }
+
+      return { rows: [] };
+    }
+  };
+
+  const agentService = {
+    async createRun(payload) {
+      return { id: 100, runKey: payload.runKey, status: 'pending' };
+    },
+    async recordRunEvent() {
+      return { ok: true };
+    }
+  };
+
+  const sourceLoopService = {
+    async run({ signal }) {
+      sourceLoopSignal = signal;
+      return new Promise((resolve) => {
+        sourceLoopResolve = resolve;
+      });
+    }
+  };
+
+  const scheduler = new SchedulerService({ pool, agentService, sourceLoopService, taskLock });
+  const result = await scheduler.triggerSchedule(10);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.runId, 100);
+
+  // Wait for the async loop to start
+  await new Promise((r) => setTimeout(r, 50));
+  assert.ok(sourceLoopSignal, 'signal should be passed to source loop');
+  assert.equal(sourceLoopSignal.aborted, false);
+
+  // Stop the run
+  const stopResult = await scheduler.stopRun(100);
+  assert.equal(stopResult.ok, true);
+  assert.equal(sourceLoopSignal.aborted, true);
+
+  // Simulate the source loop responding to the abort
+  sourceLoopResolve({ ok: false, stats: { greeted: 1 }, reason: 'manually_stopped' });
+  await new Promise((r) => setTimeout(r, 50));
+
+  // Verify scheduled_job_runs was marked as stopped
+  const stoppedQuery = queryCalls.find((c) => c.sql.includes('update scheduled_job_runs') && c.sql.includes("'stopped'"));
+  assert.ok(stoppedQuery, 'should update scheduled_job_runs status to stopped');
+
+  // Verify scheduled_jobs.last_run_at was updated
+  const lastRunAtQuery = queryCalls.find((c) => c.sql.includes('update scheduled_jobs') && c.sql.includes('last_run_at'));
+  assert.ok(lastRunAtQuery, 'should update scheduled_jobs last_run_at');
+
+  // Verify lock was released
+  assert.equal(taskLock.isBusy(), false);
+});
+
+test('SchedulerService stopRun returns error for unknown runId', async () => {
+  const scheduler = new SchedulerService({ pool: { async query() { return { rows: [] }; } }, agentService: {} });
+  const result = await scheduler.stopRun(999);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'no_active_task');
+});
+
 test('SchedulerService releases task lock after execution fails', async () => {
   const taskLock = new TaskLock();
   let failResolve = null;

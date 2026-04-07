@@ -670,6 +670,37 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
     }
   });
 
+  app.post('/api/runs/:runId/stop', async (req, res, next) => {
+    try {
+      const runId = Number(req.params.runId);
+      const run = await pool?.query(
+        `select sr.hr_account_id, ha.department_id
+         from sourcing_runs sr
+         left join hr_accounts ha on ha.id = sr.hr_account_id
+         where sr.id = $1 limit 1`,
+        [runId]
+      );
+      if (!run?.rows[0]) {
+        return res.status(404).json({ error: 'run_not_found', message: '未找到对应执行任务' });
+      }
+      const { hr_account_id: runHrAccountId, department_id: runDeptId } = run.rows[0];
+      if (isSystemAdmin(req.user)) {
+        // system_admin can stop any run
+      } else if (isAdminRole(req.user)) {
+        // dept_admin / enterprise_admin can only stop runs in their department
+        if (String(req.user.department_id) !== String(runDeptId)) {
+          return res.status(403).json({ error: 'forbidden', message: '无权停止该任务' });
+        }
+      } else if (req.user?.hr_account_id !== runHrAccountId) {
+        return res.status(403).json({ error: 'forbidden', message: '无权停止该任务' });
+      }
+      const result = await services.scheduler.stopRun(runId);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post('/api/jobs/:jobKey/tasks/:taskType/trigger', async (req, res, next) => {
     try {
       const result = await services.scheduler.triggerJobTask(

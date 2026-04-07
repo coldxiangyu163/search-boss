@@ -419,6 +419,39 @@ class AgentService {
     };
   }
 
+  async stopRun({ runId, eventId, attemptId, sequence, occurredAt, message, payload = {} }) {
+    const resolvedOccurredAt = occurredAt || new Date().toISOString();
+    const resolvedEventId = eventId || `run-stop:${runId}:${resolvedOccurredAt}`;
+
+    await this.pool.query(
+      `
+        update sourcing_runs
+        set status = 'stopped',
+            completed_at = $2,
+            updated_at = now()
+        where id = $1
+      `,
+      [runId, resolvedOccurredAt]
+    );
+
+    await this.recordRunEvent({
+      runId,
+      attemptId,
+      eventId: resolvedEventId,
+      sequence,
+      occurredAt: resolvedOccurredAt,
+      eventType: 'run_stopped',
+      stage: 'complete',
+      message: message || 'run stopped',
+      payload
+    });
+
+    return {
+      ok: true,
+      status: 'stopped'
+    };
+  }
+
   async recordAction({
     runId,
     candidateId,

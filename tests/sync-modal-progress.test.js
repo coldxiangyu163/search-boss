@@ -70,6 +70,45 @@ test('resolveSyncTerminalStatus only marks explicit terminal failures as failed'
   );
 });
 
+test('resolveSyncTerminalStatus recognizes stopped events', () => {
+  assert.deepEqual(
+    resolveSyncTerminalStatus({
+      eventType: 'run_stopped',
+      message: '已手动停止'
+    }),
+    {
+      status: 'stopped',
+      error: ''
+    }
+  );
+});
+
+test('resolveSyncTerminalStatusFromRun recognizes stopped run state', () => {
+  assert.deepEqual(
+    resolveSyncTerminalStatusFromRun({
+      status: 'stopped'
+    }),
+    {
+      status: 'stopped',
+      error: ''
+    }
+  );
+});
+
+test('buildSyncStages renders stopped label when status is stopped', () => {
+  const stages = buildSyncStages({
+    runId: 1,
+    status: 'stopped',
+    error: '',
+    progress: createSyncModalProgress()
+  });
+
+  const lastStage = stages[stages.length - 1];
+  assert.equal(lastStage.label, '已手动停止');
+  assert.equal(lastStage.done, true);
+  assert.match(lastStage.desc, /手动停止/);
+});
+
 test('resolveSyncTerminalStatusFromRun treats persisted run state as terminal fallback', () => {
   assert.deepEqual(
     resolveSyncTerminalStatusFromRun({

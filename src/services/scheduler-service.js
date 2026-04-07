@@ -7,6 +7,7 @@ class SchedulerService {
     this.taskLock = taskLock;
     this.browserInstanceManager = browserInstanceManager;
     this._tickTimer = null;
+    this._abortControllers = new Map();
   }
 
   async listSchedules({ hrAccountId } = {}) {
@@ -179,6 +180,15 @@ class SchedulerService {
     return true;
   }
 
+  async stopRun(runId) {
+    const ac = this._abortControllers.get(runId);
+    if (!ac) {
+      return { ok: false, reason: 'no_active_task', message: '未找到正在执行的任务' };
+    }
+    ac.abort();
+    return { ok: true, runId, message: '已发送停止信号，任务将在当前步骤完成后停止' };
+  }
+
   async triggerSchedule(id) {
     const schedule = await this.#findScheduleById(id);
     return this.#startJobTask({
@@ -306,13 +316,17 @@ class SchedulerService {
       )).rows[0].id
       : null;
 
+    const abortController = new AbortController();
+    this._abortControllers.set(Number(run.id), abortController);
+
     this.#executeJobTask({
       runId: run.id,
       jobKey,
       taskType,
       scheduledJobId,
       scheduledRunId,
-      schedule
+      schedule,
+      signal: abortController.signal
     }).catch((err) => {
       console.error(`[scheduler] executeJobTask failed for run ${run.id} (${jobKey}/${taskType}):`, err);
     });
@@ -328,7 +342,7 @@ class SchedulerService {
     };
   }
 
-  async #executeJobTask({ runId, jobKey, taskType, scheduledJobId = null, scheduledRunId = null, schedule = null }) {
+  async #executeJobTask({ runId, jobKey, taskType, scheduledJobId = null, scheduledRunId = null, schedule = null, signal = null }) {
     const schedulePayload = schedule?.payload || {};
     let resolvedInstance = null;
     try {
@@ -354,8 +368,12 @@ class SchedulerService {
         if (schedulePayload.targetCount) overrides.targetCount = schedulePayload.targetCount;
         if (schedulePayload.recommendTab) overrides.recommendTab = schedulePayload.recommendTab;
         if (runnerOverride) overrides.bossCliRunner = runnerOverride;
-        await this.sourceLoopService.run({ runId, jobKey, ...overrides });
-        await this.#finalizeScheduledRun({ schedule, scheduledRunId, scheduledJobId });
+        const loopResult = await this.sourceLoopService.run({ runId, jobKey, signal, ...overrides });
+        if (loopResult?.reason === 'manually_stopped') {
+          await this.#finalizeStoppedScheduledRun({ schedule, scheduledRunId });
+        } else {
+          await this.#finalizeScheduledRun({ schedule, scheduledRunId, scheduledJobId });
+        }
         return;
       }
 
@@ -363,8 +381,12 @@ class SchedulerService {
         const overrides = {};
         if (schedulePayload.maxThreads) overrides.maxThreads = schedulePayload.maxThreads;
         if (runnerOverride) overrides.bossCliRunner = runnerOverride;
-        await this.followupLoopService.run({ runId, jobKey, mode: taskType, ...overrides });
-        await this.#finalizeScheduledRun({ schedule, scheduledRunId, scheduledJobId });
+        const loopResult = await this.followupLoopService.run({ runId, jobKey, mode: taskType, signal, ...overrides });
+        if (loopResult?.reason === 'manually_stopped') {
+          await this.#finalizeStoppedScheduledRun({ schedule, scheduledRunId });
+        } else {
+          await this.#finalizeScheduledRun({ schedule, scheduledRunId, scheduledJobId });
+        }
         return;
       }
 
@@ -481,11 +503,40 @@ class SchedulerService {
         }
       });
     } finally {
+      this._abortControllers.delete(Number(runId));
       if (resolvedInstance && this.browserInstanceManager) {
         await this.browserInstanceManager.releaseInstance(resolvedInstance).catch(() => {});
       }
       this.taskLock?.release(runId);
     }
+  }
+
+  async #finalizeStoppedScheduledRun({ schedule, scheduledRunId }) {
+    if (!schedule) {
+      return;
+    }
+
+    if (scheduledRunId) {
+      await this.pool.query(
+        `
+          update scheduled_job_runs
+          set status = 'stopped',
+              finished_at = now()
+          where id = $1
+        `,
+        [scheduledRunId]
+      );
+    }
+
+    await this.pool.query(
+      `
+        update scheduled_jobs
+        set last_run_at = now(),
+            updated_at = now()
+        where id = $1
+      `,
+      [schedule.id]
+    );
   }
 
   async #finalizeScheduledRun({ schedule, scheduledRunId }) {

@@ -594,3 +594,65 @@ test('parseCardText: returns empty strings for null/undefined', () => {
   assert.deepStrictEqual(parseCardText(null), { name: '', city: '', education: '', experience: '', school: '' });
   assert.deepStrictEqual(parseCardText(undefined), { name: '', city: '', education: '', experience: '', school: '' });
 });
+
+test('SourceLoopService stops early when signal is aborted', async () => {
+  const candidates = [
+    { geekId: 'g1', text: '3-5K 候选人1 3日内活跃 28岁 4年 本科 期望 重庆 面点师', index: 0, cardX: 100, cardY: 100 },
+    { geekId: 'g2', text: '3-5K 候选人2 3日内活跃 30岁 5年 本科 期望 重庆 面点师', index: 1, cardX: 100, cardY: 200 },
+    { geekId: 'g3', text: '3-5K 候选人3 3日内活跃 32岁 6年 本科 期望 重庆 面点师', index: 2, cardX: 100, cardY: 300 }
+  ];
+  const runner = createMockBossCliRunner({
+    listResult: makeCandidateList(candidates),
+    greetResults: [
+      { ok: true, greeted: true, alreadyChatting: false },
+      { ok: true, greeted: true, alreadyChatting: false },
+      { ok: true, greeted: true, alreadyChatting: false }
+    ]
+  });
+  const agentService = createMockAgentService();
+  const llmEvaluator = createMockLlmEvaluator([
+    { action: 'greet', tier: 'A', reason: 'match', facts: {} },
+    { action: 'greet', tier: 'A', reason: 'match', facts: {} },
+    { action: 'greet', tier: 'A', reason: 'match', facts: {} }
+  ]);
+
+  const ac = new AbortController();
+  // Abort after first candidate is processed
+  const origRecordRunEvent = agentService.recordRunEvent.bind(agentService);
+  let checkpointCount = 0;
+  agentService.recordRunEvent = async (payload) => {
+    const result = await origRecordRunEvent(payload);
+    if (payload.eventType === 'source_checkpoint') {
+      checkpointCount += 1;
+      if (checkpointCount >= 1) ac.abort();
+    }
+    return result;
+  };
+
+  // Track stopRun calls
+  const stopCalls = [];
+  agentService.stopRun = async (payload) => {
+    stopCalls.push(payload);
+    return { ok: true, status: 'stopped' };
+  };
+
+  const service = new SourceLoopService({
+    bossCliRunner: runner,
+    agentService,
+    llmEvaluator,
+    targetCount: 3,
+    candidateDelayMin: 0,
+    candidateDelayMax: 0
+  });
+
+  const result = await service.run({ runId: 200, jobKey: 'test-job', signal: ac.signal });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'manually_stopped');
+  assert.equal(stopCalls.length, 1);
+  assert.equal(stopCalls[0].message, 'manually_stopped');
+  assert.equal(agentService.failures.length, 0, 'should not call failRun');
+
+  const stoppedEvent = agentService.events.find((e) => e.eventType === 'source_loop_stopped');
+  assert.ok(stoppedEvent, 'should record source_loop_stopped event');
+});

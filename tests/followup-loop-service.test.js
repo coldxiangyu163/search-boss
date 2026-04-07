@@ -927,3 +927,63 @@ test('extractJobNameShort extracts name before parentheses', () => {
   assert.equal(extractJobNameShort('销售专员'), '销售专员');
   assert.equal(extractJobNameShort(''), '');
 });
+
+test('FollowupLoopService stops early when signal is aborted', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    visibleThreads: [
+      { name: '张三', dataId: '123-0', index: 0, hasUnread: true },
+      { name: '李四', dataId: '123-1', index: 1, hasUnread: true },
+      { name: '王五', dataId: '123-2', index: 2, hasUnread: true }
+    ],
+    messageResults: {
+      '123-0': { ok: true, messages: [{ from: '张三', type: 'text', text: '你好', time: '10:00' }] },
+      '123-1': { ok: true, messages: [{ from: '李四', type: 'text', text: '你好', time: '10:01' }] },
+      '123-2': { ok: true, messages: [{ from: '王五', type: 'text', text: '你好', time: '10:02' }] }
+    }
+  });
+
+  const agentService = createMockAgentService();
+  const llmEvaluator = createMockLlmEvaluator([
+    { action: 'reply', replyText: '您好', reason: 'greeting' },
+    { action: 'reply', replyText: '您好', reason: 'greeting' },
+    { action: 'reply', replyText: '您好', reason: 'greeting' }
+  ]);
+
+  const ac = new AbortController();
+  const origRecordRunEvent = agentService.recordRunEvent.bind(agentService);
+  let checkpointCount = 0;
+  agentService.recordRunEvent = async (payload) => {
+    const result = await origRecordRunEvent(payload);
+    if (payload.eventType === 'followup_checkpoint') {
+      checkpointCount += 1;
+      if (checkpointCount >= 1) ac.abort();
+    }
+    return result;
+  };
+
+  const stopCalls = [];
+  agentService.stopRun = async (payload) => {
+    stopCalls.push(payload);
+    return { ok: true, status: 'stopped' };
+  };
+
+  const service = new FollowupLoopService({
+    bossCliRunner,
+    agentService,
+    llmEvaluator,
+    maxThreads: 10,
+    threadDelayMin: 0,
+    threadDelayMax: 0
+  });
+
+  const result = await service.run({ runId: 300, jobKey: 'test-job', signal: ac.signal });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'manually_stopped');
+  assert.equal(stopCalls.length, 1);
+  assert.equal(stopCalls[0].message, 'manually_stopped');
+  assert.equal(agentService.failures.length, 0, 'should not call failRun');
+
+  const stoppedEvent = agentService.events.find((e) => e.eventType === 'followup_loop_stopped');
+  assert.ok(stoppedEvent, 'should record followup_loop_stopped event');
+});

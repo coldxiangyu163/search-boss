@@ -1089,6 +1089,33 @@ function closeSyncModal() {
   render();
 }
 
+function isStoppableTask() {
+  const stoppable = ['source', 'followup', 'chat', 'download'];
+  return stoppable.includes(state.syncModal.taskType);
+}
+
+async function stopCurrentRun() {
+  if (!state.syncModal.runId) return;
+  if (!confirm('确定要停止当前任务？')) return;
+
+  try {
+    const result = await fetchJson(`/api/runs/${state.syncModal.runId}/stop`, { method: 'POST' });
+    if (!result.ok) {
+      alert(result.message || '停止失败');
+      return;
+    }
+    appendSyncEvent({
+      eventType: 'run_manually_stopped',
+      stage: 'complete',
+      message: '任务已手动停止',
+      occurredAt: new Date().toISOString()
+    });
+    render();
+  } catch (error) {
+    alert('停止失败: ' + error.message);
+  }
+}
+
 function toggleSyncLogPanel() {
   state.syncModal.isExpanded = !state.syncModal.isExpanded;
   render();
@@ -1193,6 +1220,13 @@ function applySyncRunSnapshotStatus(run) {
 function applySyncTerminalStatus(terminalStatus) {
   if (terminalStatus?.status === 'completed') {
     state.syncModal.status = 'completed';
+    stopSyncPolling();
+    loadData().catch(() => {});
+    return;
+  }
+
+  if (terminalStatus?.status === 'stopped') {
+    state.syncModal.status = 'stopped';
     stopSyncPolling();
     loadData().catch(() => {});
     return;
@@ -1514,6 +1548,7 @@ function renderRunStatusBadge(status, mode) {
     running: ['执行中', 'badge-warning'],
     completed: ['已完成', 'badge-success'],
     failed: ['失败', 'badge-danger'],
+    stopped: ['已停止', 'badge-warning'],
     pending: ['等待中', '']
   };
   const [label, cls] = statusMap[status] || [status, ''];
@@ -3927,6 +3962,7 @@ function renderSyncModal() {
     running: '执行中',
     completed: '执行完成',
     failed: '执行失败',
+    stopped: '已手动停止',
     idle: '待开始'
   };
 
@@ -3939,7 +3975,10 @@ function renderSyncModal() {
             <h3 class="card-title">小聘AGENT 执行过程</h3>
             <p class="card-subtitle">任务 ${state.syncModal.runId || '-'} · ${statusMap[state.syncModal.status] || '处理中'}</p>
           </div>
-          <button class="button-secondary" onclick="closeSyncModal()">关闭</button>
+          <div style="display:flex;gap:8px;align-items:center">
+            ${isStoppableTask() && (state.syncModal.status === 'running' || state.syncModal.status === 'starting') ? '<button class="button-secondary button-danger" onclick="stopCurrentRun()">停止任务</button>' : ''}
+            <button class="button-secondary" onclick="closeSyncModal()">关闭</button>
+          </div>
         </div>
         <div class="sync-summary-grid">
           <div class="status-box">
@@ -3998,6 +4037,7 @@ function getSyncStatusLabel() {
     running: '执行中',
     completed: '执行完成',
     failed: '执行失败',
+    stopped: '已手动停止',
     idle: '待开始'
   };
   return statusMap[state.syncModal.status] || '处理中';
@@ -4059,7 +4099,10 @@ function createSyncLiveOverlay() {
               <h3 class="card-title">小聘AGENT 执行过程</h3>
               <p class="card-subtitle" id="sync-live-subtitle">任务 ${state.syncModal.runId || '-'} · ${getSyncStatusLabel()}</p>
             </div>
-            <button class="button-secondary" onclick="closeSyncModal()">关闭</button>
+            <div style="display:flex;gap:8px;align-items:center">
+              ${isStoppableTask() && (state.syncModal.status === 'running' || state.syncModal.status === 'starting') ? '<button class="button-secondary button-danger" id="sync-live-stop-btn" onclick="stopCurrentRun()">停止任务</button>' : ''}
+              <button class="button-secondary" onclick="closeSyncModal()">关闭</button>
+            </div>
           </div>
         </div>
         <div class="sync-live-logs-body" id="sync-live-logs-body">
@@ -4081,6 +4124,12 @@ function updateSyncLiveOverlayContent() {
   const subtitle = document.getElementById('sync-live-subtitle');
   if (subtitle) {
     subtitle.textContent = '任务 ' + (state.syncModal.runId || '-') + ' · ' + getSyncStatusLabel();
+  }
+
+  const stopBtn = document.getElementById('sync-live-stop-btn');
+  const isRunning = state.syncModal.status === 'running' || state.syncModal.status === 'starting';
+  if (stopBtn && !isRunning) {
+    stopBtn.remove();
   }
 
   const logsBody = document.getElementById('sync-live-logs-body');

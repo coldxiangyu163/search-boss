@@ -47,14 +47,14 @@ class SourceLoopService {
     this.candidateDelayMax = candidateDelayMax;
   }
 
-  async run({ runId, jobKey, targetCount: overrideTargetCount, recommendTab, bossCliRunner: runnerOverride } = {}) {
+  async run({ runId, jobKey, targetCount: overrideTargetCount, recommendTab, bossCliRunner: runnerOverride, signal } = {}) {
     const effectiveTargetCount = overrideTargetCount || this.targetCount;
     const effectiveRecommendTab = recommendTab || 'default';
     const runner = runnerOverride || this.bossCliRunner;
-    return this.#runImpl({ runId, jobKey, effectiveTargetCount, effectiveRecommendTab, runner });
+    return this.#runImpl({ runId, jobKey, effectiveTargetCount, effectiveRecommendTab, runner, signal });
   }
 
-  async #runImpl({ runId, jobKey, effectiveTargetCount, effectiveRecommendTab, runner }) {
+  async #runImpl({ runId, jobKey, effectiveTargetCount, effectiveRecommendTab, runner, signal }) {
     const stats = {
       greeted: 0,
       skipped: 0,
@@ -227,6 +227,7 @@ class SourceLoopService {
     }
 
     for (const candidate of candidates) {
+      if (signal?.aborted) break;
       if (stats.greeted >= effectiveTargetCount) break;
       if ((stats.skipped + stats.errors) >= this.maxSkips) break;
 
@@ -255,6 +256,40 @@ class SourceLoopService {
         message: `checkpoint after candidate ${stats.totalEvaluated}`,
         payload: { ...stats }
       });
+    }
+
+    // Handle manual stop
+    if (signal?.aborted) {
+      try {
+        await runner.navigateTo({
+          runId,
+          url: buildRecommendInitialUrl(jobContext.bossEncryptJobId)
+        });
+      } catch (_) {}
+
+      const stoppedSummary = {
+        targetCount: effectiveTargetCount,
+        achievedCount: stats.greeted,
+        ...stats,
+        reason: 'manually_stopped'
+      };
+
+      await this.#recordEvent(runId, {
+        eventId: `source-loop-stopped:${runId}`,
+        eventType: 'source_loop_stopped',
+        stage: 'source_loop',
+        message: '寻源任务已手动停止',
+        payload: stoppedSummary
+      });
+
+      const stopFn = this.agentService.stopRun || this.agentService.failRun;
+      await stopFn.call(this.agentService, {
+        runId,
+        message: 'manually_stopped',
+        payload: stoppedSummary
+      });
+
+      return { ok: false, stats: stoppedSummary, reason: 'manually_stopped' };
     }
 
     // Phase 4: Complete run
