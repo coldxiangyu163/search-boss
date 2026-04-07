@@ -516,7 +516,7 @@ function toggleRecommendFilters() {
   state.jobDetailModal.filtersExpanded = !state.jobDetailModal.filtersExpanded;
   if (state.jobDetailModal.filtersExpanded && !state.jobDetailModal.pendingFilters) {
     const saved = state.jobDetailModal.item?.recommend_filters || {};
-    state.jobDetailModal.pendingFilters = { ...getDefaultRecommendFilters(), ...saved };
+    state.jobDetailModal.pendingFilters = normalizeFiltersForUI(saved);
   }
   renderPreservingModalScroll();
 }
@@ -531,12 +531,15 @@ function getDefaultRecommendFilters() {
     notExchanged: '',
     school: '',
     jobHopFrequency: '',
-    jobIntent: '',
-    degree: '',
+    jobIntent: [],
+    degree: [],
     salary: '',
-    experience: ''
+    experience: []
   };
 }
+
+const MULTI_SELECT_FILTER_KEYS = ['jobIntent', 'degree', 'experience'];
+const LOW_DEGREE_VALUES = ['初中及以下', '中专/中技', '高中', '大专'];
 
 function getRecommendFilterOptions() {
   return {
@@ -613,19 +616,43 @@ function getRecommendFilterOptions() {
   };
 }
 
-function renderRecommendFiltersPanel(item) {
-  const filters = state.jobDetailModal.pendingFilters || item?.recommend_filters || getDefaultRecommendFilters();
-  const opts = getRecommendFilterOptions();
+function isSchoolDisabled(filters) {
+  const degrees = Array.isArray(filters.degree) ? filters.degree : (filters.degree ? [filters.degree] : []);
+  return degrees.some((d) => LOW_DEGREE_VALUES.includes(d));
+}
 
-  function renderFilterRow(label, fieldName, options) {
+function renderRecommendFiltersPanel(item) {
+  const filters = normalizeFiltersForUI(state.jobDetailModal.pendingFilters || item?.recommend_filters || getDefaultRecommendFilters());
+  const opts = getRecommendFilterOptions();
+  const schoolDisabled = isSchoolDisabled(filters);
+
+  function renderSingleSelectRow(label, fieldName, options, disabled) {
     const currentValue = filters[fieldName] || '';
     return `
-      <div class="recommend-filter-row">
+      <div class="recommend-filter-row${disabled ? ' is-disabled' : ''}">
         <span class="recommend-filter-label">${label}</span>
         <div class="recommend-filter-options">
           ${options.map((opt) => `
             <button
               class="recommend-filter-chip ${currentValue === opt.value ? 'is-active' : ''}"
+              onclick="updateRecommendFilter('${fieldName}', '${opt.value}')"
+              ${disabled ? 'disabled' : ''}
+            >${opt.label}</button>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderMultiSelectRow(label, fieldName, options) {
+    const currentValues = Array.isArray(filters[fieldName]) ? filters[fieldName] : [];
+    return `
+      <div class="recommend-filter-row">
+        <span class="recommend-filter-label">${label}<span class="recommend-filter-multi-tag">多选</span></span>
+        <div class="recommend-filter-options">
+          ${options.filter((opt) => opt.value !== '').map((opt) => `
+            <button
+              class="recommend-filter-chip ${currentValues.includes(opt.value) ? 'is-active' : ''}"
               onclick="updateRecommendFilter('${fieldName}', '${opt.value}')"
             >${opt.label}</button>
           `).join('')}
@@ -651,16 +678,16 @@ function renderRecommendFiltersPanel(item) {
           </div>
         </div>
       </div>
-      ${renderFilterRow('活跃度', 'activity', opts.activity)}
-      ${renderFilterRow('性别', 'gender', opts.gender)}
-      ${renderFilterRow('近期没有看过', 'notViewed', opts.notViewed)}
-      ${renderFilterRow('是否与同事交换简历', 'notExchanged', opts.notExchanged)}
-      ${renderFilterRow('院校', 'school', opts.school)}
-      ${renderFilterRow('跳槽频率', 'jobHopFrequency', opts.jobHopFrequency)}
-      ${renderFilterRow('求职意向', 'jobIntent', opts.jobIntent)}
-      ${renderFilterRow('学历要求', 'degree', opts.degree)}
-      ${renderFilterRow('薪资待遇', 'salary', opts.salary)}
-      ${renderFilterRow('经验要求', 'experience', opts.experience)}
+      ${renderSingleSelectRow('活跃度', 'activity', opts.activity)}
+      ${renderSingleSelectRow('性别', 'gender', opts.gender)}
+      ${renderSingleSelectRow('近期没有看过', 'notViewed', opts.notViewed)}
+      ${renderSingleSelectRow('是否与同事交换简历', 'notExchanged', opts.notExchanged)}
+      ${renderSingleSelectRow('院校', 'school', opts.school, schoolDisabled)}
+      ${renderSingleSelectRow('跳槽频率', 'jobHopFrequency', opts.jobHopFrequency)}
+      ${renderMultiSelectRow('求职意向', 'jobIntent', opts.jobIntent)}
+      ${renderMultiSelectRow('学历要求', 'degree', opts.degree)}
+      ${renderSingleSelectRow('薪资待遇', 'salary', opts.salary)}
+      ${renderMultiSelectRow('经验要求', 'experience', opts.experience)}
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border,#e0e0e0)">
         <button class="button-secondary button-muted" onclick="resetRecommendFilters()">清除筛选</button>
       </div>
@@ -685,13 +712,39 @@ function renderPreservingModalScroll() {
   restoreJobDetailModalScrollTop(scrollTop);
 }
 
+function normalizeFiltersForUI(raw) {
+  const filters = { ...getDefaultRecommendFilters(), ...raw };
+  for (const key of MULTI_SELECT_FILTER_KEYS) {
+    if (!Array.isArray(filters[key])) {
+      filters[key] = filters[key] ? [filters[key]] : [];
+    }
+  }
+  return filters;
+}
+
 function updateRecommendFilter(field, value) {
   if (!state.jobDetailModal.pendingFilters) {
     const saved = state.jobDetailModal.item?.recommend_filters || {};
-    state.jobDetailModal.pendingFilters = { ...getDefaultRecommendFilters(), ...saved };
+    state.jobDetailModal.pendingFilters = normalizeFiltersForUI(saved);
   }
   if (field === 'ageMin' || field === 'ageMax') {
     state.jobDetailModal.pendingFilters[field] = Math.max(16, Math.min(99, parseInt(value) || 16));
+  } else if (MULTI_SELECT_FILTER_KEYS.includes(field)) {
+    if (!Array.isArray(state.jobDetailModal.pendingFilters[field])) {
+      state.jobDetailModal.pendingFilters[field] = state.jobDetailModal.pendingFilters[field]
+        ? [state.jobDetailModal.pendingFilters[field]]
+        : [];
+    }
+    const arr = state.jobDetailModal.pendingFilters[field];
+    const idx = arr.indexOf(value);
+    if (idx >= 0) {
+      arr.splice(idx, 1);
+    } else {
+      arr.push(value);
+    }
+    if (field === 'degree' && isSchoolDisabled(state.jobDetailModal.pendingFilters)) {
+      state.jobDetailModal.pendingFilters.school = '';
+    }
   } else {
     state.jobDetailModal.pendingFilters[field] = value;
   }
@@ -725,7 +778,7 @@ async function saveJobRecommendFilters() {
     );
 
     state.jobDetailModal.item = result.item;
-    state.jobDetailModal.pendingFilters = { ...getDefaultRecommendFilters(), ...(result.item.recommend_filters || {}) };
+    state.jobDetailModal.pendingFilters = normalizeFiltersForUI(result.item.recommend_filters || {});
     state.jobs = state.jobs.map((job) => (
       job.job_key === result.item.job_key
         ? { ...job, recommend_filters: result.item.recommend_filters }

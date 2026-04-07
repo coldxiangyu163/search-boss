@@ -3009,6 +3009,7 @@ async function applyRecommendFilters({
   const hasNonDefaultFilter = Object.entries(filters).some(([key, val]) => {
     if (key === 'ageMin') return val && Number(val) > 16;
     if (key === 'ageMax') return val && Number(val) < 99;
+    if (Array.isArray(val)) return val.length > 0;
     return val && val !== '';
   });
 
@@ -3076,19 +3077,26 @@ async function applyRecommendFilters({
 
   for (const [filterKey, filterLabel] of Object.entries(filterMap)) {
     const filterValue = filters[filterKey];
-    if (!filterValue || filterValue === '' || filterValue === '不限') continue;
+    const values = Array.isArray(filterValue)
+      ? filterValue.filter((v) => v && v !== '' && v !== '不限')
+      : (filterValue && filterValue !== '' && filterValue !== '不限') ? [filterValue] : [];
+    if (values.length === 0) continue;
 
-    const clickResult = await evaluateJson({
-      cdpClient,
-      targetId,
-      urlPrefix,
-      expression: buildClickFilterItemOptionExpr(filterLabel, filterValue)
-    });
+    for (const singleValue of values) {
+      // scrollIntoView is called inside the expression; wait for scroll to settle
+      const clickResult = await evaluateJson({
+        cdpClient,
+        targetId,
+        urlPrefix,
+        expression: buildClickFilterItemOptionExpr(filterLabel, singleValue)
+      });
+      await randomDelay(300, 500);
 
-    if (clickResult?.ok && clickResult?.found) {
-      await cdpClient.dispatchMouseClick({ targetId, urlPrefix, x: clickResult.x, y: clickResult.y });
-      applied.push({ key: filterKey, label: filterLabel, value: filterValue });
-      await randomDelay(1200, 2500);
+      if (clickResult?.ok && clickResult?.found) {
+        await cdpClient.dispatchMouseClick({ targetId, urlPrefix, x: clickResult.x, y: clickResult.y });
+        applied.push({ key: filterKey, label: filterLabel, value: singleValue });
+        await randomDelay(1200, 2500);
+      }
     }
   }
 
@@ -3107,12 +3115,16 @@ async function applyRecommendFilters({
         const btns = Array.from(panel.querySelectorAll('.btn'));
         const confirm = btns.find(b => (b.textContent || '').trim() === '确定' && b.offsetWidth > 0);
         if (!confirm) return JSON.stringify({ ok: false, found: false, reason: 'confirm_btn_not_found' });
+        confirm.scrollIntoView({ behavior: 'instant', block: 'center' });
         const frameRect = recFrame.getBoundingClientRect();
         const btnRect = confirm.getBoundingClientRect();
         return JSON.stringify({ ok: true, found: true, x: frameRect.left + btnRect.left + btnRect.width / 2, y: frameRect.top + btnRect.top + btnRect.height / 2 });
       } catch (err) { return JSON.stringify({ ok: false, reason: err.message }); }
     })()`
   });
+
+  // Wait for scrollIntoView to settle before clicking confirm
+  await randomDelay(300, 500);
 
   if (confirmResult?.ok && confirmResult?.found) {
     await cdpClient.dispatchMouseClick({ targetId, urlPrefix, x: confirmResult.x, y: confirmResult.y });
@@ -3138,6 +3150,7 @@ function buildClickFilterItemOptionExpr(filterLabel, optionText) {
         return (nameEl.textContent || '').trim().includes(${safeLabel});
       });
       if (!row) return JSON.stringify({ ok: false, found: false, reason: 'row_not_found:' + ${safeLabel} });
+      row.scrollIntoView({ behavior: 'instant', block: 'center' });
       const options = Array.from(row.querySelectorAll('.option'));
       const target = options.find(o => (o.textContent || '').replace(/\\s+/g, '').trim() === ${safeOption} && o.offsetWidth > 0);
       if (!target) return JSON.stringify({ ok: false, found: false, reason: 'option_not_found:' + ${safeOption} });
