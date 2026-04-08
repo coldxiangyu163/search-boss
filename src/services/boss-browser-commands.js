@@ -1742,7 +1742,8 @@ async function clickRequestResume({
     throw new Error('boss_chat_request_resume_button_disabled');
   }
 
-  // Phase 3: Wait for exchange-tooltip confirm dialog and real-click "确定" (up to 5 seconds)
+  // Phase 3: Wait for visible exchange-tooltip confirm dialog and real-click "确定" (up to 5 seconds)
+  // Multiple .exchange-tooltip elements exist (one per action button); only the active one is visible
   let confirmed = false;
   for (let attempt = 0; attempt < 10; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -1750,9 +1751,9 @@ async function clickRequestResume({
     const dialogState = await evaluateJson({
       cdpClient, targetId, urlPrefix,
       expression: `(() => {
-        // BOSS uses .exchange-tooltip for resume/phone/wechat confirm popups
-        const tooltip = document.querySelector('.exchange-tooltip');
-        if (!tooltip || tooltip.offsetWidth === 0) return JSON.stringify({ found: false });
+        const tooltips = document.querySelectorAll('.exchange-tooltip');
+        const tooltip = Array.from(tooltips).find(t => t.offsetWidth > 0 && t.offsetHeight > 0);
+        if (!tooltip) return JSON.stringify({ found: false });
         const confirmBtn = tooltip.querySelector('.boss-btn-primary');
         if (!confirmBtn || confirmBtn.offsetWidth === 0) return JSON.stringify({ found: false });
         const rect = confirmBtn.getBoundingClientRect();
@@ -1772,6 +1773,84 @@ async function clickRequestResume({
 
   await randomDelay(1_500, 2_500);
   return { ok: true, requested: confirmed, confirmed, waitedMs };
+}
+
+async function clickExchangeAction({
+  cdpClient,
+  targetId,
+  urlPrefix,
+  actionText = '求简历'
+} = {}) {
+  const errorPrefix = `boss_chat_exchange_${actionText}`;
+
+  // Phase 1: Wait for button to become enabled (up to 15 seconds)
+  let waitedMs = 0;
+  let buttonReady = false;
+  for (let i = 0; i < 30; i++) {
+    const escapedText = actionText.replace(/'/g, "\\'");
+    const state = await evaluateJson({
+      cdpClient, targetId, urlPrefix,
+      expression: `(() => {
+        const btn = Array.from(document.querySelectorAll('button, a, span, div')).find(n => {
+          const t = (n.textContent || '').replace(/\\s+/g, '').trim();
+          return t === '${escapedText}' && n.offsetWidth > 0;
+        });
+        if (!btn) return JSON.stringify({ found: false });
+        const disabled = btn.disabled || btn.getAttribute('aria-disabled') === 'true' || btn.classList.contains('disabled');
+        return JSON.stringify({ found: true, disabled });
+      })()`
+    });
+
+    if (state?.found && !state?.disabled) {
+      buttonReady = true;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    waitedMs += 500;
+  }
+
+  if (!buttonReady) {
+    throw new Error(`${errorPrefix}_button_not_ready`);
+  }
+
+  // Phase 2: Real mouse click on the button
+  try {
+    await realClickByText({ cdpClient, targetId, urlPrefix, text: actionText });
+  } catch (error) {
+    throw new Error(`${errorPrefix}_button_disabled`);
+  }
+
+  // Phase 3: Wait for visible exchange-tooltip confirm dialog and real-click "确定" (up to 5 seconds)
+  // Multiple .exchange-tooltip elements exist (one per action button); only the active one is visible
+  let confirmed = false;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    const dialogState = await evaluateJson({
+      cdpClient, targetId, urlPrefix,
+      expression: `(() => {
+        const tooltips = document.querySelectorAll('.exchange-tooltip');
+        const tooltip = Array.from(tooltips).find(t => t.offsetWidth > 0 && t.offsetHeight > 0);
+        if (!tooltip) return JSON.stringify({ found: false });
+        const confirmBtn = tooltip.querySelector('.boss-btn-primary');
+        if (!confirmBtn || confirmBtn.offsetWidth === 0) return JSON.stringify({ found: false });
+        const rect = confirmBtn.getBoundingClientRect();
+        return JSON.stringify({ found: true, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+      })()`
+    });
+
+    if (dialogState?.found) {
+      await cdpClient.dispatchMouseClick({
+        targetId, urlPrefix,
+        x: dialogState.x, y: dialogState.y
+      });
+      confirmed = true;
+      break;
+    }
+  }
+
+  await randomDelay(1_500, 2_500);
+  return { ok: true, actionText, requested: confirmed, confirmed, waitedMs };
 }
 
 async function inspectResumeRequestState({
@@ -3207,6 +3286,7 @@ module.exports = {
   realClickByText,
   sendChatMessage,
   clickRequestResume,
+  clickExchangeAction,
   inspectResumeRequestState,
   readOpenThreadMessages,
   selectRecommendJob,

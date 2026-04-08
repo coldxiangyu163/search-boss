@@ -313,6 +313,16 @@ class BossCliRunner {
     ]);
   }
 
+  async clickExchangeAction({ runId, actionText = '求简历' }) {
+    return this.#run([
+      'chat-exchange-action',
+      '--run-id',
+      String(runId),
+      '--action-text',
+      String(actionText)
+    ]);
+  }
+
   async inspectResumeRequestState({ runId }) {
     return this.#run([
       'chat-request-resume-state',

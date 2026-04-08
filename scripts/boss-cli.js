@@ -676,6 +676,21 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
     };
   }
 
+  if (options.command === 'chat-exchange-action') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.clickExchangeAction({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      actionText: options.actionText || '求简历'
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
   if (options.command === 'chat-request-resume-state') {
     const session = await sessionStore.loadSession(options.runId);
     const result = await browserCommands.inspectResumeRequestState({

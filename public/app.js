@@ -3401,9 +3401,12 @@ function renderAutomation() {
               const interval = payload.intervalMinutes ? `每 ${payload.intervalMinutes} 分钟` : '-';
               const jobName = getJobNameByKey(schedule.job_key);
               const recommendLabel = (payload.recommendTab || 'default') === 'default' ? '默认推荐' : '最新推荐';
+              const interactionLabel = schedule.task_type === 'followup' && Array.isArray(payload.interactionTypes) && payload.interactionTypes.length > 0
+                ? ` · ${formatInteractionTypes(payload.interactionTypes)}`
+                : '';
               const paramDisplay = schedule.task_type === 'source'
                 ? `寻源 ${payload.targetCount || '-'} 人 · ${recommendLabel}`
-                : `回复 ${payload.maxThreads || '-'} 线程`;
+                : `回复 ${payload.maxThreads || '-'} 线程${interactionLabel}`;
               return `
                 <tr>
                   <td>${escapeHtml(jobName)}<div class="muted">${escapeHtml(schedule.job_key)}</div></td>
@@ -3631,6 +3634,29 @@ function renderScheduleModal() {
               />
             `}
           </label>
+          ${form.taskType === 'followup' ? `
+          <div class="form-field form-field-full">
+            <span class="form-label">交互方式（可多选）</span>
+            ${isView ? `
+              <div class="schedule-view-value">${formatInteractionTypes(form.interactionTypes)}</div>
+            ` : `
+              <div class="checkbox-group">
+                <label class="checkbox-label">
+                  <input type="checkbox" ${(form.interactionTypes || []).includes('request_resume') ? 'checked' : ''} onchange="toggleInteractionType('request_resume', this.checked)" />
+                  求简历
+                </label>
+                <label class="checkbox-label">
+                  <input type="checkbox" ${(form.interactionTypes || []).includes('exchange_phone') ? 'checked' : ''} onchange="toggleInteractionType('exchange_phone', this.checked)" />
+                  换电话
+                </label>
+                <label class="checkbox-label">
+                  <input type="checkbox" ${(form.interactionTypes || []).includes('exchange_wechat') ? 'checked' : ''} onchange="toggleInteractionType('exchange_wechat', this.checked)" />
+                  换微信
+                </label>
+              </div>
+            `}
+          </div>
+          ` : ''}
           `}
         </div>
         ${!isView ? `
@@ -3686,7 +3712,8 @@ function openScheduleModal(mode, scheduleId) {
         intervalMinutes: 60,
         targetCount: 5,
         maxThreads: 20,
-        recommendTab: 'default'
+        recommendTab: 'default',
+        interactionTypes: ['request_resume']
       }
     };
   } else {
@@ -3709,7 +3736,10 @@ function openScheduleModal(mode, scheduleId) {
         intervalMinutes: payload.intervalMinutes ?? 60,
         targetCount: payload.targetCount ?? 5,
         maxThreads: payload.maxThreads ?? 20,
-        recommendTab: payload.recommendTab || 'default'
+        recommendTab: payload.recommendTab || 'default',
+        interactionTypes: Array.isArray(payload.interactionTypes) && payload.interactionTypes.length > 0
+          ? payload.interactionTypes
+          : ['request_resume']
       }
     };
   }
@@ -3730,7 +3760,8 @@ function closeScheduleModal() {
       intervalMinutes: 60,
       targetCount: 5,
       maxThreads: 20,
-      recommendTab: 'default'
+      recommendTab: 'default',
+      interactionTypes: ['request_resume']
     }
   };
   render();
@@ -3748,6 +3779,24 @@ function updateScheduleModalForm(field, value) {
 function handleTaskTypeChange(value) {
   state.scheduleModal.form.taskType = value;
   render();
+}
+
+function toggleInteractionType(type, checked) {
+  const types = state.scheduleModal.form.interactionTypes || [];
+  if (checked && !types.includes(type)) {
+    types.push(type);
+  } else if (!checked) {
+    const idx = types.indexOf(type);
+    if (idx !== -1) types.splice(idx, 1);
+  }
+  state.scheduleModal.form.interactionTypes = types;
+  render();
+}
+
+function formatInteractionTypes(types) {
+  const labelMap = { request_resume: '求简历', exchange_phone: '换电话', exchange_wechat: '换微信' };
+  if (!Array.isArray(types) || types.length === 0) return '求简历';
+  return types.map((t) => labelMap[t] || t).join('、');
 }
 
 function handleTimeRangeChange(idx, type, timeStr) {
@@ -3821,6 +3870,9 @@ async function submitScheduleModal() {
       payload.recommendTab = form.recommendTab || 'default';
     } else {
       payload.maxThreads = form.maxThreads;
+      if (form.taskType === 'followup' && Array.isArray(form.interactionTypes) && form.interactionTypes.length > 0) {
+        payload.interactionTypes = form.interactionTypes;
+      }
     }
     await fetchJson('/api/schedules', {
       method: 'POST',

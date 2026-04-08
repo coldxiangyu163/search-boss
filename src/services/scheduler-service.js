@@ -380,6 +380,9 @@ class SchedulerService {
       if ((taskType === 'followup' || taskType === 'chat' || taskType === 'download') && this.followupLoopService) {
         const overrides = {};
         if (schedulePayload.maxThreads) overrides.maxThreads = schedulePayload.maxThreads;
+        if (Array.isArray(schedulePayload.interactionTypes) && schedulePayload.interactionTypes.length > 0) {
+          overrides.interactionTypes = schedulePayload.interactionTypes;
+        }
         if (runnerOverride) overrides.bossCliRunner = runnerOverride;
         const loopResult = await this.followupLoopService.run({ runId, jobKey, mode: taskType, signal, ...overrides });
         if (loopResult?.reason === 'manually_stopped') {

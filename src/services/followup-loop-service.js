@@ -19,13 +19,16 @@ class FollowupLoopService {
     this.threadDelayMax = threadDelayMax;
   }
 
-  async run({ runId, jobKey, mode = 'followup', maxThreads: overrideMaxThreads, bossCliRunner: runnerOverride, signal } = {}) {
+  async run({ runId, jobKey, mode = 'followup', maxThreads: overrideMaxThreads, interactionTypes, bossCliRunner: runnerOverride, signal } = {}) {
     const runner = runnerOverride || this.bossCliRunner;
     const effectiveMaxThreads = overrideMaxThreads || this.maxThreads;
-    return this.#runImpl({ runId, jobKey, mode, effectiveMaxThreads, runner, signal });
+    const effectiveInteractionTypes = Array.isArray(interactionTypes) && interactionTypes.length > 0
+      ? interactionTypes
+      : ['request_resume'];
+    return this.#runImpl({ runId, jobKey, mode, effectiveMaxThreads, effectiveInteractionTypes, runner, signal });
   }
 
-  async #runImpl({ runId, jobKey, mode, effectiveMaxThreads, runner, signal }) {
+  async #runImpl({ runId, jobKey, mode, effectiveMaxThreads, effectiveInteractionTypes, runner, signal }) {
     const stats = {
       processed: 0,
       replied: 0,
@@ -182,6 +185,7 @@ class FollowupLoopService {
         jobContext,
         thread,
         mode,
+        interactionTypes: effectiveInteractionTypes,
         stats,
         runner
       });
@@ -238,7 +242,7 @@ class FollowupLoopService {
     return { ok: true, stats: summary };
   }
 
-  async #processOneThread({ runId, jobKey, jobContext, thread, mode, stats, runner }) {
+  async #processOneThread({ runId, jobKey, jobContext, thread, mode, interactionTypes, stats, runner }) {
     const threadId = thread.dataId || `idx-${thread.index}`;
 
     // Step 1: Click the row in the left-side chat list
@@ -417,19 +421,39 @@ class FollowupLoopService {
       return;
     }
 
-    // Step 10a: Handle request_resume action
+    // Step 10a: Handle request_resume action (execute all configured interaction types)
     if (decision.action === 'request_resume') {
-      await this.#requestResumeWhenReady({
-        runId,
-        jobKey,
-        encryptUid,
-        candidateName: thread.name,
-        candidateId,
-        replyText: decision.replyText,
-        allowWarmupReply: true,
-        stats,
-        runner
-      });
+      const hasResumeRequest = interactionTypes.includes('request_resume');
+      if (hasResumeRequest) {
+        await this.#requestResumeWhenReady({
+          runId,
+          jobKey,
+          encryptUid,
+          candidateName: thread.name,
+          candidateId,
+          replyText: decision.replyText,
+          allowWarmupReply: true,
+          stats,
+          runner
+        });
+      } else if (decision.replyText) {
+        await this.#executeSendMessage({
+          runId, jobKey, encryptUid,
+          candidateName: thread.name, candidateId,
+          text: decision.replyText, stats, runner
+        });
+      }
+      const extraTypes = interactionTypes.filter((t) => t !== 'request_resume');
+      if (extraTypes.length > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+      }
+      for (const actionType of extraTypes) {
+        await this.#executeExchangeAction({
+          runId, jobKey, encryptUid,
+          candidateName: thread.name, candidateId,
+          actionType, stats, runner
+        });
+      }
       return;
     }
 
@@ -443,19 +467,33 @@ class FollowupLoopService {
       });
     }
 
-    // Step 10c: Request resume if eligible and not yet received
-    if (replySent && canRequestResume && !attachmentState.present) {
-      await this.#requestResumeWhenReady({
-        runId,
-        jobKey,
-        encryptUid,
-        candidateName: thread.name,
-        candidateId,
-        replyText: '',
-        allowWarmupReply: !decision.replyText,
-        stats,
-        runner
-      });
+    // Step 10c: Execute configured interaction types after reply
+    if (replySent && !attachmentState.present) {
+      const hasResumeRequest = interactionTypes.includes('request_resume');
+      if (hasResumeRequest && canRequestResume) {
+        await this.#requestResumeWhenReady({
+          runId,
+          jobKey,
+          encryptUid,
+          candidateName: thread.name,
+          candidateId,
+          replyText: '',
+          allowWarmupReply: !decision.replyText,
+          stats,
+          runner
+        });
+      }
+      const extraTypes = interactionTypes.filter((t) => t !== 'request_resume');
+      if (extraTypes.length > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+      }
+      for (const actionType of extraTypes) {
+        await this.#executeExchangeAction({
+          runId, jobKey, encryptUid,
+          candidateName: thread.name, candidateId,
+          actionType, stats, runner
+        });
+      }
     }
   }
 
@@ -735,6 +773,51 @@ class FollowupLoopService {
         stage: 'followup_loop',
         message: `resume request failed for ${candidateName}: ${error.message}`,
         payload: { encryptUid, candidateName, error: error.message }
+      });
+    }
+  }
+
+  async #executeExchangeAction({ runId, jobKey, encryptUid, candidateName, candidateId, actionType, stats, runner }) {
+    const actionTextMap = {
+      exchange_phone: '换电话',
+      exchange_wechat: '换微信'
+    };
+    const actionText = actionTextMap[actionType];
+    if (!actionText) return;
+
+    try {
+      const result = await runner.clickExchangeAction({ runId, actionText });
+      if (!result?.confirmed) {
+        throw new Error(`boss_chat_exchange_${actionType}_unconfirmed`);
+      }
+
+      await this.agentService.recordAction({
+        runId,
+        candidateId,
+        eventId: `followup-loop-exchange-${actionType}:${runId}:${encryptUid}`,
+        occurredAt: new Date().toISOString(),
+        actionType: `${actionType}_sent`,
+        dedupeKey: `${actionType}:${runId}:${encryptUid}`,
+        jobKey,
+        bossEncryptGeekId: encryptUid,
+        payload: { candidateName, actionType, confirmed: true, source: 'deterministic_loop' }
+      });
+
+      await this.#recordEvent(runId, {
+        eventId: `followup-loop-exchange-done:${runId}:${encryptUid}:${actionType}`,
+        eventType: `${actionType}_sent`,
+        stage: 'followup_loop',
+        message: `${actionText} sent to ${candidateName}`,
+        payload: { encryptUid, candidateName, actionType }
+      });
+    } catch (error) {
+      stats.errors += 1;
+      await this.#recordEvent(runId, {
+        eventId: `followup-loop-exchange-error:${runId}:${encryptUid}:${actionType}`,
+        eventType: 'followup_loop_warning',
+        stage: 'followup_loop',
+        message: `${actionText} failed for ${candidateName}: ${error.message}`,
+        payload: { encryptUid, candidateName, actionType, error: error.message }
       });
     }
   }
