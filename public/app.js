@@ -54,7 +54,10 @@ const state = {
     pollTimer: null,
     lastEventId: 0,
     taskType: 'sync_jobs',
-    showLiveView: false
+    showLiveView: false,
+    browserFocus: false,
+    consoleTitle: '',
+    standbyMessage: ''
   },
   jobDetailModal: {
     open: false,
@@ -118,6 +121,70 @@ const {
   resolveSyncTerminalStatusFromRun: resolveSyncTerminalStatusFromRunSnapshot,
   buildSyncStages: buildSyncTimelineStages
 } = window.SyncModalProgress;
+
+const liveViewCoordinatesApi = window.LiveViewCoordinates || {
+  resolveContainedImageClick({
+    clientX,
+    clientY,
+    rectLeft,
+    rectTop,
+    rectWidth,
+    rectHeight,
+    sourceWidth,
+    sourceHeight
+  }) {
+    const safeRectWidth = Math.max(1, Number(rectWidth) || 0);
+    const safeRectHeight = Math.max(1, Number(rectHeight) || 0);
+    const safeSourceWidth = Math.max(1, Number(sourceWidth) || safeRectWidth);
+    const safeSourceHeight = Math.max(1, Number(sourceHeight) || safeRectHeight);
+
+    return {
+      offsetX: 0,
+      offsetY: 0,
+      renderedWidth: safeRectWidth,
+      renderedHeight: safeRectHeight,
+      pageX: ((Number(clientX) || 0) - (Number(rectLeft) || 0)) / safeRectWidth * safeSourceWidth,
+      pageY: ((Number(clientY) || 0) - (Number(rectTop) || 0)) / safeRectHeight * safeSourceHeight
+    };
+  }
+};
+
+const {
+  resolveContainedImageClick
+} = liveViewCoordinatesApi;
+
+const runtimeLogFeedApi = window.RuntimeLogFeed || {
+  classifyRuntimeLogEvent(event = {}) {
+    return {
+      ...event,
+      severity: 'info',
+      label: event.eventType || '运行事件',
+      stageLabel: event.stage || '运行过程',
+      isHighlight: true
+    };
+  },
+  summarizeRuntimeLogs(events = []) {
+    return {
+      totalCount: events.length,
+      warningCount: 0,
+      errorCount: 0,
+      highlightCount: events.length,
+      lastSignal: events[events.length - 1] || null
+    };
+  },
+  splitRuntimeLogFeed(events = []) {
+    return {
+      highlights: events,
+      stream: [...events].reverse()
+    };
+  }
+};
+
+const {
+  classifyRuntimeLogEvent,
+  summarizeRuntimeLogs,
+  splitRuntimeLogFeed
+} = runtimeLogFeedApi;
 
 const titles = {
   command: ['运营总览', '今日招聘运营看板', '聚焦核心招聘指标、待办事项与系统运行情况。'],
@@ -262,6 +329,12 @@ function getTaskMeta(taskType) {
       buttonLabel: '主动沟通拉简历',
       inlineSuccess: '已手动触发主动沟通拉简历',
       emptyLogMessage: '等待主动沟通拉简历任务输出...'
+    },
+    browser_live: {
+      eyebrow: '运行控制台',
+      buttonLabel: '浏览器待机',
+      inlineSuccess: '已打开运行控制台',
+      emptyLogMessage: '当前暂无执行日志'
     }
   };
 
@@ -1046,7 +1119,10 @@ function openSyncModal(taskType = 'sync_jobs') {
     pollTimer: null,
     lastEventId: 0,
     taskType,
-    showLiveView
+    showLiveView,
+    browserFocus: false,
+    consoleTitle: showLiveView ? 'BOSS 直聘操作画面' : '',
+    standbyMessage: ''
   };
 
   if (showLiveView) {
@@ -1066,6 +1142,11 @@ function closeSyncModal() {
   stopSyncPolling();
   const hadLiveView = state.syncModal.showLiveView;
   state.syncModal.open = false;
+  state.syncModal.browserFocus = false;
+
+  if (document.fullscreenElement) {
+    document.exitFullscreen().catch(() => {});
+  }
 
   if (hadLiveView) {
     stopLiveViewPolling();
@@ -1251,11 +1332,11 @@ function renderBossLoginCard() {
           <div>
             <p class="eyebrow">BOSS 账号</p>
             <h3 class="card-title">浏览器登录状态</h3>
-            <p class="card-subtitle">查看当前 BOSS 直聘账号的浏览器画面，扫码登录或确认在线状态。</p>
+            <p class="card-subtitle">进入统一运行控制台，查看浏览器画面、当前任务上下文与处理建议。</p>
           </div>
           <button class="sync-inline-btn" onclick="openHrLiveView()">
             <span class="sync-inline-icon">&#128065;</span>
-            <span class="sync-inline-label">查看浏览器画面</span>
+            <span class="sync-inline-label">打开运行控制台</span>
           </button>
         </div>
       </div>
@@ -1263,15 +1344,51 @@ function renderBossLoginCard() {
   `;
 }
 
-function openHrLiveView() {
+function openRuntimeConsole({
+  instanceId = null,
+  useHrEndpoint = true,
+  title = '',
+  standbyMessage = ''
+} = {}) {
+  stopSyncPolling();
+  state.syncModal = {
+    open: true,
+    runId: null,
+    status: 'idle',
+    startedAt: null,
+    error: '',
+    events: [],
+    progress: createSyncModalProgressState(),
+    isExpanded: false,
+    pollTimer: null,
+    lastEventId: 0,
+    taskType: 'browser_live',
+    showLiveView: true,
+    browserFocus: false,
+    consoleTitle: title,
+    standbyMessage
+  };
+
   liveView.open = true;
-  liveView.instanceId = null;
+  liveView.instanceId = instanceId;
   liveView.error = '';
   liveView.pageUrl = '';
   liveView.pageTitle = '';
-  liveView.useHrEndpoint = true;
-  renderLiveViewModal();
+  liveView.viewportWidth = 0;
+  liveView.viewportHeight = 0;
+  liveView.useHrEndpoint = useHrEndpoint;
+
+  render();
   startLiveViewPolling();
+}
+
+function openHrLiveView() {
+  openRuntimeConsole({
+    instanceId: null,
+    useHrEndpoint: true,
+    title: '我的 BOSS 浏览器',
+    standbyMessage: '当前暂无执行任务，可先确认页面状态；如发现异常，可直接点击画面进入人工处理。'
+  });
 }
 
 function renderCommandCenter() {
@@ -1809,7 +1926,7 @@ function renderSysAdminBossAndBrowser(bossAccounts, browserInstances, hrOptions,
                 <td>
                   <button class="btn-sm" onclick='editBrowserInstance(${JSON.stringify(bi).replace(/'/g, "&#39;")})'>编辑</button>
                   <button class="btn-sm" onclick="checkBrowserInstance(${bi.id})">检测</button>
-                  <button class="btn-sm" onclick="openLiveView(${bi.id})">实时画面</button>
+                  <button class="btn-sm" onclick="openLiveView(${bi.id})">运行控制台</button>
                   <button class="btn-sm btn-danger" onclick="deleteBrowserInstance(${bi.id})">删除</button>
                 </td>
               </tr>`;
@@ -2253,31 +2370,12 @@ const liveView = {
 };
 
 function openLiveView(instanceId) {
-  liveView.open = true;
-  liveView.instanceId = instanceId;
-  liveView.error = '';
-  liveView.pageUrl = '';
-  liveView.pageTitle = '';
-  liveView.viewportWidth = 0;
-  liveView.viewportHeight = 0;
-  liveView.useHrEndpoint = false;
-  renderLiveViewModal();
-  startLiveViewPolling();
-}
-
-function closeLiveView() {
-  stopLiveViewPolling();
-  if (liveView.boostTimer) {
-    clearTimeout(liveView.boostTimer);
-    liveView.boostTimer = null;
-  }
-  liveView.open = false;
-  liveView.instanceId = null;
-  liveView.error = '';
-  liveView.viewportWidth = 0;
-  liveView.viewportHeight = 0;
-  const modal = document.getElementById('live-view-modal');
-  if (modal) modal.remove();
+  openRuntimeConsole({
+    instanceId,
+    useHrEndpoint: false,
+    title: `实例 #${instanceId}`,
+    standbyMessage: '当前实例暂无绑定执行任务，可先检查登录状态与页面稳定性。'
+  });
 }
 
 async function restartLiveViewBrowser() {
@@ -2383,71 +2481,46 @@ async function refreshLiveView() {
 
 function updateLiveViewStatus() {
   const statusEl = document.getElementById('live-view-status');
-  if (!statusEl) return;
-  if (liveView.error) {
-    statusEl.innerHTML = `<span class="live-view-error">${escapeHtml(liveView.error)}</span>`;
-  } else {
-    const title = liveView.pageTitle || '加载中...';
-    statusEl.innerHTML = `<span class="live-view-info">${escapeHtml(title)}</span>`;
+  const pageUrlEl = document.getElementById('runtime-console-page-url');
+  const noteEl = document.getElementById('runtime-console-browser-note');
+
+  if (statusEl) {
+    if (liveView.error) {
+      statusEl.innerHTML = `<span class="live-view-error">${escapeHtml(liveView.error)}</span>`;
+    } else {
+      const title = liveView.pageTitle || '正在同步浏览器画面...';
+      statusEl.innerHTML = `<span class="live-view-info">${escapeHtml(title)}</span>`;
+    }
   }
-}
 
-function renderLiveViewModal() {
-  let modal = document.getElementById('live-view-modal');
-  if (modal) modal.remove();
+  if (pageUrlEl) {
+    pageUrlEl.textContent = liveView.pageUrl || '等待页面地址...';
+  }
 
-  modal = document.createElement('div');
-  modal.id = 'live-view-modal';
-  modal.className = 'modal-overlay';
-  modal.style.display = 'flex';
-  modal.onclick = (e) => { if (e.target === modal) closeLiveView(); };
-  const modalTitle = liveView.useHrEndpoint ? '我的 BOSS 浏览器' : `实例 #${liveView.instanceId}`;
-  modal.innerHTML = `
-    <div class="live-view-container">
-      <div class="live-view-header">
-        <div>
-          <p class="eyebrow">浏览器实时画面</p>
-          <h3 class="card-title">${modalTitle}</h3>
-          <div id="live-view-status" class="live-view-status">
-            <span class="live-view-info">连接中...</span>
-          </div>
-        </div>
-        <div class="live-view-actions">
-          <span class="live-view-dot"></span>
-          <button class="button-secondary" id="live-view-restart-btn" onclick="restartLiveViewBrowser()">重启浏览器</button>
-          <button class="button-secondary" onclick="closeLiveView()">关闭</button>
-        </div>
-      </div>
-      <div class="live-view-body" id="live-view-body">
-        <div class="live-view-img-wrapper">
-          <img id="live-view-img" class="live-view-img" alt="浏览器画面加载中..." />
-          <div id="live-view-click-indicator" class="live-view-click-indicator"></div>
-        </div>
-      </div>
-      <div class="live-view-footer">
-        <span class="live-view-hint">点击画面可操作远程浏览器</span>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(modal);
-
-  const img = document.getElementById('live-view-img');
-  if (img) {
-    img.style.cursor = 'crosshair';
-    img.addEventListener('click', handleLiveViewClick);
+  if (noteEl) {
+    noteEl.textContent = getRuntimeConsoleRecommendation();
   }
 }
 
 async function handleLiveViewClick(event) {
   const img = event.target;
   const rect = img.getBoundingClientRect();
-  const ratioX = event.clientX - rect.left;
-  const ratioY = event.clientY - rect.top;
-
   const targetWidth = liveView.viewportWidth || img.naturalWidth;
   const targetHeight = liveView.viewportHeight || img.naturalHeight;
-  const pageX = (ratioX / rect.width) * targetWidth;
-  const pageY = (ratioY / rect.height) * targetHeight;
+  const clickPoint = resolveContainedImageClick({
+    clientX: event.clientX,
+    clientY: event.clientY,
+    rectLeft: rect.left,
+    rectTop: rect.top,
+    rectWidth: rect.width,
+    rectHeight: rect.height,
+    sourceWidth: targetWidth,
+    sourceHeight: targetHeight
+  });
+  const ratioX = event.clientX - rect.left;
+  const ratioY = event.clientY - rect.top;
+  const pageX = clickPoint.pageX;
+  const pageY = clickPoint.pageY;
 
   showClickIndicator(ratioX, ratioY);
 
@@ -4043,6 +4116,184 @@ function getSyncStatusLabel() {
   return statusMap[state.syncModal.status] || '处理中';
 }
 
+function isRuntimeConsoleStandby() {
+  return state.syncModal.taskType === 'browser_live' && !state.syncModal.runId;
+}
+
+function getRuntimeConsoleTitle() {
+  if (state.syncModal.consoleTitle) {
+    return state.syncModal.consoleTitle;
+  }
+  return liveView.useHrEndpoint ? '我的 BOSS 浏览器' : `实例 #${liveView.instanceId}`;
+}
+
+function getRuntimeConsoleTaskLabel() {
+  if (isRuntimeConsoleStandby()) {
+    return '当前暂无执行任务';
+  }
+
+  return getTaskMeta(state.syncModal.taskType).buttonLabel;
+}
+
+function getRuntimeConsoleStageLabel() {
+  if (isRuntimeConsoleStandby()) {
+    return '待机观察';
+  }
+
+  const stages = buildSyncStages();
+  const activeStage = stages.find((item) => item.active);
+  if (activeStage) {
+    return activeStage.label;
+  }
+
+  const completedStage = [...stages].reverse().find((item) => item.done);
+  return completedStage ? `${completedStage.label}（已完成）` : '准备启动';
+}
+
+function getRuntimeConsoleLatestEvent() {
+  if (state.syncModal.events.length) {
+    return state.syncModal.events[state.syncModal.events.length - 1];
+  }
+
+  if (isRuntimeConsoleStandby()) {
+    return {
+      occurredAt: null,
+      message: state.syncModal.standbyMessage || '当前为待机视图，任务触发后会在这里显示运行上下文。'
+    };
+  }
+
+  return {
+    occurredAt: state.syncModal.startedAt,
+    message: getTaskMeta(state.syncModal.taskType).emptyLogMessage
+  };
+}
+
+function renderRuntimeLogSummary(summary) {
+  const chips = [
+    `<span class="runtime-log-summary-chip">${summary.totalCount} 条记录</span>`
+  ];
+
+  if (summary.warningCount) {
+    chips.push(`<span class="runtime-log-summary-chip is-warning">${summary.warningCount} 个预警</span>`);
+  }
+
+  if (summary.errorCount) {
+    chips.push(`<span class="runtime-log-summary-chip is-error">${summary.errorCount} 个异常</span>`);
+  }
+
+  if (!summary.warningCount && !summary.errorCount) {
+    chips.push(`<span class="runtime-log-summary-chip is-muted">${summary.highlightCount} 个关键节点</span>`);
+  }
+
+  const lastSignalText = summary.lastSignal
+    ? `${summary.lastSignal.label} · ${summary.lastSignal.message || summary.lastSignal.eventType}`
+    : '展开后可查看关键节点与全部过程';
+
+  return `
+    <div class="runtime-log-summary">
+      <div class="runtime-log-summary-chips">
+        ${chips.join('')}
+      </div>
+      <div class="runtime-log-summary-text">${escapeHtml(lastSignalText)}</div>
+    </div>
+  `;
+}
+
+function renderRuntimeLogFeedRows(rows, { compact = false } = {}) {
+  if (!rows.length) {
+    return '<div class="runtime-log-empty">当前没有更多日志，后续运行节点会在这里出现。</div>';
+  }
+
+  return rows.map((event) => `
+    <div class="runtime-log-feed-item ${compact ? 'is-compact' : ''} severity-${escapeHtml(event.severity || 'info')}">
+      <div class="runtime-log-feed-dot"></div>
+      <div class="runtime-log-feed-main">
+        <div class="runtime-log-feed-head">
+          <span class="runtime-log-feed-label">${escapeHtml(event.label || '运行事件')}</span>
+          <span class="runtime-log-feed-stage">${escapeHtml(event.stageLabel || '运行过程')}</span>
+          <span class="runtime-log-feed-time">${escapeHtml(formatDateTime(event.occurredAt))}</span>
+        </div>
+        <div class="runtime-log-feed-message">${escapeHtml(event.message || event.eventType || '无详细说明')}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function getRuntimeConsoleRecommendation() {
+  if (liveView.error) {
+    return '浏览器状态异常，建议先确认页面是否卡住，再决定是否重启浏览器。';
+  }
+
+  if (isRuntimeConsoleStandby()) {
+    return state.syncModal.standbyMessage || '当前暂无执行任务，可先确认页面状态与登录状态。';
+  }
+
+  if (state.syncModal.status === 'failed') {
+    return '任务已异常结束，建议先查看页面停留位置，再决定是否重新执行。';
+  }
+
+  if (state.syncModal.status === 'stopped') {
+    return '任务已停止。若仍需人工处理，可继续点击页面；处理完成后请重新触发任务。';
+  }
+
+  if (state.syncModal.status === 'completed') {
+    return '任务已完成。建议快速复核页面状态，确认无需进一步人工处理。';
+  }
+
+  if (isStoppableTask()) {
+    return '如页面异常，可直接点击画面人工处理；确认流程无法继续时再停止任务。';
+  }
+
+  return '当前任务进行中，请结合阶段信息与页面状态判断是否需要干预。';
+}
+
+function getRuntimeConsoleStatusClass() {
+  const classMap = {
+    starting: 'is-pending',
+    running: 'is-running',
+    completed: 'is-completed',
+    failed: 'is-failed',
+    stopped: 'is-failed',
+    idle: 'is-idle'
+  };
+
+  return classMap[state.syncModal.status] || 'is-pending';
+}
+
+function toggleRuntimeConsoleBrowserFocus() {
+  const browserPanel = document.querySelector('#runtime-console-shell .runtime-console-browser');
+  if (!browserPanel) {
+    return;
+  }
+
+  if (!document.fullscreenElement && typeof browserPanel.requestFullscreen === 'function') {
+    browserPanel.requestFullscreen().catch(() => {
+      state.syncModal.browserFocus = !state.syncModal.browserFocus;
+      updateSyncLiveOverlayContent();
+    });
+    return;
+  }
+
+  if (document.fullscreenElement) {
+    document.exitFullscreen().catch(() => {
+      state.syncModal.browserFocus = false;
+      updateSyncLiveOverlayContent();
+    });
+    return;
+  }
+
+  state.syncModal.browserFocus = !state.syncModal.browserFocus;
+  updateSyncLiveOverlayContent();
+}
+
+document.addEventListener('fullscreenchange', () => {
+  const browserPanel = document.querySelector('#runtime-console-shell .runtime-console-browser');
+  state.syncModal.browserFocus = Boolean(browserPanel && document.fullscreenElement === browserPanel);
+  if (document.getElementById('sync-live-overlay')) {
+    updateSyncLiveOverlayContent();
+  }
+});
+
 function manageSyncLiveOverlay() {
   if (!state.syncModal.open || !state.syncModal.showLiveView) {
     const overlay = document.getElementById('sync-live-overlay');
@@ -4059,8 +4310,6 @@ function manageSyncLiveOverlay() {
 }
 
 function createSyncLiveOverlay() {
-  const taskMeta = getTaskMeta(state.syncModal.taskType);
-
   const overlay = document.createElement('div');
   overlay.id = 'sync-live-overlay';
   overlay.className = 'modal-overlay';
@@ -4068,47 +4317,41 @@ function createSyncLiveOverlay() {
   overlay.onclick = (e) => { if (e.target === overlay) closeSyncModal(); };
 
   overlay.innerHTML = `
-    <div class="sync-live-container" onclick="event.stopPropagation()">
-      <div class="sync-live-browser">
-        <div class="sync-live-browser-header">
-          <div>
-            <p class="eyebrow">浏览器实时画面</p>
-            <h3 class="card-title">BOSS 直聘操作画面</h3>
+    <div class="runtime-console ${state.syncModal.browserFocus ? 'is-browser-focus' : ''}" id="runtime-console-shell" onclick="event.stopPropagation()">
+      <div class="runtime-console-browser">
+        <div class="runtime-console-browser-header">
+          <div class="runtime-console-browser-copy">
+            <p class="eyebrow">${isRuntimeConsoleStandby() ? '浏览器待机视图' : '运行控制台'}</p>
+            <h3 class="card-title">${escapeHtml(getRuntimeConsoleTitle())}</h3>
             <div id="live-view-status" class="live-view-status">
               <span class="live-view-info">连接中...</span>
             </div>
           </div>
-          <span class="live-view-dot"></span>
+          <div class="runtime-console-toolbar">
+            <span class="runtime-console-status-pill ${getRuntimeConsoleStatusClass()}" id="runtime-console-mode-badge">${escapeHtml(getSyncStatusLabel())}</span>
+            <button class="button-secondary" id="runtime-console-focus-btn" onclick="toggleRuntimeConsoleBrowserFocus()">${state.syncModal.browserFocus ? '退出全屏' : '浏览器全屏'}</button>
+          </div>
         </div>
-        <div class="sync-live-browser-body">
-          <div class="live-view-img-wrapper">
+        <div class="runtime-console-browser-body">
+          <div class="live-view-img-wrapper runtime-console-browser-frame">
             <img id="live-view-img" class="live-view-img" alt="浏览器画面加载中..." style="cursor:crosshair" />
             <div id="live-view-click-indicator" class="live-view-click-indicator"></div>
           </div>
         </div>
-        <div class="sync-live-browser-footer">
-          <span class="live-view-hint">点击画面可操作远程浏览器</span>
-          <button class="button-secondary btn-sm" id="live-view-restart-btn" onclick="restartLiveViewBrowser()">重启浏览器</button>
-        </div>
-      </div>
-      <div class="sync-live-logs">
-        <div class="sync-live-logs-header">
-          <div class="card-header">
-            <div>
-              <p class="eyebrow">${taskMeta.eyebrow}</p>
-              <h3 class="card-title">小聘AGENT 执行过程</h3>
-              <p class="card-subtitle" id="sync-live-subtitle">任务 ${state.syncModal.runId || '-'} · ${getSyncStatusLabel()}</p>
-            </div>
-            <div style="display:flex;gap:8px;align-items:center">
-              ${isStoppableTask() && (state.syncModal.status === 'running' || state.syncModal.status === 'starting') ? '<button class="button-secondary button-danger" id="sync-live-stop-btn" onclick="stopCurrentRun()">停止任务</button>' : ''}
-              <button class="button-secondary" onclick="closeSyncModal()">关闭</button>
-            </div>
+        <div class="runtime-console-browser-footer">
+          <div class="runtime-console-browser-meta">
+            <span class="live-view-hint" id="runtime-console-browser-note">如页面异常，可直接点击画面人工处理；详细日志可按需展开。</span>
+            <span class="runtime-console-page-url" id="runtime-console-page-url">等待页面地址...</span>
+          </div>
+          <div class="runtime-console-browser-actions">
+            <button class="button-secondary btn-sm" id="live-view-restart-btn" onclick="restartLiveViewBrowser()">重启浏览器</button>
+            <button class="button-secondary btn-sm" onclick="closeSyncModal()">关闭</button>
           </div>
         </div>
-        <div class="sync-live-logs-body" id="sync-live-logs-body">
-          ${renderSyncLiveLogsContent()}
-        </div>
       </div>
+      <aside class="runtime-console-sidebar" id="runtime-console-sidebar">
+          ${renderSyncLiveLogsContent()}
+      </aside>
     </div>
   `;
 
@@ -4121,21 +4364,26 @@ function createSyncLiveOverlay() {
 }
 
 function updateSyncLiveOverlayContent() {
-  const subtitle = document.getElementById('sync-live-subtitle');
-  if (subtitle) {
-    subtitle.textContent = '任务 ' + (state.syncModal.runId || '-') + ' · ' + getSyncStatusLabel();
+  const shell = document.getElementById('runtime-console-shell');
+  if (shell) {
+    shell.className = `runtime-console ${state.syncModal.browserFocus ? 'is-browser-focus' : ''}`;
   }
 
-  const stopBtn = document.getElementById('sync-live-stop-btn');
-  const isRunning = state.syncModal.status === 'running' || state.syncModal.status === 'starting';
-  if (stopBtn && !isRunning) {
-    stopBtn.remove();
+  const modeBadge = document.getElementById('runtime-console-mode-badge');
+  if (modeBadge) {
+    modeBadge.className = `runtime-console-status-pill ${getRuntimeConsoleStatusClass()}`;
+    modeBadge.textContent = getSyncStatusLabel();
   }
 
-  const logsBody = document.getElementById('sync-live-logs-body');
-  if (!logsBody) return;
+  const focusBtn = document.getElementById('runtime-console-focus-btn');
+  if (focusBtn) {
+    focusBtn.textContent = state.syncModal.browserFocus ? '退出全屏' : '浏览器全屏';
+  }
 
-  const logList = logsBody.querySelector('.sync-log-list');
+  const sidebar = document.getElementById('runtime-console-sidebar');
+  if (!sidebar) return;
+
+  const logList = sidebar.querySelector('.sync-log-list');
   let scrollSnapshot = null;
   if (logList) {
     scrollSnapshot = captureSyncLogScrollSnapshot({
@@ -4145,9 +4393,9 @@ function updateSyncLiveOverlayContent() {
     });
   }
 
-  logsBody.innerHTML = renderSyncLiveLogsContent();
+  sidebar.innerHTML = renderSyncLiveLogsContent();
 
-  const newLogList = logsBody.querySelector('.sync-log-list');
+  const newLogList = sidebar.querySelector('.sync-log-list');
   if (newLogList) {
     newLogList.scrollTop = resolveSyncLogScrollTop({
       previousSnapshot: scrollSnapshot,
@@ -4159,44 +4407,118 @@ function updateSyncLiveOverlayContent() {
 
 function renderSyncLiveLogsContent() {
   const taskMeta = getTaskMeta(state.syncModal.taskType);
+  const latestEvent = getRuntimeConsoleLatestEvent();
+  const isStandby = isRuntimeConsoleStandby();
+  const runningState = state.syncModal.status === 'running' || state.syncModal.status === 'starting';
+  const logs = state.syncModal.events.length
+    ? state.syncModal.events
+    : [{
+        message: latestEvent.message || taskMeta.emptyLogMessage,
+        occurredAt: latestEvent.occurredAt || state.syncModal.startedAt
+      }];
+  const logSummary = summarizeRuntimeLogs(logs);
+  const logFeed = splitRuntimeLogFeed(logs);
 
   return `
-    <div class="sync-summary-grid">
-      <div class="status-box">
-        <span class="muted">开始时间</span>
-        <strong>${formatDateTime(state.syncModal.startedAt)}</strong>
-      </div>
-      <div class="status-box">
-        <span class="muted">当前状态</span>
-        <strong>${getSyncStatusLabel()}</strong>
-      </div>
-    </div>
-    ${state.syncModal.error ? '<div class="inline-status inline-status-error">' + state.syncModal.error + '</div>' : ''}
-    <div class="sync-timeline">
-      ${buildSyncStages().map((item) => `
-        <div class="sync-timeline-item ${item.active ? 'is-active' : ''} ${item.done ? 'is-done' : ''}">
-          <div class="sync-timeline-dot"></div>
+    <div class="runtime-console-rail-stack">
+      <section class="runtime-console-panel runtime-console-panel--hero">
+        <div class="runtime-console-panel-head">
           <div>
-            <div class="list-title">${item.label}</div>
-            <div class="list-desc">${item.desc}</div>
+            <p class="eyebrow">${isStandby ? '待机态' : taskMeta.eyebrow}</p>
+            <h3 class="card-title">${escapeHtml(getRuntimeConsoleTaskLabel())}</h3>
+            <p class="card-subtitle" id="sync-live-subtitle">${isStandby ? '当前未绑定执行任务' : `任务 ${state.syncModal.runId || '-'} · ${getSyncStatusLabel()}`}</p>
+          </div>
+          ${isStoppableTask() && runningState ? '<button class="button-secondary button-danger" id="sync-live-stop-btn" onclick="stopCurrentRun()">停止任务</button>' : ''}
+        </div>
+        <div class="runtime-console-metrics">
+          <div class="runtime-console-metric">
+            <span class="runtime-console-metric-label">当前阶段</span>
+            <strong>${escapeHtml(getRuntimeConsoleStageLabel())}</strong>
+          </div>
+          <div class="runtime-console-metric">
+            <span class="runtime-console-metric-label">${isStandby ? '页面标题' : '开始时间'}</span>
+            <strong>${escapeHtml(isStandby ? (liveView.pageTitle || '等待页面同步...') : formatDateTime(state.syncModal.startedAt))}</strong>
           </div>
         </div>
-      `).join('')}
-    </div>
-    <div class="sync-log-panel">
-      <button class="sync-log-toggle" onclick="toggleSyncLogPanel()">
-        ${state.syncModal.isExpanded ? '收起详细日志' : '展开详细日志'}
-      </button>
-      ${state.syncModal.isExpanded ? `
-        <div class="sync-log-list">
-          ${(state.syncModal.events.length ? state.syncModal.events : [{ message: taskMeta.emptyLogMessage, occurredAt: state.syncModal.startedAt }]).map((event) => `
-            <div class="sync-log-item">
-              <span class="sync-log-time">${formatDateTime(event.occurredAt)}</span>
-              <span>${event.message || event.eventType}</span>
-            </div>
-          `).join('')}
+        <div class="runtime-console-latest-event">
+          <span class="runtime-console-metric-label">最近动态</span>
+          <strong>${escapeHtml(latestEvent.message || taskMeta.emptyLogMessage)}</strong>
+          <span class="runtime-console-event-time">${escapeHtml(formatDateTime(latestEvent.occurredAt))}</span>
         </div>
-      ` : ''}
+      </section>
+      ${state.syncModal.error ? `<div class="inline-status inline-status-error">${escapeHtml(state.syncModal.error)}</div>` : ''}
+      <section class="runtime-console-panel">
+        <div class="runtime-console-panel-head">
+          <div>
+            <p class="eyebrow">${isStandby ? '当前页面' : '执行轨迹'}</p>
+            <h4 class="card-title">${isStandby ? '页面与处理提示' : '任务阶段'}</h4>
+          </div>
+        </div>
+        ${isStandby ? `
+          <div class="runtime-console-idle-list">
+            <div class="runtime-console-idle-item">
+              <span class="runtime-console-idle-dot"></span>
+              <div>
+                <div class="list-title">先看页面是否正常可操作</div>
+                <div class="list-desc">确认登录状态、弹窗、异常遮罩或停留页是否需要人工处理。</div>
+              </div>
+            </div>
+            <div class="runtime-console-idle-item">
+              <span class="runtime-console-idle-dot"></span>
+              <div>
+                <div class="list-title">任务触发后复用同一控制台</div>
+                <div class="list-desc">后续若从调度发起任务，这里会直接显示任务阶段、日志与停止操作。</div>
+              </div>
+            </div>
+          </div>
+        ` : `
+          <div class="sync-timeline">
+            ${buildSyncStages().map((item) => `
+              <div class="sync-timeline-item ${item.active ? 'is-active' : ''} ${item.done ? 'is-done' : ''}">
+                <div class="sync-timeline-dot"></div>
+                <div>
+                  <div class="list-title">${item.label}</div>
+                  <div class="list-desc">${item.desc}</div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        `}
+      </section>
+      <section class="runtime-console-panel runtime-console-panel--logs">
+        <div class="runtime-console-panel-head">
+          <div>
+            <p class="eyebrow">运行细节</p>
+            <h4 class="card-title">详细日志</h4>
+          </div>
+          <button class="sync-log-toggle" onclick="toggleSyncLogPanel()">
+            ${state.syncModal.isExpanded ? '收起日志' : '展开日志'}
+          </button>
+        </div>
+        ${renderRuntimeLogSummary(logSummary)}
+        ${state.syncModal.isExpanded ? `
+          <div class="runtime-log-sections">
+            <div class="runtime-log-section">
+              <div class="runtime-log-section-head">
+                <span class="runtime-log-section-title">关键节点</span>
+                <span class="runtime-log-section-meta">${logFeed.highlights.length} 条</span>
+              </div>
+              <div class="runtime-log-feed">
+                ${renderRuntimeLogFeedRows(logFeed.highlights.slice(0, 6), { compact: true })}
+              </div>
+            </div>
+            <div class="runtime-log-section">
+              <div class="runtime-log-section-head">
+                <span class="runtime-log-section-title">全部过程</span>
+                <span class="runtime-log-section-meta">按时间倒序</span>
+              </div>
+              <div class="sync-log-list runtime-log-feed is-stream">
+                ${renderRuntimeLogFeedRows(logFeed.stream)}
+              </div>
+            </div>
+          </div>
+        ` : '<div class="runtime-console-log-placeholder">默认收起日志明细，优先展示关键节点；展开后可查看重要节点和全部过程。</div>'}
+      </section>
     </div>
   `;
 }
