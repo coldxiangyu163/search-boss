@@ -14,6 +14,22 @@ const {
 const REPO_ROOT = path.resolve(__dirname, '..');
 const RESUMES_ROOT = path.join(REPO_ROOT, 'resumes');
 
+function canAccessRun(user, runScope) {
+  if (!user || !runScope) {
+    return false;
+  }
+
+  if (isSystemAdmin(user)) {
+    return true;
+  }
+
+  if (isAdminRole(user)) {
+    return String(user.department_id) === String(runScope.departmentId);
+  }
+
+  return String(user.hr_account_id) === String(runScope.hrAccountId);
+}
+
 function createApp({ services = {}, config = {}, pool = null } = {}) {
   const app = express();
 
@@ -86,6 +102,31 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
     } catch {
       return false;
     }
+  }
+
+  async function getRunScope(runId) {
+    if (!pool) {
+      return null;
+    }
+
+    const result = await pool.query(
+      `select sr.hr_account_id, ha.department_id
+       from sourcing_runs sr
+       left join hr_accounts ha on ha.id = sr.hr_account_id
+       where sr.id = $1
+       limit 1`,
+      [Number(runId)]
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+
+    return {
+      hrAccountId: row.hr_account_id,
+      departmentId: row.department_id
+    };
   }
 
   if (pool) {
@@ -502,8 +543,34 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
     }
   });
 
+  app.get('/api/runs', async (req, res, next) => {
+    try {
+      const scope = resolveHrScope(req) || {};
+      const page = Math.max(1, Number(req.query.page) || 1);
+      const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 20));
+
+      const result = await services.agent.listRuns({
+        hrAccountId: scope.hrAccountId,
+        departmentId: scope.departmentId,
+        status: req.query.status || '',
+        mode: req.query.mode || '',
+        page,
+        pageSize
+      });
+
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get('/api/runs/:runId/events', async (req, res, next) => {
     try {
+      const runScope = await getRunScope(req.params.runId);
+      if (runScope && !canAccessRun(req.user, runScope)) {
+        return res.status(403).json({ error: 'forbidden', message: '无权查看该任务执行记录。' });
+      }
+
       const result = await services.agent.listRunEvents(req.params.runId, {
         afterId: Number(req.query.afterId || 0)
       });
@@ -515,6 +582,11 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.get('/api/runs/:runId', async (req, res, next) => {
     try {
+      const runScope = await getRunScope(req.params.runId);
+      if (runScope && !canAccessRun(req.user, runScope)) {
+        return res.status(403).json({ error: 'forbidden', message: '无权查看该任务执行详情。' });
+      }
+
       const item = await services.agent.getRun(req.params.runId);
       if (!item) {
         res.status(404).json({
@@ -673,27 +745,15 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
   app.post('/api/runs/:runId/stop', async (req, res, next) => {
     try {
       const runId = Number(req.params.runId);
-      const run = await pool?.query(
-        `select sr.hr_account_id, ha.department_id
-         from sourcing_runs sr
-         left join hr_accounts ha on ha.id = sr.hr_account_id
-         where sr.id = $1 limit 1`,
-        [runId]
-      );
-      if (!run?.rows[0]) {
+      const runScope = await getRunScope(runId);
+      if (!runScope) {
         return res.status(404).json({ error: 'run_not_found', message: '未找到对应执行任务' });
       }
-      const { hr_account_id: runHrAccountId, department_id: runDeptId } = run.rows[0];
-      if (isSystemAdmin(req.user)) {
-        // system_admin can stop any run
-      } else if (isAdminRole(req.user)) {
-        // dept_admin / enterprise_admin can only stop runs in their department
-        if (String(req.user.department_id) !== String(runDeptId)) {
-          return res.status(403).json({ error: 'forbidden', message: '无权停止该任务' });
-        }
-      } else if (req.user?.hr_account_id !== runHrAccountId) {
+
+      if (!canAccessRun(req.user, runScope)) {
         return res.status(403).json({ error: 'forbidden', message: '无权停止该任务' });
       }
+
       const result = await services.scheduler.stopRun(runId);
       res.json(result);
     } catch (error) {

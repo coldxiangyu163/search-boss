@@ -2,12 +2,37 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const express = require('express');
 const request = require('supertest');
 
 const { createApp } = require('../src/app');
 
 const repoRoot = path.resolve(__dirname, '..');
 const projectRootRuntimeLine = `本次运行只使用当前项目目录：PROJECT_ROOT="${repoRoot}"；回写 CLI="${path.join(repoRoot, 'scripts', 'agent-callback-cli.js')}"。不要猜测或探测其它历史路径。`;
+
+function createAuthedApp({ user, pool = null, services = {}, config = {} } = {}) {
+  const app = express();
+  app.use((req, _res, next) => {
+    req.user = user;
+    next();
+  });
+  app.use(createApp({ services, config, pool }));
+  return app;
+}
+
+function createRunAccessPool(runRow) {
+  return {
+    query(sql) {
+      if (sql.includes('from sourcing_runs sr') && sql.includes('left join hr_accounts ha')) {
+        return { rows: runRow ? [runRow] : [] };
+      }
+      if (sql.includes('connect_pg_simple') || sql.includes('"session"')) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    }
+  };
+}
 
 test('GET /api/dashboard/summary returns dashboard payload', async () => {
   const app = createApp({
@@ -4412,4 +4437,256 @@ test('AgentService runHasResumeIngestHandoff matches resume-ingest subagent spaw
   assert.match(queryCalls[0].sql, /Spawned subagent/);
   assert.match(queryCalls[0].sql, /boss-resume-ingest-/);
   assert.equal(queryCalls[0].params[0], 245);
+});
+
+test('GET /api/runs returns paginated task runs list', async () => {
+  let capturedParams = null;
+
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: { async listSchedules() { return []; } },
+      agent: {
+        async listRuns(params) {
+          capturedParams = params;
+          return {
+            items: [
+              { id: 10, run_key: 'run-a', mode: 'source', status: 'completed', job_key: 'j1', job_name: '前端工程师', hr_name: '张三', scheduled_job_id: 1, event_count: 5, candidate_count: 3, started_at: '2026-04-01T10:00:00Z', completed_at: '2026-04-01T10:05:00Z', created_at: '2026-04-01T09:59:00Z' },
+              { id: 9, run_key: 'run-b', mode: 'followup', status: 'running', job_key: 'j2', job_name: '后端工程师', hr_name: '李四', scheduled_job_id: null, event_count: 2, candidate_count: 0, started_at: '2026-04-01T09:00:00Z', completed_at: null, created_at: '2026-04-01T08:59:00Z' }
+            ],
+            pagination: { page: 1, pageSize: 20, total: 2, totalPages: 1 }
+          };
+        },
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return {}; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; }
+      }
+    },
+    config: { agentToken: 'test' }
+  });
+
+  const response = await request(app).get('/api/runs');
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.items.length, 2);
+  assert.equal(response.body.items[0].id, 10);
+  assert.equal(response.body.items[0].mode, 'source');
+  assert.equal(response.body.items[0].job_name, '前端工程师');
+  assert.equal(response.body.items[1].status, 'running');
+  assert.equal(response.body.pagination.total, 2);
+  assert.equal(response.body.pagination.page, 1);
+  assert.equal(response.body.pagination.pageSize, 20);
+  assert.equal(response.body.pagination.totalPages, 1);
+  assert.equal(capturedParams.page, 1);
+  assert.equal(capturedParams.pageSize, 20);
+});
+
+test('GET /api/runs supports status and mode filters', async () => {
+  let capturedParams = null;
+
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: { async listSchedules() { return []; } },
+      agent: {
+        async listRuns(params) {
+          capturedParams = params;
+          return {
+            items: [
+              { id: 5, run_key: 'run-c', mode: 'source', status: 'completed', job_name: '测试岗位', event_count: 3, candidate_count: 1 }
+            ],
+            pagination: { page: 1, pageSize: 20, total: 1, totalPages: 1 }
+          };
+        },
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return {}; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; }
+      }
+    },
+    config: { agentToken: 'test' }
+  });
+
+  const response = await request(app).get('/api/runs?status=completed&mode=source');
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.items.length, 1);
+  assert.equal(response.body.items[0].status, 'completed');
+  assert.equal(response.body.items[0].mode, 'source');
+  assert.equal(capturedParams.status, 'completed');
+  assert.equal(capturedParams.mode, 'source');
+});
+
+test('GET /api/runs scopes enterprise_admin to current department', async () => {
+  let capturedParams = null;
+
+  const app = createAuthedApp({
+    user: { id: 7, role: 'enterprise_admin', department_id: 12 },
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: { async listSchedules() { return []; } },
+      agent: {
+        async listRuns(params) {
+          capturedParams = params;
+          return { items: [], pagination: { page: 1, pageSize: 20, total: 0, totalPages: 0 } };
+        },
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return {}; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; }
+      }
+    }
+  });
+
+  const response = await request(app).get('/api/runs');
+
+  assert.equal(response.status, 200);
+  assert.equal(capturedParams.hrAccountId, undefined);
+  assert.equal(capturedParams.departmentId, 12);
+});
+
+test('GET /api/runs supports pagination parameters', async () => {
+  let capturedParams = null;
+
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: { async listSchedules() { return []; } },
+      agent: {
+        async listRuns(params) {
+          capturedParams = params;
+          return {
+            items: [{ id: 1, run_key: 'run-page2', mode: 'source', status: 'completed' }],
+            pagination: { page: 2, pageSize: 10, total: 25, totalPages: 3 }
+          };
+        },
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return {}; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; }
+      }
+    },
+    config: { agentToken: 'test' }
+  });
+
+  const response = await request(app).get('/api/runs?page=2&pageSize=10');
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.pagination.page, 2);
+  assert.equal(response.body.pagination.pageSize, 10);
+  assert.equal(response.body.pagination.total, 25);
+  assert.equal(response.body.pagination.totalPages, 3);
+  assert.equal(capturedParams.page, 2);
+  assert.equal(capturedParams.pageSize, 10);
+});
+
+test('GET /api/runs returns empty list when no runs exist', async () => {
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: { async listSchedules() { return []; } },
+      agent: {
+        async listRuns() {
+          return { items: [], pagination: { page: 1, pageSize: 20, total: 0, totalPages: 0 } };
+        },
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return {}; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; }
+      }
+    },
+    config: { agentToken: 'test' }
+  });
+
+  const response = await request(app).get('/api/runs');
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.items.length, 0);
+  assert.equal(response.body.pagination.total, 0);
+  assert.equal(response.body.pagination.totalPages, 0);
+});
+
+test('GET /api/runs clamps pageSize to valid range', async () => {
+  let capturedParams = null;
+
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: { async listSchedules() { return []; } },
+      agent: {
+        async listRuns(params) {
+          capturedParams = params;
+          return { items: [], pagination: { page: 1, pageSize: params.pageSize, total: 0, totalPages: 0 } };
+        },
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return {}; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; }
+      }
+    },
+    config: { agentToken: 'test' }
+  });
+
+  const response = await request(app).get('/api/runs?pageSize=999');
+  assert.equal(response.status, 200);
+  assert.equal(capturedParams.pageSize, 100);
+});
+
+test('GET /api/runs/:runId rejects detail access outside department scope', async () => {
+  const app = createAuthedApp({
+    user: { id: 3, role: 'enterprise_admin', department_id: 10 },
+    pool: createRunAccessPool({ hr_account_id: 21, department_id: 99 }),
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: { async listSchedules() { return []; } },
+      agent: {
+        async getRun() {
+          return { id: 33, status: 'completed', mode: 'sync_jobs' };
+        }
+      }
+    }
+  });
+
+  const response = await request(app).get('/api/runs/33');
+
+  assert.equal(response.status, 403);
+  assert.equal(response.body.error, 'forbidden');
+});
+
+test('GET /api/runs/:runId/events rejects access to other HR run', async () => {
+  const app = createAuthedApp({
+    user: { id: 9, role: 'hr', department_id: 10, hr_account_id: 5 },
+    pool: createRunAccessPool({ hr_account_id: 8, department_id: 10 }),
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: { async listSchedules() { return []; } },
+      agent: {
+        async listRunEvents() {
+          return { items: [{ id: 1 }] };
+        }
+      }
+    }
+  });
+
+  const response = await request(app).get('/api/runs/33/events');
+
+  assert.equal(response.status, 403);
+  assert.equal(response.body.error, 'forbidden');
 });

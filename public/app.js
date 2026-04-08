@@ -89,7 +89,13 @@ const state = {
   adminUsers: [],
   adminHrAccounts: [],
   adminBossAccounts: [],
-  adminBrowserInstances: []
+  adminBrowserInstances: [],
+  taskRuns: [],
+  taskRunsPagination: { page: 1, pageSize: 20, total: 0, totalPages: 0 },
+  taskRunsFilter: { status: '', mode: '' },
+  taskRunsLoading: false,
+  taskRunsLoaded: false,
+  taskRunDetail: { open: false, runId: null, loading: false, error: '', events: [], run: null }
 };
 
 const {
@@ -194,6 +200,7 @@ const titles = {
   jobs: ['职位管理', '职位招聘执行情况', '统一查看职位需求、城市分布与当前转化效率。'],
   candidates: ['候选人管理', '候选人全流程跟进', '围绕人才状态、简历获取与入站行为进行管理。'],
   automation: ['自动化调度', '任务调度与执行监控', '关注自动化任务编排、执行节奏与系统承接能力。'],
+  'task-runs': ['任务列表', '任务执行记录', '查看所有定时任务与手动任务的执行详情与状态。'],
   health: ['系统状态', '系统运行健康中心', '查看平台服务、数据库连接与自动化能力现状。']
 };
 
@@ -218,6 +225,7 @@ function getNavItems() {
       { view: 'admin-overview', title: 'HR 概览', desc: '查看本部门 HR 业务数据' },
       { view: 'jobs', title: '职位管理', desc: '部门职位与转化情况' },
       { view: 'candidates', title: '候选人管理', desc: '部门候选人跟踪' },
+      { view: 'task-runs', title: '任务列表', desc: '查看任务执行记录与详情' },
       { view: 'admin-org', title: 'HR 管理', desc: '管理本部门 HR 账号' },
       { view: 'health', title: '系统状态', desc: '监控服务与运行健康度' }
     ];
@@ -227,6 +235,7 @@ function getNavItems() {
     { view: 'jobs', title: '职位管理', desc: '统一管理职位与转化情况' },
     { view: 'candidates', title: '候选人管理', desc: '跟踪候选人阶段与简历状态' },
     { view: 'automation', title: '自动化调度', desc: '查看任务编排与执行情况' },
+    { view: 'task-runs', title: '任务列表', desc: '查看任务执行记录与详情' },
     { view: 'health', title: '系统状态', desc: '监控服务与运行健康度' }
   ];
 }
@@ -1097,6 +1106,14 @@ function render() {
   if (state.view === 'automation') {
     app.innerHTML = renderAutomation();
     restoreSyncLogScroll(syncLogScrollSnapshot);
+    return;
+  }
+
+  if (state.view === 'task-runs') {
+    if (!state.taskRunsLoaded && !state.taskRunsLoading) {
+      loadTaskRuns();
+    }
+    app.innerHTML = renderTaskRuns();
     return;
   }
 
@@ -3770,6 +3787,287 @@ async function deleteSchedule(id) {
   } catch (error) {
     alert(`删除失败：${error.message}`);
   }
+}
+
+async function loadTaskRuns(page) {
+  state.taskRunsLoading = true;
+  render();
+  try {
+    const p = page || state.taskRunsPagination.page;
+    const params = new URLSearchParams({
+      page: p,
+      pageSize: state.taskRunsPagination.pageSize
+    });
+    if (state.taskRunsFilter.status) params.set('status', state.taskRunsFilter.status);
+    if (state.taskRunsFilter.mode) params.set('mode', state.taskRunsFilter.mode);
+    const data = await fetchJson('/api/runs?' + params.toString());
+    state.taskRuns = data.items;
+    state.taskRunsPagination = data.pagination;
+  } catch (err) {
+    state.taskRuns = [];
+  } finally {
+    state.taskRunsLoading = false;
+    state.taskRunsLoaded = true;
+    render();
+  }
+}
+
+function changeTaskRunsPage(page) {
+  state.taskRunsPagination.page = page;
+  loadTaskRuns(page);
+}
+
+function changeTaskRunsFilter(field, value) {
+  state.taskRunsFilter[field] = value;
+  state.taskRunsPagination.page = 1;
+  loadTaskRuns(1);
+}
+
+async function openTaskRunDetail(runId) {
+  state.taskRunDetail = { open: true, runId, loading: true, error: '', events: [], run: null };
+  render();
+  try {
+    const [runData, eventsData] = await Promise.allSettled([
+      fetchJson('/api/runs/' + runId),
+      fetchJson('/api/runs/' + runId + '/events')
+    ]);
+
+    if (runData.status === 'fulfilled') {
+      state.taskRunDetail.run = runData.value.item;
+    } else {
+      state.taskRunDetail.error = runData.reason?.message || '加载任务详情失败，请稍后重试。';
+    }
+
+    if (eventsData.status === 'fulfilled') {
+      state.taskRunDetail.events = eventsData.value.items || [];
+    } else {
+      state.taskRunDetail.error = state.taskRunDetail.error || eventsData.reason?.message || '加载执行事件失败，请稍后重试。';
+      state.taskRunDetail.events = [];
+    }
+  } finally {
+    state.taskRunDetail.loading = false;
+    render();
+  }
+}
+
+function closeTaskRunDetail() {
+  state.taskRunDetail = { open: false, runId: null, loading: false, error: '', events: [], run: null };
+  render();
+}
+
+function formatDuration(startedAt, completedAt) {
+  if (!startedAt) return '-';
+  const start = new Date(startedAt);
+  const end = completedAt ? new Date(completedAt) : new Date();
+  const diff = Math.floor((end - start) / 1000);
+  if (diff < 60) return diff + ' 秒';
+  if (diff < 3600) return Math.floor(diff / 60) + ' 分 ' + (diff % 60) + ' 秒';
+  return Math.floor(diff / 3600) + ' 时 ' + Math.floor((diff % 3600) / 60) + ' 分';
+}
+
+function renderTaskRunStatusBadge(status) {
+  const map = {
+    running: ['执行中', 'badge-warning'],
+    completed: ['已完成', 'badge-success'],
+    failed: ['失败', 'badge-danger'],
+    stopped: ['已停止', 'badge-warning'],
+    pending: ['等待中', ''],
+    queued: ['排队中', '']
+  };
+  const [label, cls] = map[status] || [status, ''];
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+
+function renderTaskRunTriggerBadge(scheduledJobId) {
+  if (scheduledJobId) {
+    return '<span class="badge">定时触发</span>';
+  }
+  return '<span class="badge badge-info">手动触发</span>';
+}
+
+function renderTaskRuns() {
+  const runs = state.taskRuns || [];
+  const { page, totalPages, total } = state.taskRunsPagination;
+
+  const statusOptions = [
+    { value: '', label: '全部状态' },
+    { value: 'running', label: '执行中' },
+    { value: 'completed', label: '已完成' },
+    { value: 'failed', label: '失败' },
+    { value: 'stopped', label: '已停止' },
+    { value: 'pending', label: '等待中' }
+  ];
+
+  const modeOptions = [
+    { value: '', label: '全部类型' },
+    { value: 'source', label: '寻源打招呼' },
+    { value: 'followup', label: '主动沟通拉简历' },
+    { value: 'chat', label: '主动沟通' },
+    { value: 'download', label: '简历下载' },
+    { value: 'sync_jobs', label: '职位同步' }
+  ];
+
+  const paginationHtml = totalPages > 1 ? `
+    <div class="pagination">
+      <button class="button-secondary button-compact" ${page <= 1 ? 'disabled' : ''} onclick="changeTaskRunsPage(${page - 1})">上一页</button>
+      <span class="pagination-info">第 ${page} / ${totalPages} 页，共 ${total} 条</span>
+      <button class="button-secondary button-compact" ${page >= totalPages ? 'disabled' : ''} onclick="changeTaskRunsPage(${page + 1})">下一页</button>
+    </div>
+  ` : (total > 0 ? `<div class="pagination"><span class="pagination-info">共 ${total} 条记录</span></div>` : '');
+
+  return `
+    <section class="table-card">
+      <div class="card-header">
+        <div>
+          <p class="eyebrow">执行记录</p>
+          <h3 class="card-title">任务执行列表</h3>
+          <p class="card-subtitle">查看所有定时任务与手动任务的执行记录、状态与结果。</p>
+        </div>
+        <div class="jobs-header-actions">
+          <select onchange="changeTaskRunsFilter('status', this.value)" style="margin-right:8px">
+            ${statusOptions.map(o => `<option value="${o.value}" ${state.taskRunsFilter.status === o.value ? 'selected' : ''}>${o.label}</option>`).join('')}
+          </select>
+          <select onchange="changeTaskRunsFilter('mode', this.value)" style="margin-right:8px">
+            ${modeOptions.map(o => `<option value="${o.value}" ${state.taskRunsFilter.mode === o.value ? 'selected' : ''}>${o.label}</option>`).join('')}
+          </select>
+          <button class="button-secondary" onclick="loadTaskRuns()">刷新</button>
+        </div>
+      </div>
+      ${state.taskRunsLoading ? '<div class="empty-state">加载中...</div>' : ''}
+      ${!state.taskRunsLoading && runs.length === 0 ? '<div class="empty-state">暂无任务执行记录。</div>' : ''}
+      ${!state.taskRunsLoading && runs.length > 0 ? `
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>职位</th>
+              <th>任务类型</th>
+              <th>触发方式</th>
+              <th>状态</th>
+              <th>候选人数</th>
+              <th>事件数</th>
+              <th>开始时间</th>
+              <th>耗时</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${runs.map(run => `
+              <tr>
+                <td>${run.id}</td>
+                <td>${escapeHtml(run.job_name || run.job_key || '-')}</td>
+                <td>${escapeHtml(formatTaskType(run.mode))}</td>
+                <td>${renderTaskRunTriggerBadge(run.scheduled_job_id)}</td>
+                <td>${renderTaskRunStatusBadge(run.status)}</td>
+                <td>${run.candidate_count || 0}</td>
+                <td>${run.event_count || 0}</td>
+                <td>${formatDateTime(run.started_at || run.created_at)}</td>
+                <td>${formatDuration(run.started_at, run.completed_at)}</td>
+                <td>
+                  <button class="button-secondary button-compact" onclick="openTaskRunDetail(${run.id})">详情</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        ${paginationHtml}
+      ` : ''}
+    </section>
+    ${renderTaskRunDetailModal()}
+  `;
+}
+
+function renderTaskRunDetailModal() {
+  if (!state.taskRunDetail.open) return '';
+
+  const { run, events, loading, error } = state.taskRunDetail;
+
+  const eventsHtml = loading
+    ? '<div class="empty-state">加载中...</div>'
+    : error
+      ? `<div class="empty-state">${escapeHtml(error)}</div>`
+    : events.length === 0
+      ? '<div class="empty-state">暂无执行事件。</div>'
+      : `
+        <div class="task-run-events-list">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>阶段</th>
+                <th>类型</th>
+                <th>内容</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${events.map(evt => `
+                <tr>
+                  <td style="white-space:nowrap">${formatDateTime(evt.occurredAt)}</td>
+                  <td>${escapeHtml(evt.stage || '-')}</td>
+                  <td><span class="badge">${escapeHtml(evt.eventType || '-')}</span></td>
+                  <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(evt.message || '-')}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+
+  const runInfo = run ? `
+    <div class="schedule-form-grid" style="margin-bottom:16px">
+      <div class="form-field">
+        <span class="form-label">任务 ID</span>
+        <div class="schedule-view-value">${run.id || state.taskRunDetail.runId}</div>
+      </div>
+      <div class="form-field">
+        <span class="form-label">任务类型</span>
+        <div class="schedule-view-value">${escapeHtml(formatTaskType(run.mode))}</div>
+      </div>
+      <div class="form-field">
+        <span class="form-label">状态</span>
+        <div class="schedule-view-value">${renderTaskRunStatusBadge(run.status)}</div>
+      </div>
+      <div class="form-field">
+        <span class="form-label">尝试次数</span>
+        <div class="schedule-view-value">${run.attemptCount || 0}</div>
+      </div>
+      <div class="form-field">
+        <span class="form-label">开始时间</span>
+        <div class="schedule-view-value">${formatDateTime(run.startedAt)}</div>
+      </div>
+      <div class="form-field">
+        <span class="form-label">完成时间</span>
+        <div class="schedule-view-value">${formatDateTime(run.completedAt)}</div>
+      </div>
+      <div class="form-field">
+        <span class="form-label">耗时</span>
+        <div class="schedule-view-value">${formatDuration(run.startedAt, run.completedAt)}</div>
+      </div>
+      <div class="form-field">
+        <span class="form-label">创建时间</span>
+        <div class="schedule-view-value">${formatDateTime(run.createdAt)}</div>
+      </div>
+    </div>
+  ` : '';
+
+  return `
+    <div class="modal-backdrop" onclick="closeTaskRunDetail()">
+      <section class="sync-modal schedule-modal" onclick="event.stopPropagation()" style="max-width:900px;max-height:85vh;overflow-y:auto">
+        <div class="card-header">
+          <div>
+            <p class="eyebrow">执行详情</p>
+            <h3 class="card-title">任务 #${state.taskRunDetail.runId} 执行记录</h3>
+          </div>
+          <button class="button-secondary button-muted" onclick="closeTaskRunDetail()">关闭</button>
+        </div>
+        ${runInfo}
+        <div>
+          <h4 style="margin:0 0 8px 0;font-size:14px;color:var(--text-secondary,#666)">执行事件 (${events.length})</h4>
+          ${eventsHtml}
+        </div>
+      </section>
+    </div>
+  `;
 }
 
 function renderHealth() {

@@ -179,6 +179,7 @@ button {
   background: #fff !important;
   box-shadow: 0 8px 18px rgba(31, 94, 255, 0.08) !important;
   font-weight: 600;
+  white-space: nowrap;
   transition: all 0.2s ease;
 }
 
@@ -1893,4 +1894,33 @@ input[type="time"]:focus {
   color: var(--accent, #1f5eff);
   font-weight: 500;
   vertical-align: middle;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 0 4px;
+}
+
+.pagination-info {
+  font-size: 13px;
+  color: var(--text-secondary, #64748b);
+}
+
+.badge-info {
+  background: rgba(59, 130, 246, 0.12);
+  color: #3b82f6;
+}
+
+.task-run-events-list {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.task-run-events-list .data-table td {
+  font-size: 12px;
+  padding: 6px 10px;
 }

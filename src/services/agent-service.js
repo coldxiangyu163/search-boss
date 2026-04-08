@@ -1157,6 +1157,78 @@ class AgentService {
     return result.rows[0]?.status || null;
   }
 
+  async listRuns({ hrAccountId, departmentId, status, mode, page = 1, pageSize = 20 } = {}) {
+    const conditions = [];
+    const values = [];
+
+    if (hrAccountId) {
+      values.push(hrAccountId);
+      conditions.push(`sr.hr_account_id = $${values.length}`);
+    } else if (departmentId) {
+      values.push(departmentId);
+      conditions.push(`ha.department_id = $${values.length}`);
+    }
+    if (status) {
+      values.push(status);
+      conditions.push(`sr.status = $${values.length}`);
+    }
+    if (mode) {
+      values.push(mode);
+      conditions.push(`sr.mode = $${values.length}`);
+    }
+
+    const whereClause = conditions.length ? 'where ' + conditions.join(' and ') : '';
+    const offset = (page - 1) * pageSize;
+
+    const countResult = await this.pool.query(`
+      select count(*)::int as total
+      from sourcing_runs sr
+      left join hr_accounts ha on ha.id = sr.hr_account_id
+      ${whereClause}
+    `, values);
+
+    const total = countResult.rows[0]?.total || 0;
+
+    const queryValues = [...values, pageSize, offset];
+    const result = await this.pool.query(`
+      select
+        sr.id,
+        sr.run_key,
+        sr.mode,
+        sr.status,
+        sr.attempt_count,
+        sr.started_at,
+        sr.completed_at,
+        sr.created_at,
+        sr.hr_account_id,
+        j.job_key,
+        j.job_name,
+        ha.name as hr_name,
+        sjr.scheduled_job_id,
+        sj.cron_expression,
+        (select count(*)::int from sourcing_run_events where run_id = sr.id) as event_count,
+        (select count(*)::int from job_candidates where source_run_id = sr.id) as candidate_count
+      from sourcing_runs sr
+      left join jobs j on j.id = sr.job_id
+      left join hr_accounts ha on ha.id = sr.hr_account_id
+      left join scheduled_job_runs sjr on sjr.run_id = sr.id
+      left join scheduled_jobs sj on sj.id = sjr.scheduled_job_id
+      ${whereClause}
+      order by sr.created_at desc
+      limit $${queryValues.length - 1} offset $${queryValues.length}
+    `, queryValues);
+
+    return {
+      items: result.rows,
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize)
+      }
+    };
+  }
+
   async getRun(runId) {
     const result = await this.pool.query(
       `
