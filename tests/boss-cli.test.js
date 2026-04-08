@@ -188,7 +188,7 @@ test('joblist reads all jobs through data/list API using the bound target', asyn
   assert.equal(calls[0].targetId, 'boss-1');
   assert.equal(
     calls[0].url,
-    'https://www.zhipin.com/wapi/zpjob/job/data/list'
+    'https://www.zhipin.com/wapi/zpjob/job/data/list?type=5'
   );
   assert.equal(payload.jobs[0].jobName, '健康顾问');
   assert.equal(payload.jobs[0].salary, '8-10K');

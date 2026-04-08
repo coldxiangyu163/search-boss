@@ -136,7 +136,7 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
       cdpClient,
       targetId: session.targetId,
       urlPrefix: config.bossCdpTargetUrlPrefix,
-      url: 'https://www.zhipin.com/wapi/zpjob/job/data/list'
+      url: 'https://www.zhipin.com/wapi/zpjob/job/data/list?type=5'
     });
 
     return {
