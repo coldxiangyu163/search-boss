@@ -117,6 +117,7 @@ class ChromeLauncher {
     const running = await this.isRunning();
     if (running) {
       console.log(`[chrome-launcher] Chrome already running at ${this.cdpEndpoint}`);
+      await this._ensureBossPage();
       return { started: false, alreadyRunning: true };
     }
 
@@ -130,7 +131,7 @@ class ChromeLauncher {
     await this._killViaCdp();
     await new Promise((resolve) => setTimeout(resolve, 1500));
     this._ensureDisplay();
-    return this._launch({ openBossPage: true });
+    return this._launch();
   }
 
   async _killViaCdp() {
@@ -204,7 +205,7 @@ class ChromeLauncher {
     console.log(`[chrome-launcher] Xvfb started, DISPLAY=${display} (pid ${this._xvfbProcess.pid})`);
   }
 
-  async _launch({ openBossPage = false } = {}) {
+  async _launch() {
     const args = [
       `--remote-debugging-port=${this.port}`,
       `--user-data-dir=${this.userDataDir}`,
@@ -251,9 +252,7 @@ class ChromeLauncher {
 
       await this._waitForReady();
       console.log(`[chrome-launcher] Chrome started successfully on port ${this.port}`);
-      if (openBossPage) {
-        await this._ensureBossPage();
-      }
+      await this._ensureBossPage();
       return { started: true, alreadyRunning: false, pid: this._process?.pid };
     } catch (err) {
       console.error(`[chrome-launcher] Failed to start Chrome: ${err.message}`);
