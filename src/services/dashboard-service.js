@@ -12,7 +12,7 @@ class DashboardService {
     const resumeFilter = hrAccountId
       ? `where resume_state in ('requested', 'received') and hr_account_id = ${Number(hrAccountId)}`
       : `where resume_state in ('requested', 'received')`;
-    const activeRunFilter = hrAccountId ? `where sr.hr_account_id = ${Number(hrAccountId)} and sr.status in ('pending', 'running')` : `where sr.status in ('pending', 'running')`;
+    const activeRunFilter = hrAccountId ? `and ba.hr_account_id = ${Number(hrAccountId)}` : '';
 
     const [jobsResult, candidatesResult, resumeQueueResult, recruitResult, activeRunResult] = await Promise.all([
       this.pool.query(`select count(*)::int as count from jobs ${jobFilter}`),
@@ -37,9 +37,15 @@ class DashboardService {
           j.job_name as "jobName",
           sr.started_at as "startedAt",
           sr.created_at as "createdAt"
-        from sourcing_runs sr
+        from browser_instances bi
+        join boss_accounts ba on ba.id = bi.boss_account_id
+        join sourcing_runs sr on sr.id = bi.current_run_id
         left join jobs j on j.id = sr.job_id
-        ${activeRunFilter}
+        where ba.status = 'active'
+          and bi.status = 'busy'
+          and bi.current_run_id is not null
+          and sr.status in ('pending', 'running')
+          ${activeRunFilter}
         order by
           case sr.status when 'running' then 0 else 1 end,
           coalesce(sr.started_at, sr.created_at) desc,

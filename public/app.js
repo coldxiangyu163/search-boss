@@ -366,17 +366,8 @@ function normalizeRunForConsole(run) {
 }
 
 async function fetchLatestActiveRunForConsole() {
-  const statuses = ['running', 'pending'];
-
-  for (const status of statuses) {
-    const result = await fetchJson(`/api/runs?status=${encodeURIComponent(status)}&page=1&pageSize=1`);
-    const item = result.items?.[0];
-    if (item) {
-      return normalizeRunForConsole(item);
-    }
-  }
-
-  return null;
+  const summary = await fetchJson('/api/dashboard/summary');
+  return normalizeRunForConsole(summary?.activeRun || null);
 }
 
 function getTaskMeta(taskType) {

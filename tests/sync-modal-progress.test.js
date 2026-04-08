@@ -269,7 +269,7 @@ test('openHrLiveView binds current active run instead of standby view', () => {
   assert.equal(result.startSyncPollingCalled, true);
 });
 
-test('openHrLiveView fetches latest active run when summary cache is stale', async () => {
+test('openHrLiveView refreshes dashboard summary to get latest active run when summary cache is stale', async () => {
   const helperScript = fs.readFileSync(
     path.join(__dirname, '../public/sync-modal-progress.js'),
     'utf8'
@@ -312,26 +312,20 @@ test('openHrLiveView fetches latest active run when summary cache is stale', asy
       body: { appendChild: noop }
     },
     fetch: async (url) => {
-      if (String(url).startsWith('/api/runs?status=running')) {
+      if (String(url) === '/api/dashboard/summary') {
         return {
           ok: true,
           json: async () => ({
-            items: [{
+            activeRun: {
               id: 77,
               mode: 'followup',
               status: 'running',
-              job_key: 'job-77',
-              job_name: '销售顾问',
-              started_at: '2026-04-08T11:00:00.000Z',
-              created_at: '2026-04-08T10:59:00.000Z'
-            }]
+              jobKey: 'job-77',
+              jobName: '销售顾问',
+              startedAt: '2026-04-08T11:00:00.000Z',
+              createdAt: '2026-04-08T10:59:00.000Z'
+            }
           })
-        };
-      }
-      if (String(url).startsWith('/api/runs?status=pending')) {
-        return {
-          ok: true,
-          json: async () => ({ items: [] })
         };
       }
       throw new Error(`unexpected fetch: ${url}`);
@@ -367,6 +361,90 @@ test('openHrLiveView fetches latest active run when summary cache is stale', asy
   assert.equal(result.taskType, 'followup');
   assert.equal(result.label, '主动沟通拉简历');
   assert.equal(result.startSyncPollingCalled, true);
+});
+
+test('openHrLiveView stays in standby when refreshed dashboard summary has no active run', async () => {
+  const helperScript = fs.readFileSync(
+    path.join(__dirname, '../public/sync-modal-progress.js'),
+    'utf8'
+  );
+  const appScript = fs.readFileSync(
+    path.join(__dirname, '../public/app.js'),
+    'utf8'
+  );
+
+  const noop = () => {};
+  const context = vm.createContext({
+    window: {
+      JobUiHelpers: {
+        formatJobStatus: noop,
+        getJobStatusBadgeClass: noop,
+        isJobActionEnabled: noop
+      },
+      CandidateUiHelpers: {
+        formatLifecycleStatus: noop,
+        formatResumeState: noop,
+        formatGuardStatus: noop,
+        getLifecycleBadgeClass: noop,
+        getResumeBadgeClass: noop,
+        getGuardBadgeClass: noop,
+        buildCandidateTimeline: noop,
+        buildResumePreviewUrl: noop
+      },
+      SyncLogScroll: {
+        captureSyncLogScrollSnapshot: noop,
+        resolveSyncLogScrollTop: noop
+      },
+      setInterval: noop,
+      clearInterval: noop,
+      location: { href: '' }
+    },
+    document: {
+      addEventListener: noop,
+      getElementById: noop,
+      querySelector: noop,
+      body: { appendChild: noop }
+    },
+    fetch: async (url) => {
+      if (String(url) === '/api/dashboard/summary') {
+        return {
+          ok: true,
+          json: async () => ({ activeRun: null })
+        };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    },
+    module: undefined,
+    console
+  });
+
+  vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+  vm.runInContext(appScript, context, { filename: 'app.js' });
+  vm.runInContext(`
+    render = () => {};
+    startLiveViewPolling = () => {};
+    stopSyncPolling = () => {};
+    startSyncPollingCalled = false;
+    startSyncPolling = () => { startSyncPollingCalled = true; };
+    state.currentUser = { hrAccountId: 7 };
+    state.summary = { activeRun: null };
+  `, context);
+
+  await vm.runInContext('openHrLiveView()', context);
+
+  const result = vm.runInContext(`({
+    runId: state.syncModal.runId,
+    status: state.syncModal.status,
+    taskType: state.syncModal.taskType,
+    isStandby: isRuntimeConsoleStandby(),
+    startSyncPollingCalled
+  })`, context);
+
+  assert.equal(result.runId, null);
+  assert.equal(result.status, 'idle');
+  assert.equal(result.taskType, 'browser_live');
+  assert.equal(result.isStandby, true);
+  assert.equal(result.startSyncPollingCalled, false);
 });
 
 test('manageOverviewPolling starts realtime refresh on overview views only', () => {

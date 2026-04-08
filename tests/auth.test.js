@@ -291,7 +291,7 @@ test('DashboardService.getSummary returns current active run for hrAccountId', a
       if (sql.includes('boss_recruit_snapshots')) {
         return { rows: [] };
       }
-      if (sql.includes('from sourcing_runs sr')) {
+      if (sql.includes('from browser_instances bi')) {
         return {
           rows: [{
             id: 41,
@@ -316,6 +316,35 @@ test('DashboardService.getSummary returns current active run for hrAccountId', a
   assert.equal(summary.activeRun.mode, 'source');
   assert.equal(summary.activeRun.status, 'running');
   assert.equal(summary.activeRun.jobKey, 'job-1');
+});
+
+test('DashboardService.getSummary ignores stale running runs when browser instance is idle', async () => {
+  const { DashboardService } = require('../src/services/dashboard-service');
+  const mockPool = {
+    query(sql) {
+      if (sql.includes('from jobs')) {
+        return { rows: [{ count: 2 }] };
+      }
+      if (sql.includes('from job_candidates jc')) {
+        return { rows: [{ count: 8 }] };
+      }
+      if (sql.includes('resume_state in')) {
+        return { rows: [{ count: 1 }] };
+      }
+      if (sql.includes('boss_recruit_snapshots')) {
+        return { rows: [] };
+      }
+      if (sql.includes('from browser_instances bi')) {
+        return { rows: [] };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    }
+  };
+
+  const svc = new DashboardService({ pool: mockPool });
+  const summary = await svc.getSummary({ hrAccountId: 5 });
+
+  assert.equal(summary.activeRun, null);
 });
 
 test('authMiddleware rejects when no session', async () => {
