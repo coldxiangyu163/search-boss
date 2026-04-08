@@ -142,6 +142,11 @@ function makeCandidateList(items) {
     candidates: items.map((item, i) => ({
       index: i,
       geekId: item.geekId || `geek-${i + 1}`,
+      name: item.name || `候选人${i + 1}`,
+      salary: item.salary || '8-9K',
+      city: item.city || '重庆',
+      education: item.education || '本科',
+      experience: item.experience || '3年',
       text: item.text || `8-9K ${item.name || `候选人${i + 1}`} 3年经验 重庆 面点师 工作经历 教育经历`,
       alreadyChatting: item.alreadyChatting || false,
       hasGreetBtn: item.hasGreetBtn !== false,

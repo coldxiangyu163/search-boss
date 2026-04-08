@@ -1954,6 +1954,21 @@ function buildInspectRecommendListExpression({ limit = 10 }) {
         const geekId = inner?.getAttribute('data-geekid') || inner?.getAttribute('data-geek') || '';
         const text = (wrap.innerText || '').replace(/\\s+/g, ' ').trim();
 
+        // Extract structured fields from DOM
+        const nameEl = wrap.querySelector('.name-wrap .name');
+        const name = nameEl ? (nameEl.textContent || '').trim() : '';
+        const salaryEl = wrap.querySelector('.salary-wrap span');
+        const salary = salaryEl ? (salaryEl.textContent || '').trim() : '';
+        const expectContent = wrap.querySelector('.expect-wrap .content');
+        const expectSpans = expectContent ? expectContent.querySelectorAll('span') : [];
+        const city = expectSpans.length ? (expectSpans[0].textContent || '').trim() : '';
+        const baseInfoEl = wrap.querySelector('.base-info');
+        const baseText = baseInfoEl ? (baseInfoEl.textContent || '').trim() : '';
+        const eduMatch = baseText.match(/(本科|大专|硕士|博士)/);
+        const education = eduMatch ? eduMatch[1] : '';
+        const expMatch = baseText.match(/(\\d+年(?:以上)?)/);
+        const experience = expMatch ? expMatch[1] : '';
+
         // Find greet button in the full wrap (not just card-inner)
         const greetBtn = wrap.querySelector('button.btn-greet, .btn-greet, .button-chat .btn-doc');
         const greetBtnText = greetBtn ? (greetBtn.textContent || '').trim() : '';
@@ -1976,6 +1991,11 @@ function buildInspectRecommendListExpression({ limit = 10 }) {
         candidates.push({
           index: i,
           geekId,
+          name,
+          salary,
+          city,
+          education,
+          experience,
           text: text.slice(0, 1500),
           alreadyChatting,
           hasGreetBtn,

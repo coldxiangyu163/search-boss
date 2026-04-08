@@ -325,8 +325,14 @@ class SourceLoopService {
   async #processCandidate({ runId, jobKey, jobRequirement, customRequirement, enterpriseKnowledge, candidate, stats, runner }) {
     const bossEncryptGeekId = candidate.geekId;
     const candidateText = candidate.text || '';
-    const parsed = parseCardText(candidateText);
-    const candidateName = parsed.name;
+    const candidateName = candidate.name || parseCardText(candidateText).name;
+    const parsed = {
+      name: candidateName,
+      city: candidate.city || '',
+      education: candidate.education || '',
+      experience: candidate.experience || '',
+      school: candidate.school || ''
+    };
 
     if (!bossEncryptGeekId) {
       stats.errors += 1;
