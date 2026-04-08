@@ -1653,6 +1653,11 @@ input[type="time"]:focus {
   gap: 12px;
 }
 
+.runtime-console-panel-head > div {
+  min-width: 0;
+  flex: 1;
+}
+
 .runtime-console-panel-head .card-title {
   margin: 4px 0 0;
   font-size: 20px;
@@ -1661,6 +1666,21 @@ input[type="time"]:focus {
 .runtime-console-panel-head .card-subtitle {
   margin-top: 6px;
   max-width: 320px;
+}
+
+.runtime-console-panel-head--logs {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.runtime-console-panel-head--logs .sync-log-toggle {
+  width: auto;
+  justify-self: start;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(31, 94, 255, 0.16);
+  box-shadow: none;
 }
 
 .runtime-console-metrics {

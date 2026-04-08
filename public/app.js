@@ -4447,31 +4447,14 @@ function renderSyncLiveLogsContent() {
         </div>
       </section>
       ${state.syncModal.error ? `<div class="inline-status inline-status-error">${escapeHtml(state.syncModal.error)}</div>` : ''}
-      <section class="runtime-console-panel">
-        <div class="runtime-console-panel-head">
-          <div>
-            <p class="eyebrow">${isStandby ? '当前页面' : '执行轨迹'}</p>
-            <h4 class="card-title">${isStandby ? '页面与处理提示' : '任务阶段'}</h4>
-          </div>
-        </div>
-        ${isStandby ? `
-          <div class="runtime-console-idle-list">
-            <div class="runtime-console-idle-item">
-              <span class="runtime-console-idle-dot"></span>
-              <div>
-                <div class="list-title">先看页面是否正常可操作</div>
-                <div class="list-desc">确认登录状态、弹窗、异常遮罩或停留页是否需要人工处理。</div>
-              </div>
-            </div>
-            <div class="runtime-console-idle-item">
-              <span class="runtime-console-idle-dot"></span>
-              <div>
-                <div class="list-title">任务触发后复用同一控制台</div>
-                <div class="list-desc">后续若从调度发起任务，这里会直接显示任务阶段、日志与停止操作。</div>
-              </div>
+      ${isStandby ? '' : `
+        <section class="runtime-console-panel">
+          <div class="runtime-console-panel-head">
+            <div>
+              <p class="eyebrow">执行轨迹</p>
+              <h4 class="card-title">任务阶段</h4>
             </div>
           </div>
-        ` : `
           <div class="sync-timeline">
             ${buildSyncStages().map((item) => `
               <div class="sync-timeline-item ${item.active ? 'is-active' : ''} ${item.done ? 'is-done' : ''}">
@@ -4483,10 +4466,10 @@ function renderSyncLiveLogsContent() {
               </div>
             `).join('')}
           </div>
-        `}
-      </section>
+        </section>
+      `}
       <section class="runtime-console-panel runtime-console-panel--logs">
-        <div class="runtime-console-panel-head">
+        <div class="runtime-console-panel-head runtime-console-panel-head--logs">
           <div>
             <p class="eyebrow">运行细节</p>
             <h4 class="card-title">详细日志</h4>
