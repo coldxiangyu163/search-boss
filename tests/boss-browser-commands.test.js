@@ -334,7 +334,7 @@ test('sendChatMessage uses native insert text and verifies the outbound message 
   assert.equal(result.sent, true);
   assert.equal(result.verified, true);
   assert.equal(result.method, 'button_click');
-  assert.deepEqual(cdpClient.inserted, ['测试消息']);
+  assert.deepEqual(cdpClient.inserted, ['测', '试', '消', '息']);
 });
 
 test('inspectResumeRequestState reads disabled hint from the request button area', async () => {

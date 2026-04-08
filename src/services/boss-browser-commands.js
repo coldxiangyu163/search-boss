@@ -1516,7 +1516,14 @@ async function sendChatMessage({
   }
 
   if (typeof cdpClient.dispatchInsertText === 'function') {
-    await cdpClient.dispatchInsertText({ targetId, urlPrefix, text });
+    for (let ci = 0; ci < text.length; ci++) {
+      await cdpClient.dispatchInsertText({ targetId, urlPrefix, text: text[ci] });
+      const charDelay = 80 + Math.random() * 120;
+      await new Promise((resolve) => setTimeout(resolve, charDelay));
+      if (ci > 0 && ci % (4 + Math.floor(Math.random() * 4)) === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 200 + Math.random() * 300));
+      }
+    }
   } else {
     const fallbackInsert = await evaluateJson({
       cdpClient, targetId, urlPrefix,
