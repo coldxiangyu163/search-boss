@@ -275,6 +275,49 @@ test('DashboardService.getSummary filters by hrAccountId', async () => {
   assert.ok(queries.some((q) => q.includes('hr_account_id = 5')));
 });
 
+test('DashboardService.getSummary returns current active run for hrAccountId', async () => {
+  const { DashboardService } = require('../src/services/dashboard-service');
+  const mockPool = {
+    query(sql) {
+      if (sql.includes('from jobs')) {
+        return { rows: [{ count: 2 }] };
+      }
+      if (sql.includes('from job_candidates jc')) {
+        return { rows: [{ count: 8 }] };
+      }
+      if (sql.includes('resume_state in')) {
+        return { rows: [{ count: 1 }] };
+      }
+      if (sql.includes('boss_recruit_snapshots')) {
+        return { rows: [] };
+      }
+      if (sql.includes('from sourcing_runs sr')) {
+        return {
+          rows: [{
+            id: 41,
+            runKey: 'source:job-1:123',
+            mode: 'source',
+            status: 'running',
+            jobKey: 'job-1',
+            jobName: '测试岗位',
+            startedAt: '2026-04-08T02:00:00.000Z',
+            createdAt: '2026-04-08T01:59:00.000Z'
+          }]
+        };
+      }
+      return { rows: [] };
+    }
+  };
+
+  const svc = new DashboardService({ pool: mockPool });
+  const summary = await svc.getSummary({ hrAccountId: 5 });
+
+  assert.equal(summary.activeRun.id, 41);
+  assert.equal(summary.activeRun.mode, 'source');
+  assert.equal(summary.activeRun.status, 'running');
+  assert.equal(summary.activeRun.jobKey, 'job-1');
+});
+
 test('authMiddleware rejects when no session', async () => {
   const { authMiddleware } = require('../src/middleware/auth');
   const mockPool = { query() { return { rows: [] }; } };

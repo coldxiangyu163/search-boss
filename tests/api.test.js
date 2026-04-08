@@ -138,6 +138,38 @@ test('GET /api/dashboard/summary includes bossRecruitData when available', async
   assert.equal(response.body.bossRecruitData.quotas.chat.total, 50);
 });
 
+test('GET /api/dashboard/summary returns active run payload when available', async () => {
+  const app = createApp({
+    services: {
+      dashboard: {
+        async getSummary() {
+          return {
+            kpis: { jobs: 5, candidates: 10 },
+            queues: { resumePipeline: 1 },
+            health: { api: 'ok', database: 'connected' },
+            activeRun: {
+              id: 88,
+              mode: 'followup',
+              status: 'running',
+              jobKey: 'job-88',
+              jobName: '销售经理',
+              startedAt: '2026-04-08T10:00:00.000Z',
+              createdAt: '2026-04-08T09:59:00.000Z'
+            }
+          };
+        }
+      }
+    }
+  });
+
+  const response = await request(app).get('/api/dashboard/summary');
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.activeRun.id, 88);
+  assert.equal(response.body.activeRun.mode, 'followup');
+  assert.equal(response.body.activeRun.status, 'running');
+});
+
 test('GET /api/jobs returns job list payload', async () => {
   const app = createApp({
     services: {

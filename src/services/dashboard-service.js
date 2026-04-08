@@ -12,8 +12,9 @@ class DashboardService {
     const resumeFilter = hrAccountId
       ? `where resume_state in ('requested', 'received') and hr_account_id = ${Number(hrAccountId)}`
       : `where resume_state in ('requested', 'received')`;
+    const activeRunFilter = hrAccountId ? `where sr.hr_account_id = ${Number(hrAccountId)} and sr.status in ('pending', 'running')` : `where sr.status in ('pending', 'running')`;
 
-    const [jobsResult, candidatesResult, resumeQueueResult, recruitResult] = await Promise.all([
+    const [jobsResult, candidatesResult, resumeQueueResult, recruitResult, activeRunResult] = await Promise.all([
       this.pool.query(`select count(*)::int as count from jobs ${jobFilter}`),
       this.pool.query(`select count(*)::int as count from job_candidates jc ${candidateFilter}`),
       this.pool.query(`
@@ -25,11 +26,31 @@ class DashboardService {
         hrAccountId
           ? `select metrics, quotas, scraped_at from boss_recruit_snapshots where snapshot_date = current_date and hr_account_id = ${Number(hrAccountId)} limit 1`
           : `select metrics, quotas, scraped_at from boss_recruit_snapshots where snapshot_date = current_date order by scraped_at desc limit 1`
-      )
+      ),
+      this.pool.query(`
+        select
+          sr.id,
+          sr.run_key as "runKey",
+          sr.mode,
+          sr.status,
+          j.job_key as "jobKey",
+          j.job_name as "jobName",
+          sr.started_at as "startedAt",
+          sr.created_at as "createdAt"
+        from sourcing_runs sr
+        left join jobs j on j.id = sr.job_id
+        ${activeRunFilter}
+        order by
+          case sr.status when 'running' then 0 else 1 end,
+          coalesce(sr.started_at, sr.created_at) desc,
+          sr.id desc
+        limit 1
+      `)
     ]);
 
     const recruit = recruitResult.rows[0] || null;
     const metrics = recruit?.metrics || {};
+    const activeRun = activeRunResult.rows[0] || null;
 
     return {
       kpis: {
@@ -55,6 +76,7 @@ class DashboardService {
       queues: {
         resumePipeline: resumeQueueResult.rows[0]?.count || 0
       },
+      activeRun,
       health: {
         api: 'ok',
         database: 'connected'

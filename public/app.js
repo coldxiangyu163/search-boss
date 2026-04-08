@@ -95,8 +95,11 @@ const state = {
   taskRunsFilter: { status: '', mode: '' },
   taskRunsLoading: false,
   taskRunsLoaded: false,
-  taskRunDetail: { open: false, runId: null, loading: false, error: '', events: [], run: null }
+  taskRunDetail: { open: false, runId: null, loading: false, error: '', events: [], run: null },
+  overviewPollTimer: null
 };
+
+const OVERVIEW_POLL_INTERVAL_MS = 5000;
 
 const {
   formatJobStatus,
@@ -259,6 +262,9 @@ function renderSidebarNav() {
       state.view = button.dataset.view;
       renderSidebarNav();
       render();
+      if (shouldPollOverviewView(state.view)) {
+        loadData().catch(() => {});
+      }
     });
   });
 }
@@ -317,6 +323,60 @@ function renderUserInfo() {
 async function handleLogout() {
   await fetch('/api/auth/logout', { method: 'POST' });
   window.location.href = '/login.html';
+}
+
+function shouldPollOverviewView(view) {
+  return view === 'command' || view === 'admin-overview';
+}
+
+function manageOverviewPolling() {
+  if (shouldPollOverviewView(state.view)) {
+    if (!state.overviewPollTimer) {
+      state.overviewPollTimer = window.setInterval(() => {
+        loadData().catch(() => {});
+      }, OVERVIEW_POLL_INTERVAL_MS);
+    }
+    return;
+  }
+
+  if (state.overviewPollTimer) {
+    window.clearInterval(state.overviewPollTimer);
+    state.overviewPollTimer = null;
+  }
+}
+
+function getSummaryActiveRun() {
+  return state.summary?.activeRun || null;
+}
+
+function normalizeRunForConsole(run) {
+  if (!run) {
+    return null;
+  }
+
+  return {
+    id: run.id,
+    mode: run.mode,
+    status: run.status,
+    jobKey: run.jobKey || run.job_key || null,
+    jobName: run.jobName || run.job_name || null,
+    startedAt: run.startedAt || run.started_at || null,
+    createdAt: run.createdAt || run.created_at || null
+  };
+}
+
+async function fetchLatestActiveRunForConsole() {
+  const statuses = ['running', 'pending'];
+
+  for (const status of statuses) {
+    const result = await fetchJson(`/api/runs?status=${encodeURIComponent(status)}&page=1&pageSize=1`);
+    const item = result.items?.[0];
+    if (item) {
+      return normalizeRunForConsole(item);
+    }
+  }
+
+  return null;
 }
 
 function getTaskMeta(taskType) {
@@ -1054,6 +1114,7 @@ async function fetchJson(url, options) {
 }
 
 function render() {
+  manageOverviewPolling();
   const syncLogScrollSnapshot = getSyncLogScrollSnapshot();
   const titleEntry = titles[state.view] || titles['command'];
   const [eyebrow, title, description] = titleEntry;
@@ -1342,6 +1403,13 @@ function applySyncTerminalStatus(terminalStatus) {
 
 function renderBossLoginCard() {
   if (!state.currentUser || !state.currentUser.hrAccountId) return '';
+  const activeRun = getSummaryActiveRun();
+  const subtitle = activeRun
+    ? `当前执行中：${formatTaskType(activeRun.mode)} · ${activeRun.jobName || activeRun.jobKey || `任务 #${activeRun.id}`} · 任务 #${activeRun.id}`
+    : '进入统一运行控制台，查看浏览器画面、当前任务上下文与处理建议。';
+  const statusBadge = activeRun
+    ? `<span class="badge badge-warning">任务 #${activeRun.id} 执行中</span>`
+    : '<span class="badge">待机中</span>';
   return `
     <section class="boss-login-card">
       <div class="card highlight-panel">
@@ -1349,12 +1417,15 @@ function renderBossLoginCard() {
           <div>
             <p class="eyebrow">BOSS 账号</p>
             <h3 class="card-title">浏览器登录状态</h3>
-            <p class="card-subtitle">进入统一运行控制台，查看浏览器画面、当前任务上下文与处理建议。</p>
+            <p class="card-subtitle">${escapeHtml(subtitle)}</p>
           </div>
-          <button class="sync-inline-btn" onclick="openHrLiveView()">
-            <span class="sync-inline-icon">&#128065;</span>
-            <span class="sync-inline-label">打开运行控制台</span>
-          </button>
+          <div style="display:flex;align-items:center;gap:8px">
+            ${statusBadge}
+            <button class="sync-inline-btn" onclick="openHrLiveView()">
+              <span class="sync-inline-icon">&#128065;</span>
+              <span class="sync-inline-label">${activeRun ? '查看当前任务' : '打开运行控制台'}</span>
+            </button>
+          </div>
         </div>
       </div>
     </section>
@@ -1365,21 +1436,24 @@ function openRuntimeConsole({
   instanceId = null,
   useHrEndpoint = true,
   title = '',
-  standbyMessage = ''
+  standbyMessage = '',
+  activeRun = null
 } = {}) {
   stopSyncPolling();
+  const taskType = activeRun?.mode || 'browser_live';
+  const status = activeRun?.status || 'idle';
   state.syncModal = {
     open: true,
-    runId: null,
-    status: 'idle',
-    startedAt: null,
+    runId: activeRun?.id || null,
+    status,
+    startedAt: activeRun?.startedAt || activeRun?.createdAt || null,
     error: '',
     events: [],
     progress: createSyncModalProgressState(),
     isExpanded: false,
     pollTimer: null,
     lastEventId: 0,
-    taskType: 'browser_live',
+    taskType,
     showLiveView: true,
     browserFocus: false,
     consoleTitle: title,
@@ -1397,14 +1471,28 @@ function openRuntimeConsole({
 
   render();
   startLiveViewPolling();
+  if (activeRun && (status === 'running' || status === 'pending')) {
+    startSyncPolling();
+  }
 }
 
-function openHrLiveView() {
+async function openHrLiveView() {
+  let activeRun = normalizeRunForConsole(getSummaryActiveRun());
+  if (!activeRun) {
+    try {
+      activeRun = await fetchLatestActiveRunForConsole();
+      if (activeRun && state.summary) {
+        state.summary.activeRun = activeRun;
+      }
+    } catch (_) {}
+  }
+
   openRuntimeConsole({
     instanceId: null,
     useHrEndpoint: true,
     title: '我的 BOSS 浏览器',
-    standbyMessage: '当前暂无执行任务，可先确认页面状态；如发现异常，可直接点击画面进入人工处理。'
+    standbyMessage: '当前暂无执行任务，可先确认页面状态；如发现异常，可直接点击画面进入人工处理。',
+    activeRun
   });
 }
 

@@ -182,3 +182,271 @@ test('sync modal helper and app scripts can load together in a browser context',
     vm.runInContext(appScript, context, { filename: 'app.js' });
   });
 });
+
+test('openHrLiveView binds current active run instead of standby view', () => {
+  const helperScript = fs.readFileSync(
+    path.join(__dirname, '../public/sync-modal-progress.js'),
+    'utf8'
+  );
+  const appScript = fs.readFileSync(
+    path.join(__dirname, '../public/app.js'),
+    'utf8'
+  );
+
+  const noop = () => {};
+  const context = vm.createContext({
+    window: {
+      JobUiHelpers: {
+        formatJobStatus: noop,
+        getJobStatusBadgeClass: noop,
+        isJobActionEnabled: noop
+      },
+      CandidateUiHelpers: {
+        formatLifecycleStatus: noop,
+        formatResumeState: noop,
+        formatGuardStatus: noop,
+        getLifecycleBadgeClass: noop,
+        getResumeBadgeClass: noop,
+        getGuardBadgeClass: noop,
+        buildCandidateTimeline: noop,
+        buildResumePreviewUrl: noop
+      },
+      SyncLogScroll: {
+        captureSyncLogScrollSnapshot: noop,
+        resolveSyncLogScrollTop: noop
+      },
+      setInterval: noop,
+      clearInterval: noop,
+      location: { href: '' }
+    },
+    document: {
+      addEventListener: noop,
+      getElementById: noop,
+      querySelector: noop,
+      body: { appendChild: noop }
+    },
+    fetch: noop,
+    module: undefined,
+    console
+  });
+
+  vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+  vm.runInContext(appScript, context, { filename: 'app.js' });
+  vm.runInContext(`
+    render = () => {};
+    startLiveViewPolling = () => {};
+    stopSyncPolling = () => {};
+    startSyncPollingCalled = false;
+    startSyncPolling = () => { startSyncPollingCalled = true; };
+    state.currentUser = { hrAccountId: 7 };
+    state.summary = {
+      activeRun: {
+        id: 42,
+        mode: 'source',
+        status: 'running',
+        jobKey: 'job-42',
+        jobName: '测试职位',
+        startedAt: '2026-04-08T10:00:00.000Z'
+      }
+    };
+    openHrLiveView();
+  `, context);
+
+  const result = vm.runInContext(`({
+    runId: state.syncModal.runId,
+    status: state.syncModal.status,
+    taskType: state.syncModal.taskType,
+    isStandby: isRuntimeConsoleStandby(),
+    label: getRuntimeConsoleTaskLabel(),
+    startSyncPollingCalled
+  })`, context);
+
+  assert.equal(result.runId, 42);
+  assert.equal(result.status, 'running');
+  assert.equal(result.taskType, 'source');
+  assert.equal(result.isStandby, false);
+  assert.equal(result.label, '寻源打招呼');
+  assert.equal(result.startSyncPollingCalled, true);
+});
+
+test('openHrLiveView fetches latest active run when summary cache is stale', async () => {
+  const helperScript = fs.readFileSync(
+    path.join(__dirname, '../public/sync-modal-progress.js'),
+    'utf8'
+  );
+  const appScript = fs.readFileSync(
+    path.join(__dirname, '../public/app.js'),
+    'utf8'
+  );
+
+  const noop = () => {};
+  const context = vm.createContext({
+    window: {
+      JobUiHelpers: {
+        formatJobStatus: noop,
+        getJobStatusBadgeClass: noop,
+        isJobActionEnabled: noop
+      },
+      CandidateUiHelpers: {
+        formatLifecycleStatus: noop,
+        formatResumeState: noop,
+        formatGuardStatus: noop,
+        getLifecycleBadgeClass: noop,
+        getResumeBadgeClass: noop,
+        getGuardBadgeClass: noop,
+        buildCandidateTimeline: noop,
+        buildResumePreviewUrl: noop
+      },
+      SyncLogScroll: {
+        captureSyncLogScrollSnapshot: noop,
+        resolveSyncLogScrollTop: noop
+      },
+      setInterval: noop,
+      clearInterval: noop,
+      location: { href: '' }
+    },
+    document: {
+      addEventListener: noop,
+      getElementById: noop,
+      querySelector: noop,
+      body: { appendChild: noop }
+    },
+    fetch: async (url) => {
+      if (String(url).startsWith('/api/runs?status=running')) {
+        return {
+          ok: true,
+          json: async () => ({
+            items: [{
+              id: 77,
+              mode: 'followup',
+              status: 'running',
+              job_key: 'job-77',
+              job_name: '销售顾问',
+              started_at: '2026-04-08T11:00:00.000Z',
+              created_at: '2026-04-08T10:59:00.000Z'
+            }]
+          })
+        };
+      }
+      if (String(url).startsWith('/api/runs?status=pending')) {
+        return {
+          ok: true,
+          json: async () => ({ items: [] })
+        };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    },
+    module: undefined,
+    console
+  });
+
+  vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+  vm.runInContext(appScript, context, { filename: 'app.js' });
+  vm.runInContext(`
+    render = () => {};
+    startLiveViewPolling = () => {};
+    stopSyncPolling = () => {};
+    startSyncPollingCalled = false;
+    startSyncPolling = () => { startSyncPollingCalled = true; };
+    state.currentUser = { hrAccountId: 7 };
+    state.summary = { activeRun: null };
+  `, context);
+
+  await vm.runInContext('openHrLiveView()', context);
+
+  const result = vm.runInContext(`({
+    runId: state.syncModal.runId,
+    status: state.syncModal.status,
+    taskType: state.syncModal.taskType,
+    label: getRuntimeConsoleTaskLabel(),
+    startSyncPollingCalled
+  })`, context);
+
+  assert.equal(result.runId, 77);
+  assert.equal(result.status, 'running');
+  assert.equal(result.taskType, 'followup');
+  assert.equal(result.label, '主动沟通拉简历');
+  assert.equal(result.startSyncPollingCalled, true);
+});
+
+test('manageOverviewPolling starts realtime refresh on overview views only', () => {
+  const helperScript = fs.readFileSync(
+    path.join(__dirname, '../public/sync-modal-progress.js'),
+    'utf8'
+  );
+  const appScript = fs.readFileSync(
+    path.join(__dirname, '../public/app.js'),
+    'utf8'
+  );
+
+  const noop = () => {};
+  const context = vm.createContext({
+    window: {
+      JobUiHelpers: {
+        formatJobStatus: noop,
+        getJobStatusBadgeClass: noop,
+        isJobActionEnabled: noop
+      },
+      CandidateUiHelpers: {
+        formatLifecycleStatus: noop,
+        formatResumeState: noop,
+        formatGuardStatus: noop,
+        getLifecycleBadgeClass: noop,
+        getResumeBadgeClass: noop,
+        getGuardBadgeClass: noop,
+        buildCandidateTimeline: noop,
+        buildResumePreviewUrl: noop
+      },
+      SyncLogScroll: {
+        captureSyncLogScrollSnapshot: noop,
+        resolveSyncLogScrollTop: noop
+      },
+      location: { href: '' },
+      setInterval(callback, ms) {
+        this.__lastIntervalMs = ms;
+        this.__lastIntervalCallbackType = typeof callback;
+        return 99;
+      },
+      clearInterval(id) {
+        this.__clearedIntervalId = id;
+      }
+    },
+    document: {
+      addEventListener: noop,
+      getElementById: noop,
+      querySelector: noop
+    },
+    fetch: noop,
+    module: undefined,
+    console
+  });
+
+  vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+  vm.runInContext(appScript, context, { filename: 'app.js' });
+  vm.runInContext(`
+    state.view = 'command';
+    manageOverviewPolling();
+  `, context);
+
+  const started = vm.runInContext(`({
+    timer: state.overviewPollTimer,
+    intervalMs: window.__lastIntervalMs,
+    callbackType: window.__lastIntervalCallbackType
+  })`, context);
+
+  vm.runInContext(`
+    state.view = 'jobs';
+    manageOverviewPolling();
+  `, context);
+
+  const stopped = vm.runInContext(`({
+    timer: state.overviewPollTimer,
+    clearedIntervalId: window.__clearedIntervalId
+  })`, context);
+
+  assert.equal(started.timer, 99);
+  assert.equal(started.intervalMs, 5000);
+  assert.equal(started.callbackType, 'function');
+  assert.equal(stopped.timer, null);
+  assert.equal(stopped.clearedIntervalId, 99);
+});
