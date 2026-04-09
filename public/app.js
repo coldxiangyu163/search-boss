@@ -4874,6 +4874,9 @@ function updateSyncLiveOverlayContent() {
   const sidebar = document.getElementById('runtime-console-sidebar');
   if (!sidebar) return;
 
+  const railStack = sidebar.querySelector('.runtime-console-rail-stack');
+  const railStackScrollTop = railStack ? railStack.scrollTop : 0;
+
   const logList = sidebar.querySelector('.sync-log-list');
   let scrollSnapshot = null;
   if (logList) {
@@ -4885,6 +4888,11 @@ function updateSyncLiveOverlayContent() {
   }
 
   sidebar.innerHTML = renderSyncLiveLogsContent();
+
+  const newRailStack = sidebar.querySelector('.runtime-console-rail-stack');
+  if (newRailStack) {
+    newRailStack.scrollTop = railStackScrollTop;
+  }
 
   const newLogList = sidebar.querySelector('.sync-log-list');
   if (newLogList) {
