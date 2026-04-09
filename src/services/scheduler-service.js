@@ -27,7 +27,8 @@ class SchedulerService {
         enabled,
         payload,
         last_run_at,
-        updated_at
+        updated_at,
+        hr_account_id
       from scheduled_jobs
       ${whereClause}
       order by updated_at desc, id desc

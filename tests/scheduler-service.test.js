@@ -4,6 +4,25 @@ const assert = require('node:assert/strict');
 const { SchedulerService } = require('../src/services/scheduler-service');
 const { TaskLock } = require('../src/services/task-lock');
 
+test('SchedulerService listSchedules selects hr_account_id for downstream lock scoping', async () => {
+  let capturedSql = '';
+
+  const pool = {
+    async query(sql) {
+      capturedSql = sql;
+      return { rows: [] };
+    }
+  };
+
+  const scheduler = new SchedulerService({ pool, agentService: {} });
+  await scheduler.listSchedules();
+
+  assert.match(
+    capturedSql,
+    /select[\s\S]*last_run_at,\s*updated_at,\s*hr_account_id[\s\S]*from scheduled_jobs/i
+  );
+});
+
 test('SchedulerService triggerJobTask returns immediately and respects explicit terminal run state', async () => {
   const queryCalls = [];
   const nanobotCalls = [];
@@ -361,6 +380,44 @@ test('SchedulerService rejects trigger when task lock is held', async () => {
   );
 
   assert.equal(taskLock.getHolder().runId, 99);
+});
+
+test('SchedulerService ticker still triggers another HR account when one HR lock is held', async () => {
+  const taskLock = new TaskLock();
+  const now = new Date();
+  const duePayload = {
+    intervalMinutes: 1,
+    timeRanges: [{
+      startHour: now.getHours(),
+      startMinute: now.getMinutes(),
+      endHour: now.getHours(),
+      endMinute: now.getMinutes()
+    }]
+  };
+  const triggeredScheduleIds = [];
+
+  taskLock.tryAcquire({ runId: 99, jobKey: 'locked_job', taskType: 'source', hrAccountId: 1 });
+
+  const scheduler = new SchedulerService({
+    pool: { async query() { return { rows: [] }; } },
+    agentService: {},
+    taskLock
+  });
+
+  scheduler.listSchedules = async () => ([
+    { id: 11, job_key: 'job-a', task_type: 'source', enabled: true, payload: duePayload, hr_account_id: 1, last_run_at: null },
+    { id: 12, job_key: 'job-b', task_type: 'source', enabled: true, payload: duePayload, hr_account_id: 2, last_run_at: null }
+  ]);
+  scheduler.triggerSchedule = async (id) => {
+    triggeredScheduleIds.push(id);
+    return { ok: true };
+  };
+
+  scheduler.startTicker();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  scheduler.stopTicker();
+
+  assert.deepEqual(triggeredScheduleIds, [12]);
 });
 
 test('SchedulerService releases task lock after execution completes', async () => {
