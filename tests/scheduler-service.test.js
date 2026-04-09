@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { SchedulerService } = require('../src/services/scheduler-service');
+const { SchedulerService, isInWorkWindow } = require('../src/services/scheduler-service');
 const { TaskLock } = require('../src/services/task-lock');
 
 test('SchedulerService listSchedules selects hr_account_id for downstream lock scoping', async () => {
@@ -625,4 +625,135 @@ test('SchedulerService releases task lock after execution fails', async () => {
   await new Promise((resolve) => setTimeout(resolve, 10));
 
   assert.equal(taskLock.isBusy(), false);
+});
+
+test('isInWorkWindow returns true when current time is inside a window', () => {
+  const now = new Date();
+  const currentHour = now.getHours();
+  const windows = [{ start: `${String(currentHour).padStart(2, '0')}:00`, end: `${String(currentHour).padStart(2, '0')}:59` }];
+  assert.equal(isInWorkWindow(windows, now), true);
+});
+
+test('isInWorkWindow returns false when current time is outside all windows', () => {
+  const now = new Date();
+  now.setHours(3, 0, 0, 0);
+  const windows = [{ start: '09:00', end: '18:00' }];
+  assert.equal(isInWorkWindow(windows, now), false);
+});
+
+test('isInWorkWindow returns true for empty windows (no restrictions)', () => {
+  assert.equal(isInWorkWindow([], new Date()), true);
+  assert.equal(isInWorkWindow(null, new Date()), true);
+});
+
+test('SchedulerService queue mode picks highest priority task with cooldown elapsed', async () => {
+  const taskLock = new TaskLock();
+  const now = new Date();
+  const triggeredScheduleIds = [];
+
+  const scheduler = new SchedulerService({
+    pool: {
+      async query(sql) {
+        if (sql.includes('hr_account_work_config')) {
+          return { rows: [{ hr_account_id: 1, work_windows: [{ start: '00:00', end: '23:59' }], enabled: true, queue_mode: 'priority' }] };
+        }
+        if (sql.includes('from scheduled_jobs')) {
+          return { rows: [] };
+        }
+        if (sql.includes('from sourcing_runs') && sql.includes('current_date')) {
+          return { rows: [{ count: '0' }] };
+        }
+        return { rows: [] };
+      }
+    },
+    agentService: {},
+    taskLock
+  });
+
+  scheduler.listSchedules = async () => ([
+    { id: 1, job_key: 'job-a', task_type: 'source', enabled: true, payload: {}, hr_account_id: 1, last_run_at: null, priority: 3, cooldown_minutes: 60, daily_max_runs: 0 },
+    { id: 2, job_key: 'job-a', task_type: 'followup', enabled: true, payload: {}, hr_account_id: 1, last_run_at: null, priority: 5, cooldown_minutes: 60, daily_max_runs: 0 },
+    { id: 3, job_key: 'job-b', task_type: 'source', enabled: true, payload: {}, hr_account_id: 1, last_run_at: null, priority: 1, cooldown_minutes: 60, daily_max_runs: 0 }
+  ]);
+  scheduler.triggerSchedule = async (id) => {
+    triggeredScheduleIds.push(id);
+    return { ok: true };
+  };
+
+  scheduler.startTicker();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  scheduler.stopTicker();
+
+  assert.deepEqual(triggeredScheduleIds, [3]);
+});
+
+test('SchedulerService queue mode skips tasks within cooldown period', async () => {
+  const taskLock = new TaskLock();
+  const now = new Date();
+  const triggeredScheduleIds = [];
+
+  const scheduler = new SchedulerService({
+    pool: {
+      async query(sql) {
+        if (sql.includes('hr_account_work_config')) {
+          return { rows: [{ hr_account_id: 1, work_windows: [{ start: '00:00', end: '23:59' }], enabled: true, queue_mode: 'priority' }] };
+        }
+        if (sql.includes('from scheduled_jobs')) {
+          return { rows: [] };
+        }
+        if (sql.includes('from sourcing_runs') && sql.includes('current_date')) {
+          return { rows: [{ count: '0' }] };
+        }
+        return { rows: [] };
+      }
+    },
+    agentService: {},
+    taskLock
+  });
+
+  const recentTime = new Date(now.getTime() - 10 * 60_000).toISOString();
+
+  scheduler.listSchedules = async () => ([
+    { id: 1, job_key: 'job-a', task_type: 'source', enabled: true, payload: {}, hr_account_id: 1, last_run_at: recentTime, priority: 1, cooldown_minutes: 60, daily_max_runs: 0 },
+    { id: 2, job_key: 'job-b', task_type: 'source', enabled: true, payload: {}, hr_account_id: 1, last_run_at: null, priority: 5, cooldown_minutes: 60, daily_max_runs: 0 }
+  ]);
+  scheduler.triggerSchedule = async (id) => {
+    triggeredScheduleIds.push(id);
+    return { ok: true };
+  };
+
+  scheduler.startTicker();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  scheduler.stopTicker();
+
+  assert.deepEqual(triggeredScheduleIds, [2]);
+});
+
+test('SchedulerService upsertSchedule persists priority and cooldown fields', async () => {
+  let insertedParams = null;
+
+  const pool = {
+    async query(sql, params) {
+      insertedParams = params;
+      return { rows: [{ id: 1, job_key: 'test-job', task_type: 'source', priority: 2, cooldown_minutes: 30, daily_max_runs: 5 }] };
+    }
+  };
+
+  const scheduler = new SchedulerService({ pool, agentService: {} });
+  const result = await scheduler.upsertSchedule({
+    jobKey: 'test-job',
+    taskType: 'source',
+    cronExpression: '',
+    payload: {},
+    enabled: true,
+    hrAccountId: 1,
+    priority: 2,
+    cooldownMinutes: 30,
+    dailyMaxRuns: 5
+  });
+
+  assert.equal(insertedParams[6], 2);
+  assert.equal(insertedParams[7], 30);
+  assert.equal(insertedParams[8], 5);
+  assert.equal(result.priority, 2);
 });

@@ -21,6 +21,10 @@ const state = {
   candidateListLoading: false,
   candidateListError: '',
   schedules: [],
+  workConfig: null,
+  workConfigSaving: false,
+  workConfigError: '',
+  workConfigSaved: false,
   syncStatus: '',
   triggeringTaskKey: '',
   scheduleModal: {
@@ -36,7 +40,10 @@ const state = {
       intervalMinutes: 60,
       targetCount: 5,
       maxThreads: 20,
-      recommendTab: 'default'
+      recommendTab: 'default',
+      priority: 5,
+      cooldownMinutes: 60,
+      dailyMaxRuns: 0
     }
   },
   syncModal: {
@@ -426,7 +433,8 @@ async function loadData() {
     fetchJson('/api/schedules'),
     fetchJson('/api/dashboard/summary'),
     fetchJson('/api/jobs'),
-    fetchCandidates()
+    fetchCandidates(),
+    fetchJson('/api/work-config').catch(() => ({ item: null }))
   ];
 
   if (isAdmin()) {
@@ -439,9 +447,10 @@ async function loadData() {
   }
 
   const results = await Promise.all(fetches);
-  const [schedules, summary, jobs, candidates] = results;
+  const [schedules, summary, jobs, candidates, workConfigResult] = results;
 
   state.schedules = schedules.items;
+  state.workConfig = workConfigResult.item;
   state.summary = summary;
   state.jobs = jobs.items;
   state.candidates = candidates.items;
@@ -3366,18 +3375,47 @@ function renderRelatedJobs(relatedJobs = []) {
   `;
 }
 
+function renderWorkConfigPanel() {
+  const wc = state.workConfig;
+  const windows = wc?.work_windows || [{ start: '09:00', end: '18:00' }];
+
+  const windowRows = windows.map((w, idx) => `
+    <div class="wc-chip">
+      <input class="wc-chip-time" type="time" value="${w.start || '09:00'}" onchange="updateWorkWindow(${idx}, 'start', this.value)" />
+      <span class="wc-chip-sep">-</span>
+      <input class="wc-chip-time" type="time" value="${w.end || '18:00'}" onchange="updateWorkWindow(${idx}, 'end', this.value)" />
+      ${windows.length > 1 ? `<button type="button" class="wc-chip-del" onclick="removeWorkWindow(${idx})" title="删除">✕</button>` : ''}
+    </div>
+  `).join('');
+
+  return `
+    <div class="wc-bar">
+      <span class="wc-bar-label">工作时间</span>
+      <span class="wc-bar-sep"></span>
+      <div class="wc-windows">${windowRows}</div>
+      <button type="button" class="wc-add-btn" onclick="addWorkWindow()">+ 时段</button>
+      <button class="wc-save-btn" onclick="saveWorkConfig()" ${state.workConfigSaving ? 'disabled' : ''}>
+        ${state.workConfigSaving ? '保存中...' : '保存'}
+      </button>
+      ${state.workConfigSaved ? '<span class="wc-saved-tip">✓ 已保存</span>' : ''}
+      ${state.workConfigError ? `<span class="wc-error-tip">${escapeHtml(state.workConfigError)}</span>` : ''}
+    </div>
+  `;
+}
+
 function renderAutomation() {
   return `
+    ${renderWorkConfigPanel()}
     <section class="table-card">
       <div class="card-header">
         <div>
-          <p class="eyebrow">自动化调度</p>
-          <h3 class="card-title">任务调度配置</h3>
-          <p class="card-subtitle">为招聘中的岗位配置定时执行规则，系统将按设定节奏自动触发任务。</p>
+          <p class="eyebrow">任务花名册</p>
+          <h3 class="card-title">任务队列（按优先级自动编排）</h3>
+          <p class="card-subtitle">添加需要执行的任务，系统在工作窗口内按优先级和冷却时间自动轮转执行。</p>
         </div>
         <div class="jobs-header-actions">
           <span class="badge">${state.schedules.length} 个调度任务</span>
-          <button class="button-secondary" onclick="openScheduleModal('create')">添加定时任务</button>
+          <button class="button-secondary" onclick="openScheduleModal('create')">添加任务</button>
         </div>
       </div>
       ${state.schedules.length ? `
@@ -3386,8 +3424,7 @@ function renderAutomation() {
             <tr>
               <th>职位</th>
               <th>任务类型</th>
-              <th>执行时间范围</th>
-              <th>执行间隔</th>
+              <th>优先级</th><th>冷却时间</th><th>每日执行次数上限</th>
               <th>执行参数</th>
               <th>状态</th>
               <th>最近执行</th>
@@ -3397,22 +3434,22 @@ function renderAutomation() {
           <tbody>
             ${state.schedules.map((schedule) => {
               const payload = schedule.payload || {};
-              const timeRangesDisplay = formatPayloadTimeRanges(payload);
-              const interval = payload.intervalMinutes ? `每 ${payload.intervalMinutes} 分钟` : '-';
               const jobName = getJobNameByKey(schedule.job_key);
               const recommendLabel = (payload.recommendTab || 'default') === 'default' ? '默认推荐' : '最新推荐';
               const interactionLabel = schedule.task_type === 'followup' && Array.isArray(payload.interactionTypes) && payload.interactionTypes.length > 0
                 ? ` · ${formatInteractionTypes(payload.interactionTypes)}`
                 : '';
               const paramDisplay = schedule.task_type === 'source'
-                ? `寻源 ${payload.targetCount || '-'} 人 · ${recommendLabel}`
-                : `回复 ${payload.maxThreads || '-'} 线程${interactionLabel}`;
+                ? `打招呼 ${payload.targetCount || '-'} 人 · ${recommendLabel}`
+                : `回复 ${payload.maxThreads || '-'} 人${interactionLabel}`;
+
+              const timingCols = `<td>P${schedule.priority || 5}</td><td>${schedule.cooldown_minutes || 60} 分钟</td><td>${schedule.daily_max_runs || '不限'}</td>`;
+
               return `
                 <tr>
                   <td>${escapeHtml(jobName)}<div class="muted">${escapeHtml(schedule.job_key)}</div></td>
                   <td>${escapeHtml(formatTaskType(schedule.task_type))}</td>
-                  <td>${timeRangesDisplay}</td>
-                  <td>${escapeHtml(interval)}</td>
+                  ${timingCols}
                   <td>${escapeHtml(paramDisplay)}</td>
                   <td>
                     <button
@@ -3452,7 +3489,7 @@ function renderAutomation() {
                       <button
                         class="button-secondary button-compact button-danger"
                         onclick='deleteSchedule(${schedule.id})'
-                        title="删除该定时任务"
+                        title="删除该任务"
                       >
                         删除
                       </button>
@@ -3463,7 +3500,7 @@ function renderAutomation() {
             }).join('')}
           </tbody>
         </table>
-      ` : '<div class="empty-state">当前暂无调度任务，点击「添加定时任务」创建。</div>'}
+      ` : '<div class="empty-state">当前暂无调度任务，点击「添加任务」创建。</div>'}
     </section>
     ${renderScheduleModal()}
     ${renderSyncModal()}
@@ -3477,135 +3514,96 @@ function renderScheduleModal() {
   const isView = mode === 'view';
   const isCreate = mode === 'create';
   const openJobs = state.jobs.filter((job) => job.status === 'open');
-
-  const titleMap = {
-    create: '添加定时任务',
-    edit: '编辑定时任务',
-    view: '查看定时任务'
-  };
-
-  const eyebrowMap = {
-    create: '新建调度',
-    edit: '编辑调度',
-    view: '调度详情'
-  };
-
-  const timeRanges = form.timeRanges || [{ startHour: 9, startMinute: 0, endHour: 18, endMinute: 0 }];
-
-  const timeRangesHtml = timeRanges.map((range, idx) => {
-    if (isView) {
-      return `
-        <div class="time-range-row">
-          <span class="time-range-label">时段 ${idx + 1}：</span>
-          <span>${escapeHtml(formatScheduleTime(range.startHour, range.startMinute))} ~ ${escapeHtml(formatScheduleTime(range.endHour, range.endMinute))}</span>
-        </div>
-      `;
-    }
-    return `
-      <div class="time-range-row">
-        <input
-          type="time"
-          value="${padTime(range.startHour)}:${padTime(range.startMinute)}"
-          onchange="handleTimeRangeChange(${idx}, 'start', this.value)"
-        />
-        <span class="time-range-separator">~</span>
-        <input
-          type="time"
-          value="${padTime(range.endHour)}:${padTime(range.endMinute)}"
-          onchange="handleTimeRangeChange(${idx}, 'end', this.value)"
-        />
-        ${timeRanges.length > 1 ? `<button type="button" class="btn-sm btn-danger" onclick="removeTimeRange(${idx})" title="删除该时段">✕</button>` : ''}
-      </div>
-    `;
-  }).join('');
-
   const isSource = form.taskType === 'source';
+  const titleMap = { create: '添加任务', edit: '编辑任务', view: '任务详情' };
 
-  return `
-    <div class="modal-backdrop" onclick="closeScheduleModal()">
-      <section class="sync-modal schedule-modal" onclick="event.stopPropagation()">
-        <div class="card-header">
-          <div>
-            <p class="eyebrow">${eyebrowMap[mode]}</p>
-            <h3 class="card-title">${titleMap[mode]}</h3>
-            <p class="card-subtitle">${isView ? '当前定时任务的配置详情。' : '配置岗位、执行时间与执行参数。'}</p>
-          </div>
-          <div class="schedule-modal-header-actions">
-            ${isView ? `
-              <button class="button-secondary" onclick="switchScheduleModalToEdit()">编辑</button>
-            ` : ''}
-            <button class="button-secondary button-muted" onclick="closeScheduleModal()">关闭</button>
-          </div>
-        </div>
-        ${error ? `<div class="inline-status inline-status-error">${escapeHtml(error)}</div>` : ''}
-        <div class="schedule-form-grid">
-          <label class="form-field">
-            <span class="form-label">选择岗位</span>
-            ${isCreate ? `
-              <select onchange="updateScheduleModalForm('jobKey', this.value)">
-                <option value="">请选择岗位</option>
-                ${openJobs.map((job) => `
-                  <option value="${escapeHtml(job.job_key)}" ${form.jobKey === job.job_key ? 'selected' : ''}>
-                    ${escapeHtml(job.job_name)} (${escapeHtml(job.city || '-')})
-                  </option>
-                `).join('')}
-              </select>
-            ` : `
-              <div class="schedule-view-value">${escapeHtml(getJobNameByKey(form.jobKey) || form.jobKey || '-')}</div>
-            `}
-          </label>
-          <label class="form-field">
-            <span class="form-label">任务类型</span>
-            ${isCreate ? `
-              <select onchange="handleTaskTypeChange(this.value)">
-                <option value="source" ${form.taskType === 'source' ? 'selected' : ''}>寻源打招呼</option>
-                <option value="followup" ${form.taskType === 'followup' ? 'selected' : ''}>主动沟通拉简历</option>
-              </select>
-            ` : `
-              <div class="schedule-view-value">${escapeHtml(formatTaskType(form.taskType))}</div>
-            `}
-          </label>
-          <div class="form-field form-field-full">
-            <span class="form-label">执行时间范围</span>
-            <div class="time-ranges-container">
-              ${timeRangesHtml}
+  // --- Section: basic info ---
+  const basicSection = `
+    <div class="sm-section">
+      <div class="sm-section-title">基本信息</div>
+      <div class="sm-row">
+        <label class="sm-field">
+          <span class="sm-label">岗位</span>
+          ${isCreate ? `
+            <select class="sm-input" onchange="updateScheduleModalForm('jobKey', this.value)">
+              <option value="">请选择岗位</option>
+              ${openJobs.map((job) => `
+                <option value="${escapeHtml(job.job_key)}" ${form.jobKey === job.job_key ? 'selected' : ''}>
+                  ${escapeHtml(job.job_name)} (${escapeHtml(job.city || '-')})
+                </option>
+              `).join('')}
+            </select>
+          ` : `<div class="sm-value">${escapeHtml(getJobNameByKey(form.jobKey) || form.jobKey || '-')}</div>`}
+        </label>
+        <label class="sm-field">
+          <span class="sm-label">任务类型</span>
+          ${isCreate ? `
+            <select class="sm-input" onchange="handleTaskTypeChange(this.value)">
+              <option value="source" ${form.taskType === 'source' ? 'selected' : ''}>寻源打招呼</option>
+              <option value="followup" ${form.taskType === 'followup' ? 'selected' : ''}>主动沟通拉简历</option>
+            </select>
+          ` : `<div class="sm-value">${escapeHtml(formatTaskType(form.taskType))}</div>`}
+        </label>
+      </div>
+    </div>
+  `;
+
+  // --- Section: scheduling ---
+  const schedulingSection = `
+    <div class="sm-section">
+      <div class="sm-section-title">调度策略</div>
+      <div class="sm-row sm-row-3">
+        <label class="sm-field">
+          <span class="sm-label">优先级</span>
+          ${isView ? `<div class="sm-value">P${form.priority ?? 5}</div>` : `
+            <input class="sm-input" type="number" min="1" max="99" value="${form.priority ?? 5}"
+              onchange="updateScheduleModalForm('priority', Number(this.value))" />
+            <span class="sm-hint">数字越小越优先</span>
+          `}
+        </label>
+        <label class="sm-field">
+          <span class="sm-label">冷却时间</span>
+          ${isView ? `<div class="sm-value">${form.cooldownMinutes ?? 60} 分钟</div>` : `
+            <div class="sm-input-group">
+              <input class="sm-input" type="number" min="5" max="1440" value="${form.cooldownMinutes ?? 60}"
+                onchange="updateScheduleModalForm('cooldownMinutes', Number(this.value))" />
+              <span class="sm-input-suffix">分钟</span>
             </div>
-            ${!isView ? `<button type="button" class="btn-sm" onclick="addTimeRange()" style="margin-top:6px">+ 添加时段</button>` : ''}
-          </div>
-          <label class="form-field">
-            <span class="form-label">执行间隔（分钟）</span>
-            ${isView ? `
-              <div class="schedule-view-value">${form.intervalMinutes || '-'}</div>
-            ` : `
-              <input
-                type="number"
-                min="10"
-                max="1440"
-                value="${form.intervalMinutes}"
-                onchange="updateScheduleModalForm('intervalMinutes', Number(this.value))"
-              />
+            <span class="sm-hint">执行完成后的最短等待间隔</span>
+          `}
+        </label>
+        <label class="sm-field">
+          <span class="sm-label">每日执行次数上限</span>
+          ${isView ? `<div class="sm-value">${form.dailyMaxRuns || '不限'}</div>` : `
+            <input class="sm-input" type="number" min="0" max="100" value="${form.dailyMaxRuns ?? 0}"
+              onchange="updateScheduleModalForm('dailyMaxRuns', Number(this.value))" />
+            <span class="sm-hint">0 = 不限制</span>
+          `}
+        </label>
+      </div>
+    </div>
+  `;
+
+  // --- Section: execution params ---
+  let paramsSection = '';
+  if (isSource) {
+    paramsSection = `
+      <div class="sm-section">
+        <div class="sm-section-title">执行参数</div>
+        <div class="sm-row">
+          <label class="sm-field">
+            <span class="sm-label">单次打招呼人数</span>
+            ${isView ? `<div class="sm-value">${form.targetCount || '-'} 人</div>` : `
+              <div class="sm-input-group">
+                <input class="sm-input" type="number" min="1" max="50" value="${form.targetCount}"
+                  onchange="updateScheduleModalForm('targetCount', Number(this.value))" />
+                <span class="sm-input-suffix">人</span>
+              </div>
             `}
           </label>
-          ${isSource ? `
-          <label class="form-field">
-            <span class="form-label">单次寻源人数</span>
-            ${isView ? `
-              <div class="schedule-view-value">${form.targetCount || '-'}</div>
-            ` : `
-              <input
-                type="number"
-                min="1"
-                max="50"
-                value="${form.targetCount}"
-                onchange="updateScheduleModalForm('targetCount', Number(this.value))"
-              />
-            `}
-          </label>
-          <div class="form-field">
-            <span class="form-label">推荐列表模式</span>
-            ${isView ? `
-              <div class="schedule-view-value">${(form.recommendTab || 'default') === 'default' ? '默认推荐' : '最新推荐'}</div>
-            ` : `
+          <div class="sm-field">
+            <span class="sm-label">推荐列表模式</span>
+            ${isView ? `<div class="sm-value">${(form.recommendTab || 'default') === 'default' ? '默认推荐' : '最新推荐'}</div>` : `
               <div class="segment-control">
                 <input type="radio" name="recommendTab" id="rt-default" value="default"
                   ${(form.recommendTab || 'default') === 'default' ? 'checked' : ''}
@@ -3616,52 +3614,62 @@ function renderScheduleModal() {
                   onchange="updateScheduleModalForm('recommendTab', 'latest')"
                 /><label for="rt-latest">最新推荐</label>
               </div>
-              <p class="form-hint">默认推荐：按 BOSS 系统推荐顺序浏览；最新推荐：切换到「最新」标签筛选。</p>
             `}
           </div>
-          ` : `
-          <label class="form-field">
-            <span class="form-label">单次回复线程数</span>
-            ${isView ? `
-              <div class="schedule-view-value">${form.maxThreads || '-'}</div>
-            ` : `
-              <input
-                type="number"
-                min="1"
-                max="100"
-                value="${form.maxThreads}"
-                onchange="updateScheduleModalForm('maxThreads', Number(this.value))"
-              />
-            `}
-          </label>
-          ${form.taskType === 'followup' ? `
-          <div class="form-field form-field-full">
-            <span class="form-label">交互方式（可多选）</span>
-            ${isView ? `
-              <div class="schedule-view-value">${formatInteractionTypes(form.interactionTypes)}</div>
-            ` : `
-              <div class="checkbox-group">
-                <label class="checkbox-label">
-                  <input type="checkbox" ${(form.interactionTypes || []).includes('request_resume') ? 'checked' : ''} onchange="toggleInteractionType('request_resume', this.checked)" />
-                  求简历
-                </label>
-                <label class="checkbox-label">
-                  <input type="checkbox" ${(form.interactionTypes || []).includes('exchange_phone') ? 'checked' : ''} onchange="toggleInteractionType('exchange_phone', this.checked)" />
-                  换电话
-                </label>
-                <label class="checkbox-label">
-                  <input type="checkbox" ${(form.interactionTypes || []).includes('exchange_wechat') ? 'checked' : ''} onchange="toggleInteractionType('exchange_wechat', this.checked)" />
-                  换微信
-                </label>
+        </div>
+      </div>
+    `;
+  } else {
+    paramsSection = `
+      <div class="sm-section">
+        <div class="sm-section-title">执行参数</div>
+        <div class="sm-row">
+          <label class="sm-field">
+            <span class="sm-label">单次回复人数</span>
+            ${isView ? `<div class="sm-value">${form.maxThreads || '-'} 个</div>` : `
+              <div class="sm-input-group">
+                <input class="sm-input" type="number" min="1" max="100" value="${form.maxThreads}"
+                  onchange="updateScheduleModalForm('maxThreads', Number(this.value))" />
+                <span class="sm-input-suffix">个</span>
               </div>
             `}
-          </div>
-          ` : ''}
+          </label>
+        </div>
+        ${form.taskType === 'followup' ? `
+        <div class="sm-field" style="margin-top:10px">
+          <span class="sm-label">交互方式</span>
+          ${isView ? `<div class="sm-value">${formatInteractionTypes(form.interactionTypes)}</div>` : `
+            <div class="checkbox-group" style="margin-top:6px">
+              <label class="checkbox-label"><input type="checkbox" ${(form.interactionTypes || []).includes('request_resume') ? 'checked' : ''} onchange="toggleInteractionType('request_resume', this.checked)" /> 求简历</label>
+              <label class="checkbox-label"><input type="checkbox" ${(form.interactionTypes || []).includes('exchange_phone') ? 'checked' : ''} onchange="toggleInteractionType('exchange_phone', this.checked)" /> 换电话</label>
+              <label class="checkbox-label"><input type="checkbox" ${(form.interactionTypes || []).includes('exchange_wechat') ? 'checked' : ''} onchange="toggleInteractionType('exchange_wechat', this.checked)" /> 换微信</label>
+            </div>
           `}
         </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  return `
+    <div class="modal-backdrop" onclick="closeScheduleModal()">
+      <section class="sync-modal schedule-modal" onclick="event.stopPropagation()">
+        <div class="sm-header">
+          <h3 class="sm-title">${titleMap[mode]}</h3>
+          <div class="sm-header-actions">
+            ${isView ? `<button class="button-secondary button-compact" onclick="switchScheduleModalToEdit()">编辑</button>` : ''}
+            <button class="button-secondary button-compact button-muted" onclick="closeScheduleModal()">关闭</button>
+          </div>
+        </div>
+        ${error ? `<div class="inline-status inline-status-error">${escapeHtml(error)}</div>` : ''}
+        <div class="sm-body">
+          ${basicSection}
+          ${schedulingSection}
+          ${paramsSection}
+        </div>
         ${!isView ? `
-          <div class="schedule-form-actions">
-            <button class="button-secondary" onclick="submitScheduleModal()" ${saving ? 'disabled' : ''}>
+          <div class="sm-footer">
+            <button class="sm-btn-primary" onclick="submitScheduleModal()" ${saving ? 'disabled' : ''}>
               ${saving ? '保存中...' : '保存'}
             </button>
             <button class="button-secondary button-muted" onclick="closeScheduleModal()">取消</button>
@@ -3713,7 +3721,10 @@ function openScheduleModal(mode, scheduleId) {
         targetCount: 5,
         maxThreads: 20,
         recommendTab: 'default',
-        interactionTypes: ['request_resume']
+        interactionTypes: ['request_resume'],
+        priority: 5,
+        cooldownMinutes: 60,
+        dailyMaxRuns: 0
       }
     };
   } else {
@@ -3739,7 +3750,10 @@ function openScheduleModal(mode, scheduleId) {
         recommendTab: payload.recommendTab || 'default',
         interactionTypes: Array.isArray(payload.interactionTypes) && payload.interactionTypes.length > 0
           ? payload.interactionTypes
-          : ['request_resume']
+          : ['request_resume'],
+        priority: schedule.priority ?? 5,
+        cooldownMinutes: schedule.cooldown_minutes ?? 60,
+        dailyMaxRuns: schedule.daily_max_runs ?? 0
       }
     };
   }
@@ -3761,7 +3775,10 @@ function closeScheduleModal() {
       targetCount: 5,
       maxThreads: 20,
       recommendTab: 'default',
-      interactionTypes: ['request_resume']
+      interactionTypes: ['request_resume'],
+      priority: 5,
+      cooldownMinutes: 60,
+      dailyMaxRuns: 0
     }
   };
   render();
@@ -3833,6 +3850,65 @@ function formatPayloadTimeRanges(payload) {
   return escapeHtml(startTime);
 }
 
+// --- Work config functions ---
+
+function updateWorkWindow(idx, field, value) {
+  if (!state.workConfig) {
+    state.workConfig = { work_windows: [{ start: '09:00', end: '18:00' }], enabled: true, queue_mode: 'priority' };
+  }
+  const windows = state.workConfig.work_windows || [{ start: '09:00', end: '18:00' }];
+  if (windows[idx]) {
+    windows[idx][field] = value;
+  }
+  state.workConfig.work_windows = windows;
+  render();
+}
+
+function addWorkWindow() {
+  if (!state.workConfig) {
+    state.workConfig = { work_windows: [{ start: '09:00', end: '18:00' }], enabled: true, queue_mode: 'priority' };
+  }
+  const windows = state.workConfig.work_windows || [];
+  windows.push({ start: '14:00', end: '18:00' });
+  state.workConfig.work_windows = windows;
+  render();
+}
+
+function removeWorkWindow(idx) {
+  if (!state.workConfig) return;
+  const windows = state.workConfig.work_windows || [];
+  windows.splice(idx, 1);
+  state.workConfig.work_windows = windows;
+  render();
+}
+
+async function saveWorkConfig() {
+  state.workConfigSaving = true;
+  state.workConfigError = '';
+  state.workConfigSaved = false;
+  render();
+  try {
+    const wc = state.workConfig || {};
+    const result = await fetchJson('/api/work-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workWindows: wc.work_windows || [{ start: '09:00', end: '18:00' }],
+        queueMode: wc.queue_mode || 'priority',
+        enabled: wc.enabled !== false
+      })
+    });
+    state.workConfig = result.item;
+    state.workConfigSaved = true;
+    setTimeout(() => { state.workConfigSaved = false; render(); }, 2500);
+  } catch (error) {
+    state.workConfigError = `保存失败：${error.message}`;
+  } finally {
+    state.workConfigSaving = false;
+    render();
+  }
+}
+
 async function submitScheduleModal() {
   const { mode, form, scheduleId } = state.scheduleModal;
 
@@ -3842,29 +3918,12 @@ async function submitScheduleModal() {
     return;
   }
 
-  if (!form.intervalMinutes || form.intervalMinutes < 10) {
-    state.scheduleModal.error = '执行间隔不能小于 10 分钟。';
-    render();
-    return;
-  }
-
   state.scheduleModal.saving = true;
   state.scheduleModal.error = '';
   render();
 
   try {
-    const timeRanges = form.timeRanges || [];
-    const firstRange = timeRanges[0] || {};
-    const rangeDesc = timeRanges.map((r) =>
-      `${padTime(r.startHour)}:${padTime(r.startMinute)}-${padTime(r.endHour)}:${padTime(r.endMinute)}`
-    ).join(', ');
-    const cronDesc = `每天 ${rangeDesc}，每 ${form.intervalMinutes} 分钟`;
-    const payload = {
-      startHour: firstRange.startHour ?? 9,
-      startMinute: firstRange.startMinute ?? 0,
-      timeRanges,
-      intervalMinutes: form.intervalMinutes
-    };
+    const payload = {};
     if (form.taskType === 'source') {
       payload.targetCount = form.targetCount;
       payload.recommendTab = form.recommendTab || 'default';
@@ -3880,9 +3939,12 @@ async function submitScheduleModal() {
       body: JSON.stringify({
         jobKey: form.jobKey,
         taskType: form.taskType,
-        cronExpression: cronDesc,
+        cronExpression: '',
         enabled: true,
-        payload
+        payload,
+        priority: form.priority ?? 5,
+        cooldownMinutes: form.cooldownMinutes ?? 60,
+        dailyMaxRuns: form.dailyMaxRuns ?? 0
       })
     });
 

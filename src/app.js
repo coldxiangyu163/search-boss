@@ -705,9 +705,21 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.post('/api/schedules', async (req, res, next) => {
     try {
+      const hrAccountId = req.user?.hr_account_id;
+      if (hrAccountId) {
+        let workConfig = await services.scheduler.getWorkConfig(hrAccountId);
+        if (!workConfig) {
+          workConfig = await services.scheduler.upsertWorkConfig({
+            hrAccountId,
+            workWindows: [{ start: '09:00', end: '18:00' }],
+            queueMode: 'priority',
+            enabled: true
+          });
+        }
+      }
       const item = await services.scheduler.upsertSchedule({
         ...req.body,
-        hrAccountId: req.user?.hr_account_id
+        hrAccountId
       });
       res.json({ item });
     } catch (error) {
@@ -736,6 +748,40 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
   app.patch('/api/schedules/:id/toggle', async (req, res, next) => {
     try {
       const item = await services.scheduler.toggleSchedule(req.params.id, req.body.enabled);
+      res.json({ item });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // --- Work config (account-level work windows) ---
+
+  app.get('/api/work-config', async (req, res, next) => {
+    try {
+      const hrAccountId = req.user?.hr_account_id;
+      if (!hrAccountId) {
+        return res.json({ item: null });
+      }
+      const item = await services.scheduler.getWorkConfig(hrAccountId);
+      res.json({ item });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/work-config', async (req, res, next) => {
+    try {
+      const hrAccountId = req.user?.hr_account_id;
+      if (!hrAccountId) {
+        return res.status(400).json({ error: 'no_hr_account', message: '当前用户未绑定 HR 账号' });
+      }
+      const { workWindows, queueMode, enabled } = req.body;
+      const item = await services.scheduler.upsertWorkConfig({
+        hrAccountId,
+        workWindows: workWindows || [{ start: '09:00', end: '18:00' }],
+        queueMode: queueMode || 'priority',
+        enabled
+      });
       res.json({ item });
     } catch (error) {
       next(error);

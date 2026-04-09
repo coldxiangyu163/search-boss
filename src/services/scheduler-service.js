@@ -8,6 +8,8 @@ class SchedulerService {
     this.browserInstanceManager = browserInstanceManager;
     this._tickTimer = null;
     this._abortControllers = new Map();
+    this._workConfigCache = new Map();
+    this._workConfigCacheTime = 0;
   }
 
   async listSchedules({ hrAccountId } = {}) {
@@ -28,16 +30,19 @@ class SchedulerService {
         payload,
         last_run_at,
         updated_at,
-        hr_account_id
+        hr_account_id,
+        priority,
+        cooldown_minutes,
+        daily_max_runs
       from scheduled_jobs
       ${whereClause}
-      order by updated_at desc, id desc
+      order by priority asc, updated_at desc, id desc
     `, values);
 
     return result.rows;
   }
 
-  async upsertSchedule({ jobKey, taskType, cronExpression, payload = {}, enabled = true, hrAccountId }) {
+  async upsertSchedule({ jobKey, taskType, cronExpression, payload = {}, enabled = true, hrAccountId, priority, cooldownMinutes, dailyMaxRuns }) {
     const result = await this.pool.query(
       `
         insert into scheduled_jobs (
@@ -46,17 +51,23 @@ class SchedulerService {
           cron_expression,
           payload,
           enabled,
-          hr_account_id
+          hr_account_id,
+          priority,
+          cooldown_minutes,
+          daily_max_runs
         )
-        values ($1, $2, $3, $4, $5, $6)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         on conflict (job_key, task_type, coalesce(hr_account_id, 0)) do update
         set cron_expression = excluded.cron_expression,
             payload = excluded.payload,
             enabled = excluded.enabled,
+            priority = excluded.priority,
+            cooldown_minutes = excluded.cooldown_minutes,
+            daily_max_runs = excluded.daily_max_runs,
             updated_at = now()
         returning *
       `,
-      [jobKey, taskType, cronExpression, payload, enabled, hrAccountId || null]
+      [jobKey, taskType, cronExpression, payload, enabled, hrAccountId || null, priority ?? 5, cooldownMinutes ?? 60, dailyMaxRuns ?? 0]
     );
 
     return result.rows[0];
@@ -88,6 +99,34 @@ class SchedulerService {
     return result.rows[0];
   }
 
+  // --- Work config CRUD ---
+
+  async getWorkConfig(hrAccountId) {
+    const result = await this.pool.query(
+      'select * from hr_account_work_config where hr_account_id = $1 limit 1',
+      [hrAccountId]
+    );
+    return result.rows[0] || null;
+  }
+
+  async upsertWorkConfig({ hrAccountId, workWindows, queueMode, enabled }) {
+    const result = await this.pool.query(
+      `insert into hr_account_work_config (hr_account_id, work_windows, queue_mode, enabled)
+       values ($1, $2, $3, $4)
+       on conflict (hr_account_id) do update
+       set work_windows = excluded.work_windows,
+           queue_mode = excluded.queue_mode,
+           enabled = excluded.enabled,
+           updated_at = now()
+       returning *`,
+      [hrAccountId, JSON.stringify(workWindows), queueMode || 'priority', enabled !== false]
+    );
+    this._workConfigCache.delete(hrAccountId);
+    return result.rows[0];
+  }
+
+  // --- Tick logic (dual mode: queue + legacy) ---
+
   startTicker() {
     if (this._tickTimer) return;
     this._tickTimer = setInterval(() => this.#tick(), 60_000);
@@ -103,12 +142,54 @@ class SchedulerService {
 
   async #tick() {
     try {
-      const schedules = await this.listSchedules();
       const now = new Date();
+      await this.#refreshWorkConfigCache();
+
+      const schedules = await this.listSchedules();
+
+      // Group schedules by hr_account_id
+      const byAccount = new Map();
+      const legacySchedules = [];
 
       for (const schedule of schedules) {
         if (!schedule.enabled) continue;
+        const hrId = schedule.hr_account_id || null;
 
+        if (hrId && this._workConfigCache.has(Number(hrId))) {
+          const key = Number(hrId);
+          if (!byAccount.has(key)) byAccount.set(key, []);
+          byAccount.get(key).push(schedule);
+        } else {
+          legacySchedules.push(schedule);
+        }
+      }
+
+      // Queue mode: for each HR account with work config
+      for (const [hrAccountId, roster] of byAccount) {
+        const workConfig = this._workConfigCache.get(hrAccountId);
+        if (!workConfig || !workConfig.enabled) continue;
+
+        if (this.taskLock?.isBusy(hrAccountId)) {
+          const holder = this.taskLock.getHolder(hrAccountId);
+          console.log(`[scheduler:queue] hr_account ${hrAccountId} busy: run ${holder?.runId} (${holder?.jobKey}/${holder?.taskType})`);
+          continue;
+        }
+
+        if (!isInWorkWindow(workConfig.work_windows, now)) continue;
+
+        const nextTask = await this.#pickNextTask(roster, hrAccountId, now);
+        if (!nextTask) continue;
+
+        try {
+          await this.triggerSchedule(nextTask.id);
+        } catch (triggerError) {
+          if (triggerError.message === 'task_already_running') continue;
+          console.error(`[scheduler:queue] trigger failed for schedule ${nextTask.id} (${nextTask.job_key}/${nextTask.task_type}):`, triggerError);
+        }
+      }
+
+      // Legacy mode: per-schedule independent timing
+      for (const schedule of legacySchedules) {
         const hrAccountId = schedule.hr_account_id || null;
         if (this.taskLock?.isBusy(hrAccountId)) {
           const holder = this.taskLock.getHolder(hrAccountId);
@@ -128,6 +209,67 @@ class SchedulerService {
     } catch (tickError) {
       console.error('[scheduler] tick failed:', tickError);
     }
+  }
+
+  async #refreshWorkConfigCache() {
+    const now = Date.now();
+    if (now - this._workConfigCacheTime < 30_000 && this._workConfigCache.size > 0) return;
+
+    try {
+      const result = await this.pool.query('select * from hr_account_work_config');
+      this._workConfigCache.clear();
+      for (const row of result.rows) {
+        this._workConfigCache.set(Number(row.hr_account_id), row);
+      }
+      this._workConfigCacheTime = now;
+    } catch (err) {
+      if (!err.message?.includes('does not exist')) {
+        console.error('[scheduler] work config cache refresh failed:', err.message);
+      }
+    }
+  }
+
+  async #pickNextTask(roster, hrAccountId, now) {
+    const eligible = [];
+
+    for (const task of roster) {
+      const cooldownMs = (task.cooldown_minutes || 60) * 60_000;
+      if (task.last_run_at) {
+        const elapsed = now.getTime() - new Date(task.last_run_at).getTime();
+        if (elapsed < cooldownMs) continue;
+      }
+
+      if (task.daily_max_runs && task.daily_max_runs > 0) {
+        const todayCount = await this.#getTodayRunCount(task.job_key, task.task_type, hrAccountId);
+        if (todayCount >= task.daily_max_runs) continue;
+      }
+
+      eligible.push(task);
+    }
+
+    if (eligible.length === 0) return null;
+
+    // Sort: priority ASC (lower = higher priority), then last_run_at ASC (longest wait first)
+    eligible.sort((a, b) => {
+      const pDiff = (a.priority || 5) - (b.priority || 5);
+      if (pDiff !== 0) return pDiff;
+      const aTime = a.last_run_at ? new Date(a.last_run_at).getTime() : 0;
+      const bTime = b.last_run_at ? new Date(b.last_run_at).getTime() : 0;
+      return aTime - bTime;
+    });
+
+    return eligible[0];
+  }
+
+  async #getTodayRunCount(jobKey, taskType, hrAccountId) {
+    const result = await this.pool.query(
+      `select count(*) from sourcing_runs
+       where job_key = $1 and mode = $2
+         and hr_account_id = $3
+         and created_at >= current_date`,
+      [jobKey, taskType, hrAccountId]
+    );
+    return parseInt(result.rows[0].count, 10);
   }
 
   #shouldRunNow(schedule, now) {
@@ -607,6 +749,25 @@ function matchesCronField(field, value) {
   return parseInt(field, 10) === value;
 }
 
+function isInWorkWindow(workWindows, now) {
+  if (!workWindows || !Array.isArray(workWindows) || workWindows.length === 0) return true;
+
+  const currentTotalMinutes = now.getHours() * 60 + now.getMinutes();
+
+  for (const window of workWindows) {
+    const [startH, startM] = (window.start || '00:00').split(':').map(Number);
+    const [endH, endM] = (window.end || '23:59').split(':').map(Number);
+    const startTotal = startH * 60 + startM;
+    const endTotal = endH * 60 + endM;
+
+    if (currentTotalMinutes >= startTotal && currentTotalMinutes <= endTotal) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function classifyAgentExit(latestPhaseEvent) {
   const phase = latestPhaseEvent?.payload?.phase || latestPhaseEvent?.eventType || '';
 
@@ -627,5 +788,6 @@ function classifyAgentExit(latestPhaseEvent) {
 
 module.exports = {
   SchedulerService,
-  matchesCronExpression
+  matchesCronExpression,
+  isInWorkWindow
 };

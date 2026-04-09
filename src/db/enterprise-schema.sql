@@ -130,3 +130,32 @@ create table if not exists system_config (
   value text,
   updated_at timestamptz not null default now()
 );
+
+-- Phase 4: queue-based scheduler
+-- hr_account_work_config: per-account work windows and queue mode
+create table if not exists hr_account_work_config (
+  id bigserial primary key,
+  hr_account_id bigint not null references hr_accounts(id),
+  work_windows jsonb not null default '[{"start":"09:00","end":"18:00"}]',
+  queue_mode text not null default 'priority',
+  enabled boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (hr_account_id)
+);
+
+-- Backfill: ensure all existing hr_accounts have a work config
+insert into hr_account_work_config (hr_account_id)
+select id from hr_accounts
+where id not in (select hr_account_id from hr_account_work_config)
+on conflict (hr_account_id) do nothing;
+
+-- scheduled_jobs: add priority and cooldown for queue-based scheduling
+alter table scheduled_jobs
+  add column if not exists priority integer not null default 5;
+
+alter table scheduled_jobs
+  add column if not exists cooldown_minutes integer not null default 60;
+
+alter table scheduled_jobs
+  add column if not exists daily_max_runs integer not null default 0;
