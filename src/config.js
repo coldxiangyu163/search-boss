@@ -35,8 +35,10 @@ function buildConfig(env = process.env) {
     sourceLoopEnabled: readBooleanEnv(env, 'SOURCE_LOOP_ENABLED', false),
     sourceLoopTargetCount: Number(readOptionalEnv(env, 'SOURCE_LOOP_TARGET_COUNT') || 3),
     followupLoopMaxThreads: Number(readOptionalEnv(env, 'FOLLOWUP_LOOP_MAX_THREADS') || 3),
-    loopDelayMin: Number(readOptionalEnv(env, 'LOOP_DELAY_MIN') || 2000),
-    loopDelayMax: Number(readOptionalEnv(env, 'LOOP_DELAY_MAX') || 5000),
+    loopDelayMin: Number(readOptionalEnv(env, 'LOOP_DELAY_MIN') || 4000),
+    loopDelayMax: Number(readOptionalEnv(env, 'LOOP_DELAY_MAX') || 10000),
+    workHoursStart: readNumberEnv(env, 'WORK_HOURS_START'),
+    workHoursEnd: readNumberEnv(env, 'WORK_HOURS_END'),
     llmApiBase: readOptionalEnv(env, 'LLM_API_BASE') || 'https://www.openclaudecode.cn/v1',
     llmApiKey: readOptionalEnv(env, 'LLM_API_KEY'),
     llmModel: readOptionalEnv(env, 'LLM_MODEL') || 'gpt-5.4'
@@ -72,6 +74,17 @@ function readBooleanEnv(env, key, defaultValue) {
   }
 
   return /^(1|true|yes|on)$/i.test(value);
+}
+
+function readNumberEnv(env, key, defaultValue = null) {
+  const value = readOptionalEnv(env, key);
+
+  if (value === null) {
+    return defaultValue;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : defaultValue;
 }
 
 function resolveRepoRelativePath(value) {

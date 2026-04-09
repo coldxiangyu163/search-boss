@@ -56,6 +56,8 @@ test('buildConfig applies default BOSS CLI settings when optional env vars are a
   assert.equal(config.bossCdpTargetUrlPrefix, 'https://www.zhipin.com/');
   assert.equal(config.bossCliSessionDir, path.join(repoRoot, 'tmp'));
   assert.equal(config.bossCliEnabled, false);
+  assert.equal(config.workHoursStart, null);
+  assert.equal(config.workHoursEnd, null);
 });
 
 test('buildConfig resolves relative NANOBOT_CONFIG_PATH from repo root', () => {

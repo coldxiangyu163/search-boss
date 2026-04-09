@@ -36,7 +36,9 @@ class SourceLoopService {
     targetCount = 5,
     maxSkips = 30,
     candidateDelayMin = 2_000,
-    candidateDelayMax = 5_000
+    candidateDelayMax = 5_000,
+    readingDelayMin,
+    readingDelayMax
   }) {
     this.bossCliRunner = bossCliRunner;
     this.agentService = agentService;
@@ -45,6 +47,8 @@ class SourceLoopService {
     this.maxSkips = maxSkips;
     this.candidateDelayMin = candidateDelayMin;
     this.candidateDelayMax = candidateDelayMax;
+    this.readingDelayMin = readingDelayMin ?? (candidateDelayMin > 0 ? 5_000 : 0);
+    this.readingDelayMax = readingDelayMax ?? (candidateDelayMax > 0 ? 15_000 : 0);
   }
 
   async run({ runId, jobKey, targetCount: overrideTargetCount, recommendTab, bossCliRunner: runnerOverride, signal } = {}) {
@@ -234,6 +238,12 @@ class SourceLoopService {
       if (stats.totalEvaluated > 0) {
         const delayMs = this.candidateDelayMin + Math.random() * (this.candidateDelayMax - this.candidateDelayMin);
         await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+        // Random longer idle every 3-6 candidates to mimic human browsing rhythm
+        if (this.candidateDelayMin > 0 && stats.totalEvaluated % (3 + Math.floor(Math.random() * 4)) === 0) {
+          const idleMs = 8_000 + Math.random() * 15_000;
+          await new Promise((resolve) => setTimeout(resolve, idleMs));
+        }
       }
 
       await this.#processCandidate({
@@ -548,9 +558,15 @@ class SourceLoopService {
       // Non-fatal: popup may still have opened
     }
 
-    // Wait for popup to load
-    const delayMs = this.candidateDelayMin + Math.random() * (this.candidateDelayMax - this.candidateDelayMin);
-    await new Promise((r) => setTimeout(r, delayMs));
+    // Wait for popup to load and simulate reading time
+    const loadDelayMs = this.candidateDelayMin + Math.random() * (this.candidateDelayMax - this.candidateDelayMin);
+    await new Promise((r) => setTimeout(r, loadDelayMs));
+
+    // Simulate human reading the resume detail
+    if (this.readingDelayMin > 0) {
+      const readingDelayMs = this.readingDelayMin + Math.random() * (this.readingDelayMax - this.readingDelayMin);
+      await new Promise((r) => setTimeout(r, readingDelayMs));
+    }
 
     return true;
   }

@@ -3,6 +3,42 @@ function randomDelay(minMs, maxMs) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+let _lastMouseX = 400 + Math.random() * 200;
+let _lastMouseY = 300 + Math.random() * 200;
+
+async function humanMouseMove({ cdpClient, targetId, urlPrefix, toX, toY }) {
+  const fromX = _lastMouseX;
+  const fromY = _lastMouseY;
+  const dist = Math.sqrt((toX - fromX) ** 2 + (toY - fromY) ** 2);
+  const steps = Math.max(5, Math.min(25, Math.floor(dist / 30)));
+  const cp1x = fromX + (toX - fromX) * (0.2 + Math.random() * 0.3);
+  const cp1y = fromY + (toY - fromY) * (0.1 + Math.random() * 0.2) + (Math.random() - 0.5) * 40;
+  const cp2x = fromX + (toX - fromX) * (0.5 + Math.random() * 0.3);
+  const cp2y = fromY + (toY - fromY) * (0.7 + Math.random() * 0.2) + (Math.random() - 0.5) * 30;
+
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const it = 1 - t;
+    const x = it * it * it * fromX + 3 * it * it * t * cp1x + 3 * it * t * t * cp2x + t * t * t * toX;
+    const y = it * it * it * fromY + 3 * it * it * t * cp1y + 3 * it * t * t * cp2y + t * t * t * toY;
+
+    try {
+      await cdpClient.sendCommand({
+        targetId,
+        urlPrefix,
+        method: 'Input.dispatchMouseEvent',
+        params: { type: 'mouseMoved', x: Math.round(x), y: Math.round(y) }
+      });
+    } catch (_) {
+      // non-fatal
+    }
+    await new Promise((r) => setTimeout(r, 8 + Math.random() * 16));
+  }
+
+  _lastMouseX = toX;
+  _lastMouseY = toY;
+}
+
 async function realClick({ cdpClient, targetId, urlPrefix, selector, selectorAll, index = 0 }) {
   const findExpr = selectorAll
     ? `(() => {
@@ -24,6 +60,7 @@ async function realClick({ cdpClient, targetId, urlPrefix, selector, selectorAll
     throw new Error('boss_element_not_found_for_click');
   }
 
+  await humanMouseMove({ cdpClient, targetId, urlPrefix, toX: result.x, toY: result.y });
   await cdpClient.dispatchMouseClick({ targetId, urlPrefix, x: result.x, y: result.y });
   return { clicked: true, x: result.x, y: result.y };
 }
@@ -45,6 +82,7 @@ async function realClickByText({ cdpClient, targetId, urlPrefix, text, tag = '*'
     throw new Error(`boss_text_element_not_found:${text}`);
   }
 
+  await humanMouseMove({ cdpClient, targetId, urlPrefix, toX: result.x, toY: result.y });
   await cdpClient.dispatchMouseClick({ targetId, urlPrefix, x: result.x, y: result.y });
   return { clicked: true, x: result.x, y: result.y };
 }
@@ -121,6 +159,7 @@ async function clickRecommendPager({
     throw new Error(target?.reason || 'boss_recommend_pager_not_found');
   }
 
+  await humanMouseMove({ cdpClient, targetId, urlPrefix, toX: target.x, toY: target.y });
   await cdpClient.dispatchMouseClick({
     targetId,
     urlPrefix,
@@ -365,7 +404,12 @@ function buildBossFetchExpression({ url, method, body, timeoutMs }) {
   return `(() => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), ${timeoutMs});
-    const headers = { 'Content-Type': 'application/json' };
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Requested-With': 'XMLHttpRequest',
+      'Referer': window.location.href,
+      'Accept': 'application/json, text/plain, */*'
+    };
 
     return fetch(${serializedUrl}, {
       method: ${serializedMethod},
@@ -1077,6 +1121,7 @@ async function clickRecommendGreet({
     };
   }
 
+  await humanMouseMove({ cdpClient, targetId, urlPrefix, toX: target.x, toY: target.y });
   await cdpClient.dispatchMouseClick({
     targetId,
     urlPrefix,
@@ -1417,7 +1462,8 @@ async function clickChatRow({
     throw new Error(result?.reason || 'boss_chat_row_click_failed');
   }
 
-  // Step 2: Real mouse click at the row's coordinates
+  // Step 2: Human-like mouse move then click at the row's coordinates
+  await humanMouseMove({ cdpClient, targetId, urlPrefix, toX: result.x, toY: result.y });
   await cdpClient.dispatchMouseClick({ targetId, urlPrefix, x: result.x, y: result.y });
 
   await randomDelay(2_000, 3_000);
@@ -2107,6 +2153,7 @@ async function clickRecommendGreetByCoords({
   x,
   y
 } = {}) {
+  await humanMouseMove({ cdpClient, targetId, urlPrefix, toX: x, toY: y });
   await cdpClient.dispatchMouseClick({ targetId, urlPrefix, x, y });
   await randomDelay(2_000, 3_000);
 
@@ -2144,7 +2191,7 @@ async function scrollRecommendCardIntoView({
         const wraps = recDoc.querySelectorAll('.candidate-card-wrap');
         const wrap = wraps[${Number(cardIndex)}];
         if (!wrap) return JSON.stringify({ ok: false, reason: 'boss_recommend_card_not_found' });
-        wrap.scrollIntoView({ block: 'center', behavior: 'instant' });
+        wrap.scrollIntoView({ block: 'center', behavior: 'smooth' });
         const frameRect = recFrame.getBoundingClientRect();
         const rect = wrap.getBoundingClientRect();
         return JSON.stringify({
@@ -2162,7 +2209,7 @@ async function scrollRecommendCardIntoView({
     throw new Error(result?.reason || 'boss_recommend_scroll_failed');
   }
 
-  await randomDelay(300, 600);
+  await randomDelay(500, 1000);
   return result;
 }
 
@@ -2218,6 +2265,7 @@ async function clickAtCoords({
   x,
   y
 } = {}) {
+  await humanMouseMove({ cdpClient, targetId, urlPrefix, toX: x, toY: y });
   await cdpClient.dispatchMouseClick({ targetId, urlPrefix, x, y });
   await randomDelay(1_000, 2_000);
   return { ok: true, x, y };
@@ -3221,7 +3269,7 @@ async function applyRecommendFilters({
         const btns = Array.from(panel.querySelectorAll('.btn'));
         const confirm = btns.find(b => (b.textContent || '').trim() === '确定' && b.offsetWidth > 0);
         if (!confirm) return JSON.stringify({ ok: false, found: false, reason: 'confirm_btn_not_found' });
-        confirm.scrollIntoView({ behavior: 'instant', block: 'center' });
+        confirm.scrollIntoView({ behavior: 'smooth', block: 'center' });
         const frameRect = recFrame.getBoundingClientRect();
         const btnRect = confirm.getBoundingClientRect();
         return JSON.stringify({ ok: true, found: true, x: frameRect.left + btnRect.left + btnRect.width / 2, y: frameRect.top + btnRect.top + btnRect.height / 2 });
@@ -3256,7 +3304,7 @@ function buildClickFilterItemOptionExpr(filterLabel, optionText) {
         return (nameEl.textContent || '').trim().includes(${safeLabel});
       });
       if (!row) return JSON.stringify({ ok: false, found: false, reason: 'row_not_found:' + ${safeLabel} });
-      row.scrollIntoView({ behavior: 'instant', block: 'center' });
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
       const options = Array.from(row.querySelectorAll('.option'));
       const target = options.find(o => (o.textContent || '').replace(/\\s+/g, '').trim() === ${safeOption} && o.offsetWidth > 0);
       if (!target) return JSON.stringify({ ok: false, found: false, reason: 'option_not_found:' + ${safeOption} });
@@ -3311,4 +3359,5 @@ module.exports = {
   resetResumeCanvasCapture,
   scrollAndReadResumeDetail,
   applyRecommendFilters,
+  humanMouseMove,
 };

@@ -177,6 +177,12 @@ class FollowupLoopService {
       if (i > 0) {
         const delayMs = this.threadDelayMin + Math.random() * (this.threadDelayMax - this.threadDelayMin);
         await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+        // Random longer idle every 3-5 threads to mimic human browsing rhythm
+        if (this.threadDelayMin > 0 && i % (3 + Math.floor(Math.random() * 3)) === 0) {
+          const idleMs = 8_000 + Math.random() * 15_000;
+          await new Promise((resolve) => setTimeout(resolve, idleMs));
+        }
       }
 
       await this.#processOneThread({

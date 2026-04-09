@@ -1,3 +1,5 @@
+const { config } = require('../config');
+
 class SchedulerService {
   constructor({ pool, agentService, sourceLoopService = null, followupLoopService = null, taskLock = null, browserInstanceManager = null }) {
     this.pool = pool;
@@ -143,6 +145,13 @@ class SchedulerService {
   async #tick() {
     try {
       const now = new Date();
+      const currentHour = now.getHours();
+      const workStart = config.workHoursStart;
+      const workEnd = config.workHoursEnd;
+      if (Number.isFinite(workStart) && Number.isFinite(workEnd) && (currentHour < workStart || currentHour >= workEnd)) {
+        return;
+      }
+
       await this.#refreshWorkConfigCache();
 
       const schedules = await this.listSchedules();

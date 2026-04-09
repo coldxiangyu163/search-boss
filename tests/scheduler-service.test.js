@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const { SchedulerService, isInWorkWindow } = require('../src/services/scheduler-service');
 const { TaskLock } = require('../src/services/task-lock');
+const { reloadConfig } = require('../src/config');
 
 test('SchedulerService listSchedules selects hr_account_id for downstream lock scoping', async () => {
   let capturedSql = '';
@@ -418,6 +419,54 @@ test('SchedulerService ticker still triggers another HR account when one HR lock
   scheduler.stopTicker();
 
   assert.deepEqual(triggeredScheduleIds, [12]);
+});
+
+test('SchedulerService ticker skips schedules outside explicitly configured work hours', async () => {
+  const originalStart = process.env.WORK_HOURS_START;
+  const originalEnd = process.env.WORK_HOURS_END;
+  const currentHour = new Date().getHours();
+  const nextStart = currentHour < 22 ? currentHour + 1 : 0;
+  const nextEnd = currentHour < 21 ? currentHour + 2 : 1;
+  const triggeredScheduleIds = [];
+
+  process.env.WORK_HOURS_START = String(nextStart);
+  process.env.WORK_HOURS_END = String(nextEnd);
+  reloadConfig();
+
+  try {
+    const scheduler = new SchedulerService({
+      pool: { async query() { return { rows: [] }; } },
+      agentService: {}
+    });
+
+    scheduler.listSchedules = async () => ([
+      { id: 11, job_key: 'job-a', task_type: 'source', enabled: true, payload: {}, hr_account_id: null, last_run_at: null }
+    ]);
+    scheduler.triggerSchedule = async (id) => {
+      triggeredScheduleIds.push(id);
+      return { ok: true };
+    };
+
+    scheduler.startTicker();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    scheduler.stopTicker();
+
+    assert.deepEqual(triggeredScheduleIds, []);
+  } finally {
+    if (originalStart === undefined) {
+      delete process.env.WORK_HOURS_START;
+    } else {
+      process.env.WORK_HOURS_START = originalStart;
+    }
+
+    if (originalEnd === undefined) {
+      delete process.env.WORK_HOURS_END;
+    } else {
+      process.env.WORK_HOURS_END = originalEnd;
+    }
+
+    reloadConfig();
+  }
 });
 
 test('SchedulerService releases task lock after execution completes', async () => {

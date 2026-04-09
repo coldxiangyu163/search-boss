@@ -7,6 +7,7 @@ const {
   evaluateJson,
   bossFetch,
   clickRecommendPager,
+  clickRecommendGreetByCoords,
   inspectRecommendState,
   inspectRecommendDetail,
   openChatThread,
@@ -222,6 +223,49 @@ test('clickRecommendPager fails when the pager is not actionable', async () => {
     }),
     /boss_recommend_pager_not_visible/
   );
+});
+
+test('clickRecommendGreetByCoords moves the mouse before dispatching the click', async () => {
+  const originalSetTimeout = global.setTimeout;
+  const calls = [];
+  global.setTimeout = (fn) => {
+    fn();
+    return 0;
+  };
+
+  try {
+    const cdpClient = {
+      sendCommand: async (payload) => {
+        calls.push({ type: 'move', payload });
+        return null;
+      },
+      dispatchMouseClick: async (payload) => {
+        calls.push({ type: 'click', payload });
+      },
+      evaluate: async () => ({
+        type: 'string',
+        value: JSON.stringify({
+          resultText: '已打招呼',
+          alreadyChatting: false
+        })
+      })
+    };
+
+    const result = await clickRecommendGreetByCoords({
+      cdpClient,
+      targetId: 'target-1',
+      x: 280,
+      y: 320
+    });
+
+    assert.equal(result.ok, true);
+    assert.ok(calls.some((call) => call.type === 'move'));
+    assert.equal(calls.at(-1).type, 'click');
+    assert.equal(calls.at(-1).payload.x, 280);
+    assert.equal(calls.at(-1).payload.y, 320);
+  } finally {
+    global.setTimeout = originalSetTimeout;
+  }
 });
 
 test('inspectRecommendState returns detail and similar-candidate signals from recommend frame', async () => {

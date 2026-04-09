@@ -117,6 +117,7 @@ class ChromeLauncher {
     const running = await this.isRunning();
     if (running) {
       console.log(`[chrome-launcher] Chrome already running at ${this.cdpEndpoint}`);
+      await this._injectStealthScripts();
       await this._ensureBossPage();
       return { started: false, alreadyRunning: true };
     }
@@ -252,6 +253,7 @@ class ChromeLauncher {
 
       await this._waitForReady();
       console.log(`[chrome-launcher] Chrome started successfully on port ${this.port}`);
+      await this._injectStealthScripts();
       await this._ensureBossPage();
       return { started: true, alreadyRunning: false, pid: this._process?.pid };
     } catch (err) {
@@ -261,6 +263,84 @@ class ChromeLauncher {
         this._process = null;
       }
       throw err;
+    }
+  }
+
+  async _injectStealthScripts() {
+    try {
+      const response = await fetch(`${this.cdpEndpoint}/json`);
+      if (!response.ok) return;
+      const targets = await response.json();
+      const pages = (Array.isArray(targets) ? targets : []).filter((t) => t.type === 'page');
+      const stealthScript = `
+        (() => {
+          Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+          if (window.chrome && window.chrome.runtime) {
+            window.chrome.runtime = undefined;
+          }
+          Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
+          Object.defineProperty(navigator, 'plugins', {
+            get: () => [1, 2, 3, 4, 5]
+          });
+          const originalQuery = window.navigator.permissions.query.bind(window.navigator.permissions);
+          window.navigator.permissions.query = (parameters) =>
+            parameters.name === 'notifications'
+              ? Promise.resolve({ state: Notification.permission })
+              : originalQuery(parameters);
+        })();
+      `;
+
+      for (const page of pages) {
+        const wsUrl = page.webSocketDebuggerUrl;
+        if (!wsUrl) continue;
+        let ws;
+        try {
+          ws = new WebSocket(wsUrl);
+          await new Promise((resolve, reject) => {
+            ws.addEventListener('open', resolve, { once: true });
+            ws.addEventListener('error', () => reject(new Error('ws_error')), { once: true });
+            setTimeout(() => reject(new Error('ws_timeout')), 3000);
+          });
+
+          ws.send(JSON.stringify({
+            id: 1,
+            method: 'Page.addScriptToEvaluateOnNewDocument',
+            params: { source: stealthScript }
+          }));
+
+          await new Promise((resolve) => {
+            ws.addEventListener('message', (event) => {
+              const msg = JSON.parse(event.data);
+              if (msg.id === 1) resolve();
+            });
+            setTimeout(resolve, 2000);
+          });
+
+          ws.send(JSON.stringify({
+            id: 2,
+            method: 'Runtime.evaluate',
+            params: {
+              expression: stealthScript,
+              awaitPromise: true
+            }
+          }));
+
+          await new Promise((resolve) => {
+            ws.addEventListener('message', (event) => {
+              const msg = JSON.parse(event.data);
+              if (msg.id === 2) resolve();
+            });
+            setTimeout(resolve, 2000);
+          });
+
+          ws.close();
+        } catch (err) {
+          if (ws) try { ws.close(); } catch (_) {}
+        }
+      }
+      console.log('[chrome-launcher] Stealth scripts injected');
+    } catch (err) {
+      console.warn(`[chrome-launcher] Stealth injection failed: ${err.message}`);
     }
   }
 

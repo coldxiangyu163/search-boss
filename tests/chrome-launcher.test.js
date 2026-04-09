@@ -69,6 +69,25 @@ test('ChromeLauncher ensureRunning skips launch when already running', async () 
   }
 });
 
+test('ChromeLauncher ensureRunning injects stealth scripts when already running', async () => {
+  const launcher = new ChromeLauncher({});
+  const calls = [];
+
+  launcher.isRunning = async () => true;
+  launcher._injectStealthScripts = async () => {
+    calls.push('inject');
+  };
+  launcher._ensureBossPage = async () => {
+    calls.push('ensureBossPage');
+  };
+
+  const result = await launcher.ensureRunning();
+
+  assert.equal(result.started, false);
+  assert.equal(result.alreadyRunning, true);
+  assert.deepEqual(calls, ['inject', 'ensureBossPage']);
+});
+
 test('needsVirtualDisplay returns false on non-linux', () => {
   if (os.platform() !== 'linux') {
     assert.equal(needsVirtualDisplay(), false);
