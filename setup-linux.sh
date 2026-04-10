@@ -35,6 +35,32 @@ generate_random() {
   fi
 }
 
+resolve_browser_bin() {
+  command -v google-chrome-stable 2>/dev/null \
+    || command -v google-chrome 2>/dev/null \
+    || command -v chromium-browser 2>/dev/null \
+    || command -v chromium 2>/dev/null \
+    || true
+}
+
+postgres_server_installed() {
+  if command -v postgres &>/dev/null; then
+    return 0
+  fi
+
+  if [ -x "/usr/pgsql-${PG_VERSION}/bin/postgres" ]; then
+    return 0
+  fi
+
+  if compgen -G "/usr/lib/postgresql/*/bin/postgres" >/dev/null; then
+    return 0
+  fi
+
+  local pg_service
+  pg_service=$(resolve_pg_service)
+  [ -n "$pg_service" ]
+}
+
 detect_distro() {
   if [ -f /etc/os-release ]; then
     . /etc/os-release
@@ -72,13 +98,13 @@ install_base_deps() {
       fonts-liberation libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
       libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 \
       libpango-1.0-0 libcairo2 libasound2 libxshmfence1 libnss3 \
-      xvfb lsb-release lsof
+      xvfb lsb-release lsof x11-utils
   else
     sudo "$PKG_MANAGER" install -y curl wget git ca-certificates \
       nss atk at-spi2-atk cups-libs libdrm \
       libxkbcommon libXcomposite libXdamage libXrandr mesa-libgbm \
       pango cairo alsa-lib libxshmfence \
-      xorg-x11-server-Xvfb redhat-lsb-core lsof 2>/dev/null || true
+      xorg-x11-server-Xvfb redhat-lsb-core lsof xorg-x11-utils 2>/dev/null || true
   fi
 
   log_info "基础依赖安装完成"
@@ -109,20 +135,22 @@ install_node() {
 }
 
 install_pg() {
-  if command -v psql &>/dev/null; then
-    log_info "PostgreSQL (psql $(psql --version | awk '{print $3}')) 已安装"
+  if command -v psql &>/dev/null && postgres_server_installed; then
+    log_info "PostgreSQL 已安装 (psql $(psql --version | awk '{print $3}'))"
     return 0
   fi
 
   log_step "安装 PostgreSQL ${PG_VERSION} ..."
 
   if [[ "$PKG_MANAGER" == "apt" ]]; then
-    sudo apt-get install -y wget gnupg2 lsb-release
-    echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
-    wget -qO - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add - 2>/dev/null || \
-      wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/postgresql-archive-keyring.gpg
     sudo apt-get update
-    sudo apt-get install -y "postgresql-${PG_VERSION}" "postgresql-client-${PG_VERSION}"
+
+    if sudo apt-get install -y postgresql postgresql-client; then
+      :
+    else
+      log_warn "系统默认 PostgreSQL 包安装失败，尝试版本化包 postgresql-${PG_VERSION}"
+      sudo apt-get install -y "postgresql-${PG_VERSION}" "postgresql-client-${PG_VERSION}"
+    fi
   else
     sudo "$PKG_MANAGER" install -y "https://download.postgresql.org/pub/repos/yum/reporpms/EL-$(rpm -E %{rhel})-x86_64/pgdg-redhat-repo-latest.noarch.rpm" 2>/dev/null || true
     sudo "$PKG_MANAGER" install -y "postgresql${PG_VERSION}-server" "postgresql${PG_VERSION}"
@@ -131,6 +159,11 @@ install_pg() {
       export PATH="/usr/pgsql-${PG_VERSION}/bin:$PATH"
       echo "export PATH=/usr/pgsql-${PG_VERSION}/bin:\$PATH" | sudo tee /etc/profile.d/pgsql.sh >/dev/null
     fi
+  fi
+
+  if ! command -v psql &>/dev/null || ! postgres_server_installed; then
+    log_error "PostgreSQL 安装后仍未检测到可用服务端，请手动检查包仓库或安装结果"
+    exit 1
   fi
 
   log_info "PostgreSQL 安装完成"
@@ -236,9 +269,9 @@ setup_pg_database() {
 }
 
 install_chrome() {
-  if command -v google-chrome &>/dev/null || command -v google-chrome-stable &>/dev/null || command -v chromium-browser &>/dev/null || command -v chromium &>/dev/null; then
-    local chrome_bin
-    chrome_bin=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium-browser || command -v chromium)
+  local chrome_bin
+  chrome_bin=$(resolve_browser_bin)
+  if [ -n "$chrome_bin" ]; then
     log_info "Chrome/Chromium 已安装: $chrome_bin"
     return 0
   fi
@@ -246,9 +279,19 @@ install_chrome() {
   log_step "安装 Chromium ..."
 
   if [[ "$PKG_MANAGER" == "apt" ]]; then
-    sudo apt-get install -y chromium-browser 2>/dev/null || sudo apt-get install -y chromium
+    if ! sudo apt-get install -y chromium 2>/dev/null; then
+      sudo apt-get install -y chromium-browser
+    fi
   else
-    sudo "$PKG_MANAGER" install -y chromium
+    if ! sudo "$PKG_MANAGER" install -y chromium 2>/dev/null; then
+      sudo "$PKG_MANAGER" install -y chromium-browser 2>/dev/null || sudo "$PKG_MANAGER" install -y google-chrome-stable
+    fi
+  fi
+
+  chrome_bin=$(resolve_browser_bin)
+  if [ -z "$chrome_bin" ]; then
+    log_error "浏览器安装后仍未检测到 Chrome/Chromium，请手动安装后再继续"
+    exit 1
   fi
 
   log_info "Chromium 安装完成"

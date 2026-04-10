@@ -275,10 +275,15 @@ async function runChecks() {
     const res = await fetch('/api/license');
     const data = await res.json();
     if (data.valid) {
-      const info = data.warning
+      const info = data.disabled
+        ? (data.message || '未启用授权校验')
+        : data.warning
         ? data.warning.message
         : '有效期至 ' + data.expiresAt;
-      setCheck('chk-license', 'ok', data.customer + ' - ' + info);
+      const label = data.disabled
+        ? info
+        : ((data.customer || '授权有效') + ' - ' + info);
+      setCheck('chk-license', 'ok', label);
     } else {
       setCheck('chk-license', 'fail', data.message || '授权无效');
       allOk = false;

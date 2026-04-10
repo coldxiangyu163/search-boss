@@ -26,3 +26,28 @@ test('GET /health returns ok payload', async () => {
     status: 'ok'
   });
 });
+
+test('GET /api/license returns disabled status when license is not configured', async () => {
+  const app = createApp({
+    services: {
+      dashboard: {
+        async getSummary() {
+          return {
+            kpis: {},
+            queues: {},
+            health: {}
+          };
+        }
+      }
+    }
+  });
+
+  const response = await request(app).get('/api/license');
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, {
+    valid: true,
+    disabled: true,
+    message: '未启用授权校验'
+  });
+});

@@ -33,21 +33,41 @@ function canAccessRun(user, runScope) {
 
 function createApp({ services = {}, config = {}, pool = null } = {}) {
   const app = express();
+  const licenseService = config.licenseFile
+    ? new LicenseService({ licensePath: config.licenseFile })
+    : null;
 
   app.use(express.json());
 
-  if (config.licenseFile) {
-    const licenseService = new LicenseService({ licensePath: config.licenseFile });
+  if (licenseService) {
     app.use(licenseMiddleware(licenseService));
-    app.get('/api/license', (req, res) => {
-      const result = licenseService.validate();
-      res.json(result);
-    });
-    app.post('/api/license/reload', (req, res) => {
-      const result = licenseService.reload();
-      res.json(result);
-    });
   }
+
+  app.get('/api/license', (_req, res) => {
+    if (!licenseService) {
+      return res.json({
+        valid: true,
+        disabled: true,
+        message: '未启用授权校验'
+      });
+    }
+
+    const result = licenseService.validate();
+    res.json(result);
+  });
+
+  app.post('/api/license/reload', (_req, res) => {
+    if (!licenseService) {
+      return res.json({
+        valid: true,
+        disabled: true,
+        message: '未启用授权校验'
+      });
+    }
+
+    const result = licenseService.reload();
+    res.json(result);
+  });
 
   if (pool) {
     app.use(session({
