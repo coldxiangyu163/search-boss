@@ -27,6 +27,10 @@ log_warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
 log_step()  { echo -e "${CYAN}[STEP]${NC}  $*"; }
 
+rpm_install() {
+  sudo "$PKG_MANAGER" --disablerepo='pgdg*' install -y "$@"
+}
+
 generate_random() {
   if command -v openssl &>/dev/null; then
     openssl rand -hex 32
@@ -100,7 +104,7 @@ install_base_deps() {
       libpango-1.0-0 libcairo2 libasound2 libxshmfence1 libnss3 \
       xvfb lsb-release lsof x11-utils
   else
-    sudo "$PKG_MANAGER" install -y curl wget git ca-certificates \
+    rpm_install curl wget git ca-certificates \
       nss atk at-spi2-atk cups-libs libdrm \
       libxkbcommon libXcomposite libXdamage libXrandr mesa-libgbm \
       pango cairo alsa-lib libxshmfence \
@@ -128,7 +132,7 @@ install_node() {
     sudo apt-get install -y nodejs
   else
     curl -fsSL "https://rpm.nodesource.com/setup_${NODE_MAJOR}.x" | sudo -E bash -
-    sudo "$PKG_MANAGER" install -y nodejs
+    rpm_install nodejs
   fi
 
   log_info "Node.js $(node -v) 安装完成"
@@ -152,11 +156,11 @@ install_pg() {
       sudo apt-get install -y "postgresql-${PG_VERSION}" "postgresql-client-${PG_VERSION}"
     fi
   else
-    if sudo "$PKG_MANAGER" install -y postgresql-server postgresql; then
+    if rpm_install postgresql-server postgresql; then
       :
     else
       log_warn "系统默认 PostgreSQL 包安装失败，尝试兼容包名顺序"
-      sudo "$PKG_MANAGER" install -y postgresql postgresql-server
+      rpm_install postgresql postgresql-server
     fi
 
     if command -v postgresql-setup &>/dev/null; then
@@ -288,8 +292,8 @@ install_chrome() {
       sudo apt-get install -y chromium-browser
     fi
   else
-    if ! sudo "$PKG_MANAGER" install -y chromium 2>/dev/null; then
-      sudo "$PKG_MANAGER" install -y chromium-browser 2>/dev/null || sudo "$PKG_MANAGER" install -y google-chrome-stable
+    if ! rpm_install chromium 2>/dev/null; then
+      rpm_install chromium-browser 2>/dev/null || rpm_install google-chrome-stable
     fi
   fi
 
