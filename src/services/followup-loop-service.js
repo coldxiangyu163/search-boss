@@ -450,14 +450,13 @@ class FollowupLoopService {
         });
       }
       const extraTypes = interactionTypes.filter((t) => t !== 'request_resume');
-      if (extraTypes.length > 0) {
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-      }
-      for (const actionType of extraTypes) {
+      for (let ei = 0; ei < extraTypes.length; ei++) {
+        const actionGap = this.threadDelayMin + Math.random() * (this.threadDelayMax - this.threadDelayMin);
+        await new Promise((resolve) => setTimeout(resolve, actionGap));
         await this.#executeExchangeAction({
           runId, jobKey, encryptUid,
           candidateName: thread.name, candidateId,
-          actionType, stats, runner
+          actionType: extraTypes[ei], stats, runner
         });
       }
       return;
@@ -490,14 +489,13 @@ class FollowupLoopService {
         });
       }
       const extraTypes = interactionTypes.filter((t) => t !== 'request_resume');
-      if (extraTypes.length > 0) {
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-      }
-      for (const actionType of extraTypes) {
+      for (let ei = 0; ei < extraTypes.length; ei++) {
+        const actionGap = this.threadDelayMin + Math.random() * (this.threadDelayMax - this.threadDelayMin);
+        await new Promise((resolve) => setTimeout(resolve, actionGap));
         await this.#executeExchangeAction({
           runId, jobKey, encryptUid,
           candidateName: thread.name, candidateId,
-          actionType, stats, runner
+          actionType: extraTypes[ei], stats, runner
         });
       }
     }
