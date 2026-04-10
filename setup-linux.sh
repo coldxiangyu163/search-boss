@@ -140,7 +140,7 @@ install_pg() {
     return 0
   fi
 
-  log_step "安装 PostgreSQL ${PG_VERSION} ..."
+  log_step "安装 PostgreSQL ..."
 
   if [[ "$PKG_MANAGER" == "apt" ]]; then
     sudo apt-get update
@@ -152,12 +152,17 @@ install_pg() {
       sudo apt-get install -y "postgresql-${PG_VERSION}" "postgresql-client-${PG_VERSION}"
     fi
   else
-    sudo "$PKG_MANAGER" install -y "https://download.postgresql.org/pub/repos/yum/reporpms/EL-$(rpm -E %{rhel})-x86_64/pgdg-redhat-repo-latest.noarch.rpm" 2>/dev/null || true
-    sudo "$PKG_MANAGER" install -y "postgresql${PG_VERSION}-server" "postgresql${PG_VERSION}"
-    sudo "/usr/pgsql-${PG_VERSION}/bin/postgresql-${PG_VERSION}-setup" initdb 2>/dev/null || true
-    if [ -d "/usr/pgsql-${PG_VERSION}/bin" ]; then
-      export PATH="/usr/pgsql-${PG_VERSION}/bin:$PATH"
-      echo "export PATH=/usr/pgsql-${PG_VERSION}/bin:\$PATH" | sudo tee /etc/profile.d/pgsql.sh >/dev/null
+    if sudo "$PKG_MANAGER" install -y postgresql-server postgresql; then
+      :
+    else
+      log_warn "系统默认 PostgreSQL 包安装失败，尝试兼容包名顺序"
+      sudo "$PKG_MANAGER" install -y postgresql postgresql-server
+    fi
+
+    if command -v postgresql-setup &>/dev/null; then
+      sudo postgresql-setup --initdb 2>/dev/null || sudo postgresql-setup --initdb --unit postgresql 2>/dev/null || true
+    elif [ -x "/usr/bin/postgresql-setup" ]; then
+      sudo /usr/bin/postgresql-setup --initdb 2>/dev/null || sudo /usr/bin/postgresql-setup --initdb --unit postgresql 2>/dev/null || true
     fi
   fi
 
