@@ -31,6 +31,20 @@ rpm_install() {
   sudo "$PKG_MANAGER" --disablerepo='pgdg*' install -y "$@"
 }
 
+init_pg_cluster() {
+  local init_ok=1
+
+  if command -v postgresql-setup &>/dev/null; then
+    sudo postgresql-setup --initdb && init_ok=0
+  elif [ -x "/usr/bin/postgresql-setup" ]; then
+    sudo /usr/bin/postgresql-setup --initdb && init_ok=0
+  elif [ -x "/usr/pgsql-${PG_VERSION}/bin/postgresql-${PG_VERSION}-setup" ]; then
+    sudo "/usr/pgsql-${PG_VERSION}/bin/postgresql-${PG_VERSION}-setup" initdb && init_ok=0
+  fi
+
+  return $init_ok
+}
+
 generate_random() {
   if command -v openssl &>/dev/null; then
     openssl rand -hex 32
@@ -162,12 +176,6 @@ install_pg() {
       log_warn "系统默认 PostgreSQL 包安装失败，尝试兼容包名顺序"
       rpm_install postgresql postgresql-server
     fi
-
-    if command -v postgresql-setup &>/dev/null; then
-      sudo postgresql-setup --initdb 2>/dev/null || sudo postgresql-setup --initdb --unit postgresql 2>/dev/null || true
-    elif [ -x "/usr/bin/postgresql-setup" ]; then
-      sudo /usr/bin/postgresql-setup --initdb 2>/dev/null || sudo /usr/bin/postgresql-setup --initdb --unit postgresql 2>/dev/null || true
-    fi
   fi
 
   if ! command -v psql &>/dev/null || ! postgres_server_installed; then
@@ -214,6 +222,21 @@ ensure_pg_running() {
     log_info "PostgreSQL 服务运行中 ($pg_service)"
     return 0
   fi
+
+  log_warn "首次启动 PostgreSQL 失败，尝试初始化数据库目录后重试..."
+  if init_pg_cluster; then
+    sudo systemctl start "$pg_service" 2>/dev/null || true
+    sleep 2
+    if sudo systemctl is-active "$pg_service" &>/dev/null; then
+      log_info "PostgreSQL 初始化并启动成功 ($pg_service)"
+      return 0
+    fi
+  else
+    log_warn "自动 initdb 未成功，请查看下面的服务日志"
+  fi
+
+  sudo systemctl status "$pg_service" --no-pager -l 2>/dev/null || true
+  sudo journalctl -u "$pg_service" -n 30 --no-pager 2>/dev/null || true
 
   log_error "无法启动 PostgreSQL 服务，请手动检查"
   exit 1
