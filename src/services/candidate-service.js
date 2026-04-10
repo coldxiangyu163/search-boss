@@ -218,6 +218,57 @@ class CandidateService {
       relatedJobs: relatedJobsResult.rows
     };
   }
+
+  async listResumeBundleCandidates({ candidateIds, hrAccountId } = {}) {
+    const normalizedCandidateIds = [...new Set(
+      (Array.isArray(candidateIds) ? candidateIds : [])
+        .map((candidateId) => Number(candidateId))
+        .filter((candidateId) => Number.isInteger(candidateId) && candidateId > 0)
+    )];
+
+    if (!normalizedCandidateIds.length) {
+      return [];
+    }
+
+    const values = [normalizedCandidateIds];
+    const conditions = ['jc.id = any($1::int[])'];
+
+    if (hrAccountId) {
+      values.push(hrAccountId);
+      conditions.push(`jc.hr_account_id = $${values.length}`);
+    }
+
+    const result = await this.pool.query(
+      `
+        select
+          jc.id,
+          j.job_key,
+          j.job_name,
+          p.boss_encrypt_geek_id,
+          p.name,
+          jc.resume_downloaded_at,
+          coalesce(jc.resume_path, latest_downloaded_attachment.stored_path) as resume_path
+        from job_candidates jc
+        join jobs j on j.id = jc.job_id
+        join people p on p.id = jc.person_id
+        left join lateral (
+          select stored_path
+          from candidate_attachments
+          where job_candidate_id = jc.id
+            and status = 'downloaded'
+            and stored_path is not null
+            and stored_path <> ''
+          order by downloaded_at desc nulls last, id desc
+          limit 1
+        ) latest_downloaded_attachment on true
+        where ${conditions.join(' and ')}
+        order by array_position($1::int[], jc.id)
+      `,
+      values
+    );
+
+    return result.rows;
+  }
 }
 
 module.exports = {

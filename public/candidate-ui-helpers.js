@@ -119,6 +119,25 @@
     return `/api/resume-preview?path=${encodeURIComponent(normalizedValue)}`;
   }
 
+  function isResumeDownloadable(candidate = {}) {
+    const candidates = [
+      candidate.resume_path,
+      ...(Array.isArray(candidate.attachments)
+        ? candidate.attachments.map((attachment) => attachment?.stored_path)
+        : [])
+    ];
+
+    return candidates.some((value) => Boolean(buildResumePreviewUrl(value)));
+  }
+
+  function buildCandidateDownloadQuery(query = {}) {
+    return {
+      ...query,
+      resumeState: 'downloaded',
+      page: 1
+    };
+  }
+
   function formatActionTitle(actionType) {
     const labels = {
       resume_request_sent: '已发送索简历消息',
@@ -155,7 +174,9 @@
     getResumeBadgeClass,
     getGuardBadgeClass,
     buildCandidateTimeline,
-    buildResumePreviewUrl
+    buildResumePreviewUrl,
+    isResumeDownloadable,
+    buildCandidateDownloadQuery
   };
 
   if (typeof module !== 'undefined' && module.exports) {

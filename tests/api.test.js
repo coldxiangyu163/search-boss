@@ -20,6 +20,63 @@ function createAuthedApp({ user, pool = null, services = {}, config = {} } = {})
   return app;
 }
 
+
+function binaryParser(res, callback) {
+  const chunks = [];
+  res.on('data', (chunk) => {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  });
+  res.on('end', () => callback(null, Buffer.concat(chunks)));
+}
+
+function parseZipEntries(buffer) {
+  const endOfCentralDirectorySignature = 0x06054b50;
+  const centralDirectorySignature = 0x02014b50;
+  const localFileHeaderSignature = 0x04034b50;
+  let endOffset = -1;
+
+  for (let offset = buffer.length - 22; offset >= 0; offset -= 1) {
+    if (buffer.readUInt32LE(offset) === endOfCentralDirectorySignature) {
+      endOffset = offset;
+      break;
+    }
+  }
+
+  assert.notEqual(endOffset, -1, 'zip archive should include end of central directory');
+
+  const totalEntries = buffer.readUInt16LE(endOffset + 10);
+  const centralDirectoryOffset = buffer.readUInt32LE(endOffset + 16);
+  const entries = [];
+  let offset = centralDirectoryOffset;
+
+  for (let index = 0; index < totalEntries; index += 1) {
+    assert.equal(buffer.readUInt32LE(offset), centralDirectorySignature);
+
+    const compressedSize = buffer.readUInt32LE(offset + 20);
+    const fileNameLength = buffer.readUInt16LE(offset + 28);
+    const extraFieldLength = buffer.readUInt16LE(offset + 30);
+    const commentLength = buffer.readUInt16LE(offset + 32);
+    const localHeaderOffset = buffer.readUInt32LE(offset + 42);
+    const name = buffer.subarray(offset + 46, offset + 46 + fileNameLength).toString('utf8');
+
+    assert.equal(buffer.readUInt32LE(localHeaderOffset), localFileHeaderSignature);
+
+    const localFileNameLength = buffer.readUInt16LE(localHeaderOffset + 26);
+    const localExtraFieldLength = buffer.readUInt16LE(localHeaderOffset + 28);
+    const dataStart = localHeaderOffset + 30 + localFileNameLength + localExtraFieldLength;
+    const dataEnd = dataStart + compressedSize;
+
+    entries.push({
+      name,
+      data: buffer.subarray(dataStart, dataEnd)
+    });
+
+    offset += 46 + fileNameLength + extraFieldLength + commentLength;
+  }
+
+  return entries;
+}
+
 function createRunAccessPool(runRow) {
   return {
     query(sql) {
@@ -343,6 +400,8 @@ test('GET /api/candidates/:candidateId returns 404 when candidate detail is miss
   assert.equal(response.body.error, 'candidate_not_found');
 });
 
+
+
 test('GET /api/resume-preview returns resume files for inline preview', async () => {
   const app = createApp();
   const previewDir = path.join(__dirname, '..', 'resumes', '__preview_test__');
@@ -372,6 +431,121 @@ test('GET /api/resume-preview rejects non-resume paths', async () => {
 
   assert.equal(response.status, 400);
   assert.equal(response.body.error, 'invalid_resume_path');
+});
+
+test('POST /api/candidates/bulk-resume-download returns a zip for selected resumes', async () => {
+  let capturedFilters = null;
+  const bundleDir = path.join(repoRoot, 'resumes', '__bulk_download_test__');
+  const firstResume = path.join(bundleDir, 'resume-1.pdf');
+  const secondResume = path.join(bundleDir, 'resume-2.pdf');
+
+  await fs.mkdir(bundleDir, { recursive: true });
+  await fs.writeFile(firstResume, '%PDF-1.4\nresume-1');
+  await fs.writeFile(secondResume, '%PDF-1.4\nresume-2');
+
+  const app = createApp({
+    services: {
+      dashboard: {
+        async getSummary() {
+          return { kpis: {}, queues: {}, health: {} };
+        }
+      },
+      jobs: {
+        async listJobs() {
+          return [];
+        }
+      },
+      candidates: {
+        async listCandidates() {
+          return { items: [], pagination: { page: 1, pageSize: 20, total: 0, totalPages: 0 } };
+        },
+        async listResumeBundleCandidates(filters) {
+          capturedFilters = filters;
+          return [
+            {
+              id: 101,
+              name: '张三',
+              job_name: 'Java后端工程师',
+              resume_path: 'resumes/__bulk_download_test__/resume-1.pdf'
+            },
+            {
+              id: 102,
+              name: '李四',
+              job_name: '测试工程师',
+              resume_path: 'resumes/__bulk_download_test__/resume-2.pdf'
+            },
+            {
+              id: 103,
+              name: '王五',
+              job_name: '产品经理',
+              resume_path: ''
+            }
+          ];
+        }
+      }
+    }
+  });
+
+  try {
+    const response = await request(app)
+      .post('/api/candidates/bulk-resume-download')
+      .buffer(true)
+      .parse(binaryParser)
+      .send({ candidateIds: [101, 102, 103] });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(capturedFilters.candidateIds, [101, 102, 103]);
+    assert.equal(response.headers['x-resume-bundle-count'], '2');
+    assert.equal(response.headers['x-resume-bundle-skipped'], '1');
+    assert.match(response.headers['content-type'], /application\/zip/);
+    assert.match(response.headers['content-disposition'], /attachment;/);
+    const entries = parseZipEntries(response.body);
+    assert.deepEqual(
+      entries.map((entry) => entry.name),
+      [
+        'Java后端工程师/张三_101.pdf',
+        '测试工程师/李四_102.pdf'
+      ]
+    );
+    assert.equal(entries[0].data.toString('utf8'), '%PDF-1.4\nresume-1');
+    assert.equal(entries[1].data.toString('utf8'), '%PDF-1.4\nresume-2');
+  } finally {
+    await fs.rm(bundleDir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/candidates/bulk-resume-download returns 400 when selected candidates have no downloadable resume', async () => {
+  const app = createApp({
+    services: {
+      dashboard: {
+        async getSummary() {
+          return { kpis: {}, queues: {}, health: {} };
+        }
+      },
+      jobs: {
+        async listJobs() {
+          return [];
+        }
+      },
+      candidates: {
+        async listCandidates() {
+          return { items: [], pagination: { page: 1, pageSize: 20, total: 0, totalPages: 0 } };
+        },
+        async listResumeBundleCandidates() {
+          return [
+            { id: 101, name: '张三', job_name: 'Java后端工程师', resume_path: '' }
+          ];
+        }
+      }
+    }
+  });
+
+  const response = await request(app)
+    .post('/api/candidates/bulk-resume-download')
+    .send({ candidateIds: [101] });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'resume_bundle_empty');
 });
 
 test('GET /api/jobs/:jobKey returns job detail payload', async () => {

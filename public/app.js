@@ -18,6 +18,14 @@ const state = {
     total: 0,
     totalPages: 0
   },
+  candidateSelectionMode: 'none',
+  candidateSelectionSnapshot: null,
+  selectedCandidateIds: [],
+  candidateBulkDownload: {
+    loading: false,
+    error: '',
+    success: ''
+  },
   candidateListLoading: false,
   candidateListError: '',
   schedules: [],
@@ -122,7 +130,9 @@ const {
   getResumeBadgeClass,
   getGuardBadgeClass,
   buildCandidateTimeline,
-  buildResumePreviewUrl
+  buildResumePreviewUrl,
+  isResumeDownloadable,
+  buildCandidateDownloadQuery
 } = window.CandidateUiHelpers;
 
 const {
@@ -460,6 +470,7 @@ async function loadData() {
     total: candidates.items.length,
     totalPages: candidates.items.length ? 1 : 0
   };
+  resetCandidateBulkDownloadState();
   state.candidateListLoading = false;
 
   if (isAdmin()) {
@@ -508,6 +519,7 @@ async function loadCandidates() {
       total: state.candidates.length,
       totalPages: state.candidates.length ? 1 : 0
     };
+    resetCandidateBulkDownloadState();
   } catch (error) {
     state.candidateListError = error.message;
   } finally {
@@ -2765,6 +2777,7 @@ function renderTaskTriggerButton(jobKey, taskType, { enabled = true, compact = f
 function renderCandidates() {
   const page = state.candidatePagination.page || state.candidateQuery.page;
   const totalPages = state.candidatePagination.totalPages || 0;
+  const downloadMode = isCandidateDownloadMode();
 
   return `
     <section class="table-card">
@@ -2777,6 +2790,9 @@ function renderCandidates() {
         <div class="jobs-header-actions">
           <span class="badge">共 ${state.candidatePagination.total} 人</span>
           <span class="status-chip">第 ${page} / ${Math.max(totalPages, 1)} 页</span>
+          ${downloadMode
+            ? `<button class="button-secondary" onclick="exitCandidateDownloadMode()">退出下载模式</button>`
+            : `<button class="button-secondary" onclick="enterCandidateDownloadMode()">下载简历</button>`}
         </div>
       </div>
       <div class="candidate-filter-bar">
@@ -2800,7 +2816,7 @@ function renderCandidates() {
           </label>
           <label class="form-field">
             <span class="form-label">简历状态</span>
-            <select onchange="updateCandidateFilter('resumeState', this.value)">
+            <select onchange="updateCandidateFilter('resumeState', this.value)" ${downloadMode ? 'disabled' : ''}>
               ${renderCandidateSelectOptions(getResumeStateOptions(), state.candidateQuery.resumeState)}
             </select>
           </label>
@@ -2822,6 +2838,7 @@ function renderCandidates() {
       </div>
       ${state.candidateListError ? `<div class="inline-status inline-status-error">${escapeHtml(state.candidateListError)}</div>` : ''}
       ${renderCandidateListSummary()}
+      ${downloadMode ? renderCandidateBulkActions() : ''}
       ${state.candidateListLoading ? '<div class="empty-state">正在加载候选人列表...</div>' : renderCandidateTable()}
       ${renderCandidatePagination()}
     </section>
@@ -2859,6 +2876,19 @@ function getResumeStateOptions() {
   ];
 }
 
+function isCandidateDownloadMode() {
+  return state.candidateSelectionMode === 'download';
+}
+
+function resetCandidateBulkDownloadState() {
+  state.selectedCandidateIds = [];
+  state.candidateBulkDownload = {
+    loading: false,
+    error: '',
+    success: ''
+  };
+}
+
 function updateCandidateFilter(field, value) {
   state.candidateQuery[field] = value;
 }
@@ -2879,11 +2909,38 @@ function resetCandidateFilters() {
     ...state.candidateQuery,
     jobKey: '',
     status: '',
-    resumeState: '',
+    resumeState: isCandidateDownloadMode() ? 'downloaded' : '',
     keyword: '',
     page: 1
   };
   loadCandidates();
+}
+
+async function enterCandidateDownloadMode() {
+  if (isCandidateDownloadMode()) {
+    return;
+  }
+
+  state.candidateSelectionMode = 'download';
+  state.candidateSelectionSnapshot = { ...state.candidateQuery };
+  state.candidateQuery = buildCandidateDownloadQuery(state.candidateQuery);
+  resetCandidateBulkDownloadState();
+  await loadCandidates();
+}
+
+async function exitCandidateDownloadMode() {
+  const snapshot = state.candidateSelectionSnapshot;
+  state.candidateSelectionMode = 'none';
+  state.candidateSelectionSnapshot = null;
+  resetCandidateBulkDownloadState();
+
+  if (snapshot) {
+    state.candidateQuery = { ...snapshot };
+    await loadCandidates();
+    return;
+  }
+
+  render();
 }
 
 function goToCandidatePage(page) {
@@ -2910,7 +2967,7 @@ function changeCandidatePageSize(pageSize) {
 
 function renderCandidateListSummary() {
   const { jobKey, status, resumeState, keyword } = state.candidateQuery;
-  const activeFilters = [];
+  const activeFilters = isCandidateDownloadMode() ? ['下载模式'] : [];
 
   if (jobKey) {
     const job = state.jobs.find((item) => item.job_key === jobKey);
@@ -2921,7 +2978,7 @@ function renderCandidateListSummary() {
     activeFilters.push(formatLifecycleStatus(status));
   }
 
-  if (resumeState) {
+  if (resumeState && !(isCandidateDownloadMode() && resumeState === 'downloaded')) {
     activeFilters.push(formatResumeState(resumeState));
   }
 
@@ -2943,17 +3000,78 @@ function renderCandidateListSummary() {
   `;
 }
 
+function renderCandidateBulkActions() {
+  const selectedCount = state.selectedCandidateIds.length;
+  const visibleCandidateIds = state.candidates
+    .filter((candidate) => isResumeDownloadable(candidate))
+    .map((candidate) => candidate.id);
+  const allVisibleSelected = visibleCandidateIds.length > 0
+    && visibleCandidateIds.every((candidateId) => state.selectedCandidateIds.includes(candidateId));
+  const { loading, error, success } = state.candidateBulkDownload;
+
+  return `
+    <div class="candidate-bulk-toolbar">
+      <label class="checkbox-label candidate-bulk-checkbox">
+        <input
+          type="checkbox"
+          ${allVisibleSelected ? 'checked' : ''}
+          ${!visibleCandidateIds.length ? 'disabled' : ''}
+          onchange="toggleCandidatePageSelection(this.checked)"
+        />
+        全选本页${visibleCandidateIds.length ? `（${visibleCandidateIds.length}）` : ''}
+      </label>
+      <div class="muted">
+        ${selectedCount
+          ? `当前已自动筛选“已下载简历”，已选 ${selectedCount} 位候选人。`
+          : '当前列表已自动筛选为“已下载简历”，勾选后即可批量下载。'}
+      </div>
+      <div class="table-actions">
+        <button
+          class="button-secondary button-compact"
+          onclick="clearCandidateSelection()"
+          ${selectedCount || loading ? '' : 'disabled'}
+        >
+          清空选择
+        </button>
+        <button
+          class="button-secondary button-compact"
+          onclick="downloadSelectedCandidateResumes()"
+          ${selectedCount && !loading ? '' : 'disabled'}
+        >
+          ${loading ? '打包中...' : '批量下载简历'}
+        </button>
+      </div>
+    </div>
+    ${error ? `<div class="inline-status inline-status-error">${escapeHtml(error)}</div>` : ''}
+    ${!error && success ? `<div class="inline-status inline-status-success">${escapeHtml(success)}</div>` : ''}
+  `;
+}
+
 function renderCandidateTable() {
   if (!state.candidates.length) {
     return '<div class="empty-state">当前筛选条件下没有候选人，建议切换岗位或放宽筛选条件。</div>';
   }
 
   const admin = isAdmin();
+  const downloadMode = isCandidateDownloadMode();
+  const selectableCandidates = state.candidates.filter((candidate) => isResumeDownloadable(candidate));
+  const allVisibleSelected = selectableCandidates.length > 0
+    && selectableCandidates.every((candidate) => state.selectedCandidateIds.includes(candidate.id));
   return `
     <div class="table-scroll">
       <table>
         <thead>
           <tr>
+            ${downloadMode ? `
+              <th class="candidate-select-column">
+                <input
+                  type="checkbox"
+                  ${allVisibleSelected ? 'checked' : ''}
+                  ${selectableCandidates.length ? '' : 'disabled'}
+                  onchange="toggleCandidatePageSelection(this.checked)"
+                />
+              </th>
+            ` : ''}
             <th>候选人</th>
             ${admin ? '<th>所属 HR</th>' : ''}
             <th>当前岗位</th>
@@ -2968,6 +3086,17 @@ function renderCandidateTable() {
         <tbody>
           ${state.candidates.map((candidate) => `
             <tr class="table-row-action" onclick='openCandidateDetailDrawer(${JSON.stringify(candidate.id)})'>
+              ${downloadMode ? `
+                <td class="candidate-select-column" onclick="event.stopPropagation()">
+                  <input
+                    type="checkbox"
+                    ${state.selectedCandidateIds.includes(candidate.id) ? 'checked' : ''}
+                    ${isResumeDownloadable(candidate) ? '' : 'disabled'}
+                    onclick="event.stopPropagation()"
+                    onchange="toggleCandidateSelection(${JSON.stringify(candidate.id)}, this.checked)"
+                  />
+                </td>
+              ` : ''}
               <td>
                 ${escapeHtml(candidate.name || '-')}
                 <div class="muted">${escapeHtml(candidate.boss_encrypt_geek_id || '-')}</div>
@@ -3044,6 +3173,131 @@ function renderCandidatePagination() {
       </div>
     </div>
   `;
+}
+
+function toggleCandidateSelection(candidateId, checked) {
+  if (!isCandidateDownloadMode()) {
+    return;
+  }
+
+  const candidate = state.candidates.find((item) => item.id === candidateId);
+  if (checked && candidate && !isResumeDownloadable(candidate)) {
+    return;
+  }
+
+  const selectedCandidateIds = new Set(state.selectedCandidateIds);
+  if (checked) {
+    selectedCandidateIds.add(candidateId);
+  } else {
+    selectedCandidateIds.delete(candidateId);
+  }
+
+  state.selectedCandidateIds = Array.from(selectedCandidateIds);
+  state.candidateBulkDownload.error = '';
+  state.candidateBulkDownload.success = '';
+  render();
+}
+
+function toggleCandidatePageSelection(checked) {
+  if (!isCandidateDownloadMode()) {
+    return;
+  }
+
+  const selectedCandidateIds = new Set(state.selectedCandidateIds);
+
+  for (const candidate of state.candidates) {
+    if (!isResumeDownloadable(candidate)) {
+      continue;
+    }
+    if (checked) {
+      selectedCandidateIds.add(candidate.id);
+    } else {
+      selectedCandidateIds.delete(candidate.id);
+    }
+  }
+
+  state.selectedCandidateIds = Array.from(selectedCandidateIds);
+  state.candidateBulkDownload.error = '';
+  state.candidateBulkDownload.success = '';
+  render();
+}
+
+function clearCandidateSelection() {
+  state.selectedCandidateIds = [];
+  state.candidateBulkDownload.error = '';
+  state.candidateBulkDownload.success = '';
+  render();
+}
+
+async function downloadSelectedCandidateResumes() {
+  if (!isCandidateDownloadMode() || !state.selectedCandidateIds.length || state.candidateBulkDownload.loading) {
+    return;
+  }
+
+  state.candidateBulkDownload.loading = true;
+  state.candidateBulkDownload.error = '';
+  state.candidateBulkDownload.success = '';
+  render();
+
+  try {
+    const response = await fetch('/api/candidates/bulk-resume-download', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        candidateIds: state.selectedCandidateIds
+      })
+    });
+
+    if (!response.ok) {
+      let message = '批量下载简历失败';
+      try {
+        const payload = await response.json();
+        message = payload.message || payload.error || message;
+      } catch (_) {}
+      throw new Error(message);
+    }
+
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const bundleCount = Number(response.headers.get('X-Resume-Bundle-Count') || '0');
+    const skippedCount = Number(response.headers.get('X-Resume-Bundle-Skipped') || '0');
+
+    link.href = objectUrl;
+    link.download = parseDownloadFileName(response.headers.get('Content-Disposition')) || 'candidate-resumes.zip';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(objectUrl);
+
+    state.selectedCandidateIds = [];
+    state.candidateBulkDownload.success = skippedCount > 0
+      ? `已打包下载 ${bundleCount} 份简历，跳过 ${skippedCount} 位暂无落盘简历的候选人。`
+      : `已打包下载 ${bundleCount} 份简历。`;
+  } catch (error) {
+    state.candidateBulkDownload.error = error.message;
+  } finally {
+    state.candidateBulkDownload.loading = false;
+    render();
+  }
+}
+
+function parseDownloadFileName(disposition) {
+  if (!disposition) {
+    return '';
+  }
+
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch (_) {}
+  }
+
+  const fallbackMatch = disposition.match(/filename="([^"]+)"/i);
+  return fallbackMatch ? fallbackMatch[1] : '';
 }
 
 async function openCandidateDetailDrawer(candidateId) {

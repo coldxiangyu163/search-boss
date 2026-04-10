@@ -6,7 +6,9 @@ const {
   formatResumeState,
   formatGuardStatus,
   buildCandidateTimeline,
-  buildResumePreviewUrl
+  buildResumePreviewUrl,
+  isResumeDownloadable,
+  buildCandidateDownloadQuery
 } = require('../public/candidate-ui-helpers');
 
 test('candidate UI helpers format lifecycle and resume labels', () => {
@@ -58,4 +60,33 @@ test('candidate UI helpers build preview urls only for stored resumes paths', ()
   );
   assert.equal(buildResumePreviewUrl('tmp/outside.pdf'), '');
   assert.equal(buildResumePreviewUrl('../resumes/escape.pdf'), '');
+});
+
+
+test('candidate UI helpers detect downloadable resumes', () => {
+  assert.equal(isResumeDownloadable({ resume_path: 'resumes/java_backend/张三.pdf' }), true);
+  assert.equal(isResumeDownloadable({ resume_path: 'tmp/outside.pdf' }), false);
+  assert.equal(isResumeDownloadable({ attachments: [{ stored_path: 'resumes/java_backend/李四.pdf' }] }), true);
+  assert.equal(isResumeDownloadable({ attachments: [{ stored_path: '../escape.pdf' }] }), false);
+});
+
+test('candidate UI helpers build download mode query from current filters', () => {
+  assert.deepEqual(
+    buildCandidateDownloadQuery({
+      jobKey: 'java_backend',
+      status: 'responded',
+      resumeState: '',
+      keyword: '张三',
+      page: 3,
+      pageSize: 50
+    }),
+    {
+      jobKey: 'java_backend',
+      status: 'responded',
+      resumeState: 'downloaded',
+      keyword: '张三',
+      page: 1,
+      pageSize: 50
+    }
+  );
 });

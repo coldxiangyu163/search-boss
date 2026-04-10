@@ -10,6 +10,7 @@ const {
   getHrAccountLicenseStatus,
   licenseMiddleware
 } = require('./services/license-service');
+const { buildZipArchive } = require('./services/zip-builder');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const RESUMES_ROOT = path.join(REPO_ROOT, 'resumes');
@@ -652,6 +653,80 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
       }
 
       res.json({ item });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/candidates/bulk-resume-download', async (req, res, next) => {
+    try {
+      const candidateIds = normalizeCandidateIds(req.body?.candidateIds);
+
+      if (!candidateIds.length) {
+        res.status(400).json({
+          error: 'candidate_ids_required',
+          message: '请先选择需要下载简历的候选人。'
+        });
+        return;
+      }
+
+      if (candidateIds.length > 200) {
+        res.status(400).json({
+          error: 'candidate_ids_too_many',
+          message: '单次最多支持批量下载 200 份简历。'
+        });
+        return;
+      }
+
+      const hrAccountId = req.user?.role === 'hr' ? req.user.hr_account_id : undefined;
+      const bundleCandidates = await services.candidates.listResumeBundleCandidates({
+        candidateIds,
+        hrAccountId
+      });
+
+      const bundleFiles = [];
+      const usedEntryNames = new Set();
+
+      for (const candidate of bundleCandidates) {
+        const resumePath = resolveResumePreviewPath(candidate.resume_path);
+        if (!resumePath) {
+          continue;
+        }
+
+        try {
+          const content = await fs.readFile(resumePath);
+          bundleFiles.push({
+            name: buildResumeBundleEntryName(candidate, resumePath, usedEntryNames),
+            data: content,
+            mtime: candidate.resume_downloaded_at || null
+          });
+        } catch (error) {
+          if (error.code === 'ENOENT') {
+            continue;
+          }
+
+          throw error;
+        }
+      }
+
+      if (!bundleFiles.length) {
+        res.status(400).json({
+          error: 'resume_bundle_empty',
+          message: '所选候选人暂无可下载简历。'
+        });
+        return;
+      }
+
+      const skippedCount = Math.max(candidateIds.length - bundleFiles.length, 0);
+      const archive = buildZipArchive(bundleFiles);
+      const fileName = buildResumeBundleArchiveName();
+
+      res.type('application/zip');
+      res.set('Content-Length', String(archive.length));
+      res.set('Content-Disposition', buildAttachmentDisposition(fileName, 'candidate-resumes.zip'));
+      res.set('X-Resume-Bundle-Count', String(bundleFiles.length));
+      res.set('X-Resume-Bundle-Skipped', String(skippedCount));
+      res.send(archive);
     } catch (error) {
       next(error);
     }
@@ -1876,6 +1951,55 @@ function resolveResumePreviewPath(value) {
   }
 
   return resolvedPath;
+}
+
+function normalizeCandidateIds(value) {
+  return [...new Set(
+    (Array.isArray(value) ? value : [])
+      .map((item) => Number(item))
+      .filter((item) => Number.isInteger(item) && item > 0)
+  )];
+}
+
+function sanitizeFileNameSegment(value, fallback) {
+  const normalizedValue = String(value || '')
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/\s+/g, ' ');
+
+  return normalizedValue || fallback;
+}
+
+function buildResumeBundleEntryName(candidate, resumePath, usedEntryNames) {
+  const extension = path.extname(resumePath) || '.pdf';
+  const jobName = sanitizeFileNameSegment(candidate.job_key || candidate.job_name, '岗位');
+  const candidateName = sanitizeFileNameSegment(candidate.name, `candidate-${candidate.id}`);
+  const geekId = sanitizeFileNameSegment(candidate.boss_encrypt_geek_id, String(candidate.id || 'resume'));
+  const baseEntryName = `${jobName}/${candidateName}_${geekId}${extension}`;
+  let entryName = baseEntryName;
+  let suffix = 2;
+
+  while (usedEntryNames.has(entryName)) {
+    entryName = `${jobName}/${candidateName}_${geekId}_${suffix}${extension}`;
+    suffix += 1;
+  }
+
+  usedEntryNames.add(entryName);
+  return entryName;
+}
+
+function buildResumeBundleArchiveName(now = new Date()) {
+  const stamp = now.toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d{3}Z$/, '')
+    .replace('T', '-');
+
+  return `candidate-resumes-${stamp}.zip`;
+}
+
+function buildAttachmentDisposition(fileName, fallbackName) {
+  const asciiFallback = sanitizeFileNameSegment(fallbackName || 'download.zip', 'download.zip');
+  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }
 
 module.exports = {
