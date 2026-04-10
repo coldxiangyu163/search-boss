@@ -439,25 +439,13 @@ async function loadData() {
   state.candidateListError = '';
   render();
 
-  const fetches = [
+  const [schedules, summary, jobs, candidates, workConfigResult] = await Promise.all([
     fetchJson('/api/schedules'),
     fetchJson('/api/dashboard/summary'),
     fetchJson('/api/jobs'),
     fetchCandidates(),
     fetchJson('/api/work-config').catch(() => ({ item: null }))
-  ];
-
-  if (isAdmin()) {
-    fetches.push(fetchJson('/api/admin/dashboard/hr-overview'));
-    fetches.push(fetchJson('/api/admin/departments').catch(() => ({ items: [] })));
-    fetches.push(fetchJson('/api/admin/users').catch(() => ({ items: [] })));
-    fetches.push(fetchJson('/api/admin/hr-accounts').catch(() => ({ items: [] })));
-    fetches.push(fetchJson('/api/admin/boss-accounts').catch(() => ({ items: [] })));
-    fetches.push(fetchJson('/api/admin/browser-instances').catch(() => ({ items: [] })));
-  }
-
-  const results = await Promise.all(fetches);
-  const [schedules, summary, jobs, candidates, workConfigResult] = results;
+  ]);
 
   state.schedules = schedules.items;
   state.workConfig = workConfigResult.item;
@@ -474,12 +462,20 @@ async function loadData() {
   state.candidateListLoading = false;
 
   if (isAdmin()) {
-    state.hrOverview = results[5]?.items || [];
-    state.adminDepartments = results[6]?.items || [];
-    state.adminUsers = results[7]?.items || [];
-    state.adminHrAccounts = results[8]?.items || [];
-    state.adminBossAccounts = results[9]?.items || [];
-    state.adminBrowserInstances = results[10]?.items || [];
+    const [hrOverview, departments, users, hrAccounts, bossAccounts, browserInstances] = await Promise.all([
+      fetchJson('/api/admin/dashboard/hr-overview'),
+      fetchJson('/api/admin/departments').catch(() => ({ items: [] })),
+      fetchJson('/api/admin/users').catch(() => ({ items: [] })),
+      fetchJson('/api/admin/hr-accounts').catch(() => ({ items: [] })),
+      fetchJson('/api/admin/boss-accounts').catch(() => ({ items: [] })),
+      fetchJson('/api/admin/browser-instances').catch(() => ({ items: [] }))
+    ]);
+    state.hrOverview = hrOverview?.items || [];
+    state.adminDepartments = departments?.items || [];
+    state.adminUsers = users?.items || [];
+    state.adminHrAccounts = hrAccounts?.items || [];
+    state.adminBossAccounts = bossAccounts?.items || [];
+    state.adminBrowserInstances = browserInstances?.items || [];
   }
 
   render();
