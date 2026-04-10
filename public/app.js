@@ -474,12 +474,12 @@ async function loadData() {
   state.candidateListLoading = false;
 
   if (isAdmin()) {
-    state.hrOverview = results[4]?.items || [];
-    state.adminDepartments = results[5]?.items || [];
-    state.adminUsers = results[6]?.items || [];
-    state.adminHrAccounts = results[7]?.items || [];
-    state.adminBossAccounts = results[8]?.items || [];
-    state.adminBrowserInstances = results[9]?.items || [];
+    state.hrOverview = results[5]?.items || [];
+    state.adminDepartments = results[6]?.items || [];
+    state.adminUsers = results[7]?.items || [];
+    state.adminHrAccounts = results[8]?.items || [];
+    state.adminBossAccounts = results[9]?.items || [];
+    state.adminBrowserInstances = results[10]?.items || [];
   }
 
   render();
@@ -1815,11 +1815,11 @@ function renderAdminOrg() {
           <tbody>
             ${depts.length === 0 ? '<tr><td colspan="4" style="text-align:center;color:var(--text-muted,#999)">暂无部门</td></tr>' : ''}
             ${depts.map((d) => `<tr>
-              <td>${d.id}</td><td>${d.name}</td>
+              <td>${d.id}</td><td>${d.name || ''}</td>
               <td><span class="badge ${d.status === 'active' ? 'badge-success' : 'badge-danger'}">${d.status === 'active' ? '启用' : '停用'}</span></td>
               <td>
-                <button class="btn-sm" onclick="editDept(${d.id}, '${d.name.replace(/'/g, "\\'")}', '${d.status || 'active'}')">编辑</button>
-                <button class="btn-sm btn-danger" onclick="deleteDept(${d.id}, '${d.name.replace(/'/g, "\\'")}')">删除</button>
+                <button class="btn-sm" onclick="editDept(${d.id}, '${(d.name || '').replace(/'/g, "\\'")}', '${d.status || 'active'}')">编辑</button>
+                <button class="btn-sm btn-danger" onclick="deleteDept(${d.id}, '${(d.name || '').replace(/'/g, "\\'")}')">删除</button>
               </td>
             </tr>`).join('')}
           </tbody>
