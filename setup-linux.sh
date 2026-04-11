@@ -45,6 +45,29 @@ init_pg_cluster() {
   return $init_ok
 }
 
+detect_pg_data_dir() {
+  local candidates=(
+    "${PGDATA:-}"
+    "/var/lib/pgsql/data"
+    "/var/lib/pgsql/${PG_VERSION}/data"
+  )
+
+  local dir
+  for dir in "${candidates[@]}"; do
+    if [ -n "$dir" ] && [ -d "$dir" ]; then
+      printf '%s' "$dir"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+pg_dir_has_contents() {
+  local dir="$1"
+  sudo find "$dir" -mindepth 1 -maxdepth 1 | read -r _
+}
+
 generate_random() {
   if command -v openssl &>/dev/null; then
     openssl rand -hex 32
@@ -223,20 +246,40 @@ ensure_pg_running() {
     return 0
   fi
 
-  log_warn "首次启动 PostgreSQL 失败，尝试初始化数据库目录后重试..."
-  if init_pg_cluster; then
-    sudo systemctl start "$pg_service" 2>/dev/null || true
-    sleep 2
-    if sudo systemctl is-active "$pg_service" &>/dev/null; then
-      log_info "PostgreSQL 初始化并启动成功 ($pg_service)"
-      return 0
-    fi
+  local pg_data_dir=""
+  pg_data_dir=$(detect_pg_data_dir || true)
+
+  if [ -n "$pg_data_dir" ] && [ -f "$pg_data_dir/PG_VERSION" ]; then
+    log_warn "检测到已初始化的数据目录: $pg_data_dir，但服务仍未启动"
+  elif [ -n "$pg_data_dir" ] && pg_dir_has_contents "$pg_data_dir"; then
+    log_warn "检测到 PostgreSQL 数据目录非空但未完成初始化: $pg_data_dir"
+    log_warn "如果这是全新机器且没有历史数据，请先清空该目录后再重新执行脚本："
+    echo "  sudo systemctl stop $pg_service || true"
+    echo "  sudo rm -rf ${pg_data_dir:?}/*"
+    echo "  sudo chown -R postgres:postgres $(dirname "$pg_data_dir")"
+    echo "  sudo postgresql-setup --initdb"
+    echo "  sudo systemctl start $pg_service"
   else
-    log_warn "自动 initdb 未成功，请查看下面的服务日志"
+    log_warn "首次启动 PostgreSQL 失败，尝试初始化数据库目录后重试..."
+    if init_pg_cluster; then
+      sudo systemctl start "$pg_service" 2>/dev/null || true
+      sleep 2
+      if sudo systemctl is-active "$pg_service" &>/dev/null; then
+        log_info "PostgreSQL 初始化并启动成功 ($pg_service)"
+        return 0
+      fi
+    else
+      log_warn "自动 initdb 未成功，请查看下面的服务日志"
+    fi
   fi
 
   sudo systemctl status "$pg_service" --no-pager -l 2>/dev/null || true
   sudo journalctl -u "$pg_service" -n 30 --no-pager 2>/dev/null || true
+  if [ -f /var/lib/pgsql/initdb_postgresql.log ]; then
+    echo ""
+    log_warn "最近的 initdb 日志 (/var/lib/pgsql/initdb_postgresql.log):"
+    sudo tail -n 30 /var/lib/pgsql/initdb_postgresql.log 2>/dev/null || true
+  fi
 
   log_error "无法启动 PostgreSQL 服务，请手动检查"
   exit 1
