@@ -1465,12 +1465,23 @@ function isStoppableTask() {
 
 async function stopCurrentRun() {
   if (!state.syncModal.runId) return;
+  if (state.syncModal._stopping) return;
   if (!confirm('确定要停止当前任务？')) return;
+
+  state.syncModal._stopping = true;
+  document.querySelectorAll('.sync-stop-btn').forEach(btn => {
+    btn.disabled = true;
+    btn.style.opacity = '0.5';
+    btn.style.cursor = 'not-allowed';
+    btn.textContent = '停止中...';
+  });
 
   try {
     const result = await fetchJson(`/api/runs/${state.syncModal.runId}/stop`, { method: 'POST' });
     if (!result.ok) {
+      state.syncModal._stopping = false;
       alert(result.message || '停止失败');
+      render();
       return;
     }
     appendSyncEvent({
@@ -1481,7 +1492,9 @@ async function stopCurrentRun() {
     });
     render();
   } catch (error) {
+    state.syncModal._stopping = false;
     alert('停止失败: ' + error.message);
+    render();
   }
 }
 
@@ -5116,7 +5129,8 @@ function renderSyncModal() {
             <p class="card-subtitle">任务 ${state.syncModal.runId || '-'} · ${statusMap[state.syncModal.status] || '处理中'}</p>
           </div>
           <div style="display:flex;gap:8px;align-items:center">
-            ${isStoppableTask() && (state.syncModal.status === 'running' || state.syncModal.status === 'starting') ? '<button class="button-secondary button-danger" onclick="stopCurrentRun()">停止任务</button>' : ''}
+            ${isStoppableTask() && !state.syncModal._stopping && (state.syncModal.status === 'running' || state.syncModal.status === 'starting') ? '<button class="button-secondary button-danger sync-stop-btn" onclick="stopCurrentRun()">停止任务</button>' : ''}
+            ${isStoppableTask() && state.syncModal._stopping && (state.syncModal.status === 'running' || state.syncModal.status === 'starting') ? '<button class="button-secondary button-danger sync-stop-btn" disabled style="opacity:0.5;cursor:not-allowed">停止中...</button>' : ''}
             <button class="button-secondary" onclick="closeSyncModal()">关闭</button>
           </div>
         </div>
@@ -5462,7 +5476,8 @@ function renderSyncLiveLogsContent() {
             <p class="card-subtitle runtime-terminal-subtitle">${escapeHtml(terminalTitle)}</p>
           </div>
           <div class="runtime-terminal-actions">
-            ${isStoppableTask() && runningState ? '<button class="button-secondary button-danger" id="sync-live-stop-btn" onclick="stopCurrentRun()">停止任务</button>' : ''}
+            ${isStoppableTask() && !state.syncModal._stopping && runningState ? '<button class="button-secondary button-danger sync-stop-btn" id="sync-live-stop-btn" onclick="stopCurrentRun()">停止任务</button>' : ''}
+            ${isStoppableTask() && state.syncModal._stopping && runningState ? '<button class="button-secondary button-danger sync-stop-btn" id="sync-live-stop-btn" disabled style="opacity:0.5;cursor:not-allowed">停止中...</button>' : ''}
           </div>
         </div>
         <div class="runtime-terminal-meta">
