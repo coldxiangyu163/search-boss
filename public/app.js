@@ -1225,6 +1225,8 @@ function render() {
 }
 
 function dismissAllOverlays() {
+  if (document.fullscreenElement) return;
+
   const overlay = document.getElementById('sync-live-overlay');
   if (overlay) overlay.remove();
 
@@ -1338,6 +1340,11 @@ function mountAppContent(app, content) {
 
   const preserveLiveOverlay = state.syncModal.open && state.syncModal.showLiveView;
   const existingLiveOverlay = preserveLiveOverlay ? document.getElementById('sync-live-overlay') : null;
+
+  if (existingLiveOverlay && document.fullscreenElement) {
+    updateSyncLiveOverlayContent();
+    return;
+  }
 
   if (existingLiveOverlay && existingLiveOverlay.parentNode === app) {
     app.removeChild(existingLiveOverlay);

@@ -127,11 +127,26 @@ class DashboardService {
         scrapedAt: scrapeResult.scrapedAt,
         hrAccountId
       });
+    } catch (err) {
+      const existing = await this._getExistingSnapshot({ hrAccountId });
+      if (existing) {
+        return { ok: true, snapshotId: existing.id, snapshotDate: existing.snapshot_date, kept: true };
+      }
+      throw err;
     } finally {
       if (instanceId && this.browserInstanceManager) {
         await this.browserInstanceManager.releaseInstance(instanceId).catch(() => {});
       }
     }
+  }
+
+  async _getExistingSnapshot({ hrAccountId } = {}) {
+    const result = await this.pool.query(
+      hrAccountId
+        ? `select id, snapshot_date from boss_recruit_snapshots where snapshot_date = current_date and hr_account_id = ${Number(hrAccountId)} limit 1`
+        : `select id, snapshot_date from boss_recruit_snapshots where snapshot_date = current_date order by scraped_at desc limit 1`
+    );
+    return result.rows[0] || null;
   }
 
   async _saveSnapshot({ metrics, quotas, scrapedAt, hrAccountId }) {
