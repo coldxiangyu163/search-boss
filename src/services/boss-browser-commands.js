@@ -2205,7 +2205,7 @@ async function scrollRecommendCardIntoView({
         const wraps = recDoc.querySelectorAll('.candidate-card-wrap');
         const wrap = wraps[${Number(cardIndex)}];
         if (!wrap) return JSON.stringify({ ok: false, reason: 'boss_recommend_card_not_found' });
-        wrap.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        wrap.scrollIntoView({ block: 'center', behavior: 'auto' });
         const frameRect = recFrame.getBoundingClientRect();
         const rect = wrap.getBoundingClientRect();
         return JSON.stringify({

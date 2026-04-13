@@ -6,12 +6,12 @@ const { SourceLoopService, parseCardText } = require('../src/services/source-loo
 function createMockBossCliRunner({
   listResult = { ok: true, total: 0, candidates: [] },
   greetResults = [],
-  bindResult = { ok: true, session: { targetId: 'tab-1' } }
+  bindResult = { ok: true, session: { targetId: 'tab-1' } },
+  detailResult
 } = {}) {
   let greetIndex = 0;
   const calls = [];
-
-  return {
+  const runner = {
     calls,
     async bindTarget(opts) {
       calls.push({ command: 'bindTarget', ...opts });
@@ -74,6 +74,18 @@ function createMockBossCliRunner({
       return { ok: true, mode: 'canvas', fullText: '张三 28岁 4年 本科 工作经历 2020-2024 某公司 面点师 教育经历 2016-2020 某大学 食品科学 本科', segments: 3, textLength: 120 };
     }
   };
+
+  if (detailResult !== undefined) {
+    runner.inspectRecommendDetail = async (opts) => {
+      calls.push({ command: 'inspectRecommendDetail', ...opts });
+      if (detailResult instanceof Error) {
+        throw detailResult;
+      }
+      return detailResult;
+    };
+  }
+
+  return runner;
 }
 
 function createMockAgentService() {
@@ -453,6 +465,12 @@ test('SourceLoopService opens detail, scrolls full resume, then evaluates with L
         cardX: 300,
         cardY: 100
       }]
+    },
+    detailResult: {
+      ok: true,
+      bossEncryptGeekId: 'geek-1',
+      name: '张三',
+      detailText: '张三 工作经历 教育经历'
     }
   });
   bossCliRunner.scrollAndReadResumeDetail = async (opts) => {
@@ -484,11 +502,11 @@ test('SourceLoopService opens detail, scrolls full resume, then evaluates with L
   // LLM should receive full resume text, not card text
   assert.equal(receivedDetail.detailText, fullResumeText);
 
-  // Verify call order: setupCanvas -> resetCanvas -> clickAtCoords (open popup) -> scrollAndReadResumeDetail -> clickRecommendGreet
+  // Verify call order: setupCanvas -> resetCanvas -> clickAtCoords (open popup) -> inspectRecommendDetail -> scrollAndReadResumeDetail -> clickRecommendGreet
   const callOrder = bossCliRunner.calls
-    .filter((c) => ['setupResumeCanvasCapture', 'resetResumeCanvasCapture', 'clickAtCoords', 'scrollAndReadResumeDetail', 'clickRecommendGreet'].includes(c.command))
+    .filter((c) => ['setupResumeCanvasCapture', 'resetResumeCanvasCapture', 'clickAtCoords', 'inspectRecommendDetail', 'scrollAndReadResumeDetail', 'clickRecommendGreet'].includes(c.command))
     .map((c) => c.command);
-  assert.deepStrictEqual(callOrder, ['setupResumeCanvasCapture', 'resetResumeCanvasCapture', 'clickAtCoords', 'scrollAndReadResumeDetail', 'clickRecommendGreet']);
+  assert.deepStrictEqual(callOrder, ['setupResumeCanvasCapture', 'resetResumeCanvasCapture', 'clickAtCoords', 'inspectRecommendDetail', 'scrollAndReadResumeDetail', 'clickRecommendGreet']);
 
   const evalEvents = agentService.events.filter((e) => e.eventType === 'candidate_evaluated');
   assert.equal(evalEvents.length, 1);
@@ -499,6 +517,52 @@ test('SourceLoopService opens detail, scrolls full resume, then evaluates with L
   const candidateRecord = agentService.candidates[0];
   assert.equal(candidateRecord.metadata.evaluationMode, 'full_resume_detail');
   assert.ok(candidateRecord.metadata.fullResumeText);
+});
+
+test('SourceLoopService uses verified detail identity instead of stale list snapshot', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    listResult: makeCandidateList([
+      { geekId: 'snapshot-geek', name: '列表候选人' }
+    ]),
+    detailResult: {
+      ok: true,
+      bossEncryptGeekId: 'detail-geek',
+      name: '详情候选人',
+      detailText: '详情候选人 30岁 6年 本科 工作经历 教育经历'
+    }
+  });
+
+  const agentService = createMockAgentService();
+  const llmEvaluator = createMockLlmEvaluator([
+    { action: 'greet', tier: 'A', reason: 'verified detail match', facts: {} }
+  ]);
+
+  const service = new SourceLoopService({
+    bossCliRunner,
+    agentService,
+    llmEvaluator,
+    targetCount: 1,
+    candidateDelayMin: 0,
+    candidateDelayMax: 0
+  });
+
+  await service.run({ runId: 112, jobKey: '测试岗位_abc' });
+
+  const warningEvent = agentService.events.find((e) => e.eventType === 'source_loop_warning');
+  assert.ok(warningEvent);
+  assert.equal(warningEvent.payload.snapshotBossEncryptGeekId, 'snapshot-geek');
+  assert.equal(warningEvent.payload.detailBossEncryptGeekId, 'detail-geek');
+
+  const readEvent = agentService.events.find((e) => e.eventType === 'candidate_card_read');
+  assert.ok(readEvent);
+  assert.equal(readEvent.payload.bossEncryptGeekId, 'detail-geek');
+  assert.equal(readEvent.payload.candidateName, '详情候选人');
+  assert.equal(readEvent.payload.detailVerified, true);
+
+  assert.equal(agentService.candidates[0].bossEncryptGeekId, 'detail-geek');
+  assert.equal(agentService.candidates[0].name, '详情候选人');
+  assert.equal(agentService.actions[0].bossEncryptGeekId, 'detail-geek');
+  assert.equal(agentService.actions[0].payload.candidateName, '详情候选人');
 });
 
 test('SourceLoopService skips switchRecommendToLatest in default recommend mode', async () => {
