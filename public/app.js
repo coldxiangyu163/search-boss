@@ -1336,16 +1336,25 @@ function mountAppContent(app, content) {
     return;
   }
 
-  app.innerHTML = `${content}${renderAppOverlays()}`;
+  const preserveLiveOverlay = state.syncModal.open && state.syncModal.showLiveView;
+  const existingLiveOverlay = preserveLiveOverlay ? document.getElementById('sync-live-overlay') : null;
 
-  if (state.syncModal.open && state.syncModal.showLiveView) {
+  if (existingLiveOverlay && existingLiveOverlay.parentNode === app) {
+    app.removeChild(existingLiveOverlay);
+  }
+
+  app.innerHTML = `${content}${renderNonLiveOverlays()}${preserveLiveOverlay && !existingLiveOverlay ? renderSyncLiveOverlay() : ''}`;
+
+  if (existingLiveOverlay) {
+    app.appendChild(existingLiveOverlay);
+    updateSyncLiveOverlayContent();
+  } else if (preserveLiveOverlay) {
     hydrateSyncLiveOverlay();
   }
 }
 
-function renderAppOverlays() {
+function renderNonLiveOverlays() {
   return [
-    renderSyncLiveOverlay(),
     renderSyncModal(),
     renderJobDetailModal(),
     renderCandidateDetailDrawer(),
@@ -1365,6 +1374,22 @@ function renderLegacyAdminModals() {
   }
 
   return '';
+}
+
+function renderRuntimeStageStrip(stages) {
+  if (!stages.length) {
+    return '';
+  }
+
+  return `
+    <div class="runtime-stage-strip">
+      ${stages.map((item) => `
+        <span class="runtime-stage-chip ${item.active ? 'is-active' : ''} ${item.done ? 'is-done' : ''}">
+          ${escapeHtml(item.label)}
+        </span>
+      `).join('')}
+    </div>
+  `;
 }
 
 function openSyncModal(taskType = 'sync_jobs') {
@@ -5210,55 +5235,19 @@ function getRuntimeConsoleLatestEvent() {
   };
 }
 
-function renderRuntimeLogSummary(summary) {
-  const chips = [
-    `<span class="runtime-log-summary-chip">${summary.totalCount} 条记录</span>`
-  ];
-
-  if (summary.warningCount) {
-    chips.push(`<span class="runtime-log-summary-chip is-warning">${summary.warningCount} 个预警</span>`);
+function renderRuntimeTerminalRows(rows) {
+  if (!rows.length) {
+    return '<div class="runtime-terminal-empty">当前没有更多日志，后续运行节点会在这里出现。</div>';
   }
 
-  if (summary.errorCount) {
-    chips.push(`<span class="runtime-log-summary-chip is-error">${summary.errorCount} 个异常</span>`);
-  }
-
-  if (!summary.warningCount && !summary.errorCount) {
-    chips.push(`<span class="runtime-log-summary-chip is-muted">${summary.highlightCount} 个关键节点</span>`);
-  }
-
-  const lastSignalText = summary.lastSignal
-    ? `${summary.lastSignal.label} · ${summary.lastSignal.message || summary.lastSignal.eventType}`
-    : '展开后可查看关键节点与全部过程';
-
-  return `
-    <div class="runtime-log-summary">
-      <div class="runtime-log-summary-chips">
-        ${chips.join('')}
-      </div>
-      <div class="runtime-log-summary-text">${escapeHtml(lastSignalText)}</div>
-    </div>
-  `;
+  return rows.map((event) => `<div class="runtime-terminal-line severity-${escapeHtml(event.severity || 'info')}"><span class="runtime-terminal-time">[${escapeHtml(formatDateTime(event.occurredAt))}]</span><span class="runtime-terminal-label">[${escapeHtml(formatTerminalToken(event.eventType || event.label || 'log'))}]</span><span class="runtime-terminal-message">${escapeHtml(event.message || event.eventType || '无详细说明')}</span></div>`).join('');
 }
 
-function renderRuntimeLogFeedRows(rows, { compact = false } = {}) {
-  if (!rows.length) {
-    return '<div class="runtime-log-empty">当前没有更多日志，后续运行节点会在这里出现。</div>';
-  }
-
-  return rows.map((event) => `
-    <div class="runtime-log-feed-item ${compact ? 'is-compact' : ''} severity-${escapeHtml(event.severity || 'info')}">
-      <div class="runtime-log-feed-dot"></div>
-      <div class="runtime-log-feed-main">
-        <div class="runtime-log-feed-head">
-          <span class="runtime-log-feed-label">${escapeHtml(event.label || '运行事件')}</span>
-          <span class="runtime-log-feed-stage">${escapeHtml(event.stageLabel || '运行过程')}</span>
-          <span class="runtime-log-feed-time">${escapeHtml(formatDateTime(event.occurredAt))}</span>
-        </div>
-        <div class="runtime-log-feed-message">${escapeHtml(event.message || event.eventType || '无详细说明')}</div>
-      </div>
-    </div>
-  `).join('');
+function formatTerminalToken(value) {
+  return String(value || 'info')
+    .trim()
+    .replace(/\s+/g, '_')
+    .toUpperCase();
 }
 
 function getRuntimeConsoleRecommendation() {
@@ -5435,33 +5424,11 @@ function updateSyncLiveOverlayContent() {
   const sidebar = document.getElementById('runtime-console-sidebar');
   if (!sidebar) return;
 
-  const railStack = sidebar.querySelector('.runtime-console-rail-stack');
-  const railStackScrollTop = railStack ? railStack.scrollTop : 0;
-
-  const logList = sidebar.querySelector('.sync-log-list');
-  let scrollSnapshot = null;
-  if (logList) {
-    scrollSnapshot = captureSyncLogScrollSnapshot({
-      scrollTop: logList.scrollTop,
-      clientHeight: logList.clientHeight,
-      scrollHeight: logList.scrollHeight
-    });
-  }
-
   sidebar.innerHTML = renderSyncLiveLogsContent();
-
-  const newRailStack = sidebar.querySelector('.runtime-console-rail-stack');
-  if (newRailStack) {
-    newRailStack.scrollTop = railStackScrollTop;
-  }
 
   const newLogList = sidebar.querySelector('.sync-log-list');
   if (newLogList) {
-    newLogList.scrollTop = resolveSyncLogScrollTop({
-      previousSnapshot: scrollSnapshot,
-      nextClientHeight: newLogList.clientHeight,
-      nextScrollHeight: newLogList.scrollHeight
-    });
+    newLogList.scrollTop = Math.max(0, newLogList.scrollHeight - newLogList.clientHeight);
   }
 }
 
@@ -5476,91 +5443,38 @@ function renderSyncLiveLogsContent() {
         message: latestEvent.message || taskMeta.emptyLogMessage,
         occurredAt: latestEvent.occurredAt || state.syncModal.startedAt
       }];
-  const logSummary = summarizeRuntimeLogs(logs);
-  const logFeed = splitRuntimeLogFeed(logs);
+  const classifiedLogs = logs.map((event) => classifyRuntimeLogEvent(event));
+  const logSummary = summarizeRuntimeLogs(classifiedLogs);
+  const logFeed = splitRuntimeLogFeed(classifiedLogs);
+  const terminalRows = [...logFeed.stream].reverse();
+  const terminalTitle = isStandby
+    ? '浏览器待机'
+    : `${getRuntimeConsoleTaskLabel()} · 任务 ${state.syncModal.runId || '-'} · ${getSyncStatusLabel()}`;
 
   return `
     <div class="runtime-console-rail-stack">
-      <section class="runtime-console-panel runtime-console-panel--hero">
-        <div class="runtime-console-panel-head">
-          <div>
-            <p class="eyebrow">${isStandby ? '待机态' : taskMeta.eyebrow}</p>
-            <h3 class="card-title">${escapeHtml(getRuntimeConsoleTaskLabel())}</h3>
-            <p class="card-subtitle" id="sync-live-subtitle">${isStandby ? '当前未绑定执行任务' : `任务 ${state.syncModal.runId || '-'} · ${getSyncStatusLabel()}`}</p>
-          </div>
-          ${isStoppableTask() && runningState ? '<button class="button-secondary button-danger" id="sync-live-stop-btn" onclick="stopCurrentRun()">停止任务</button>' : ''}
-        </div>
-        <div class="runtime-console-metrics">
-          <div class="runtime-console-metric">
-            <span class="runtime-console-metric-label">当前阶段</span>
-            <strong>${escapeHtml(getRuntimeConsoleStageLabel())}</strong>
-          </div>
-          <div class="runtime-console-metric">
-            <span class="runtime-console-metric-label">${isStandby ? '页面标题' : '开始时间'}</span>
-            <strong>${escapeHtml(isStandby ? (liveView.pageTitle || '等待页面同步...') : formatDateTime(state.syncModal.startedAt))}</strong>
-          </div>
-        </div>
-        <div class="runtime-console-latest-event">
-          <span class="runtime-console-metric-label">最近动态</span>
-          <strong>${escapeHtml(latestEvent.message || taskMeta.emptyLogMessage)}</strong>
-          <span class="runtime-console-event-time">${escapeHtml(formatDateTime(latestEvent.occurredAt))}</span>
-        </div>
-      </section>
       ${state.syncModal.error ? `<div class="inline-status inline-status-error">${escapeHtml(state.syncModal.error)}</div>` : ''}
-      ${isStandby ? '' : `
-        <section class="runtime-console-panel">
-          <div class="runtime-console-panel-head">
-            <div>
-              <p class="eyebrow">执行轨迹</p>
-              <h4 class="card-title">任务阶段</h4>
-            </div>
-          </div>
-          <div class="sync-timeline">
-            ${buildSyncStages().map((item) => `
-              <div class="sync-timeline-item ${item.active ? 'is-active' : ''} ${item.done ? 'is-done' : ''}">
-                <div class="sync-timeline-dot"></div>
-                <div>
-                  <div class="list-title">${item.label}</div>
-                  <div class="list-desc">${item.desc}</div>
-                </div>
-              </div>
-            `).join('')}
-          </div>
-        </section>
-      `}
       <section class="runtime-console-panel runtime-console-panel--logs">
         <div class="runtime-console-panel-head runtime-console-panel-head--logs">
           <div>
-            <p class="eyebrow">运行细节</p>
-            <h4 class="card-title">详细日志</h4>
+            <p class="eyebrow">${isStandby ? '待机输出' : taskMeta.eyebrow}</p>
+            <h4 class="card-title">终端日志</h4>
+            <p class="card-subtitle runtime-terminal-subtitle">${escapeHtml(terminalTitle)}</p>
           </div>
-          <button class="sync-log-toggle" onclick="toggleSyncLogPanel()">
-            ${state.syncModal.isExpanded ? '收起日志' : '展开日志'}
-          </button>
+          <div class="runtime-terminal-actions">
+            ${isStoppableTask() && runningState ? '<button class="button-secondary button-danger" id="sync-live-stop-btn" onclick="stopCurrentRun()">停止任务</button>' : ''}
+          </div>
         </div>
-        ${renderRuntimeLogSummary(logSummary)}
-        ${state.syncModal.isExpanded ? `
-          <div class="runtime-log-sections">
-            <div class="runtime-log-section">
-              <div class="runtime-log-section-head">
-                <span class="runtime-log-section-title">关键节点</span>
-                <span class="runtime-log-section-meta">${logFeed.highlights.length} 条</span>
-              </div>
-              <div class="runtime-log-feed">
-                ${renderRuntimeLogFeedRows(logFeed.highlights.slice(0, 6), { compact: true })}
-              </div>
-            </div>
-            <div class="runtime-log-section">
-              <div class="runtime-log-section-head">
-                <span class="runtime-log-section-title">全部过程</span>
-                <span class="runtime-log-section-meta">按时间倒序</span>
-              </div>
-              <div class="sync-log-list runtime-log-feed is-stream">
-                ${renderRuntimeLogFeedRows(logFeed.stream)}
-              </div>
-            </div>
-          </div>
-        ` : '<div class="runtime-console-log-placeholder">默认收起日志明细，优先展示关键节点；展开后可查看重要节点和全部过程。</div>'}
+        <div class="runtime-terminal-meta">
+          <span class="runtime-terminal-meta-item">records=${logSummary.totalCount}</span>
+          <span class="runtime-terminal-meta-item">status=${escapeHtml(getSyncStatusLabel())}</span>
+          ${latestEvent.occurredAt ? `<span class="runtime-terminal-meta-item">last=${escapeHtml(formatDateTime(latestEvent.occurredAt))}</span>` : ''}
+          ${logSummary.warningCount ? `<span class="runtime-terminal-meta-item">warn=${logSummary.warningCount}</span>` : ''}
+          ${logSummary.errorCount ? `<span class="runtime-terminal-meta-item">error=${logSummary.errorCount}</span>` : ''}
+        </div>
+        <div class="sync-log-list runtime-terminal">
+          ${renderRuntimeTerminalRows(terminalRows)}
+        </div>
       </section>
     </div>
   `;

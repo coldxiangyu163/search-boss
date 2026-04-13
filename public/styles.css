@@ -2000,10 +2000,11 @@ select.sm-input {
 .runtime-console-rail-stack {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
   height: 100%;
-  padding: 18px;
-  overflow: auto;
+  min-height: 0;
+  padding: 14px;
+  overflow: hidden;
 }
 
 .runtime-console-panel {
@@ -2012,13 +2013,7 @@ select.sm-input {
     linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, rgba(245, 249, 255, 0.96) 100%);
   border: 1px solid rgba(201, 213, 225, 0.82);
   box-shadow: 0 16px 34px rgba(15, 23, 42, 0.08);
-  padding: 18px;
-}
-
-.runtime-console-panel--hero {
-  background:
-    radial-gradient(circle at top right, rgba(31, 94, 255, 0.15), transparent 28%),
-    linear-gradient(180deg, rgba(252, 254, 255, 0.96) 0%, rgba(239, 246, 255, 0.98) 100%);
+  padding: 14px;
 }
 
 .runtime-console-panel-head {
@@ -2044,104 +2039,137 @@ select.sm-input {
 }
 
 .runtime-console-panel-head--logs {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
 }
 
-.runtime-console-panel-head--logs .sync-log-toggle {
+.runtime-console-panel-head--logs .sync-log-toggle,
+.runtime-terminal-actions .button-danger {
   width: auto;
-  justify-self: start;
-  padding: 10px 14px;
+  padding: 8px 12px;
   border-radius: 12px;
-  border: 1px solid rgba(31, 94, 255, 0.16);
   box-shadow: none;
 }
 
-.runtime-console-metrics {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 16px;
-}
-
-.runtime-console-metric {
-  padding: 14px 16px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.8);
-  border: 1px solid rgba(191, 219, 254, 0.8);
-}
-
-.runtime-console-metric-label,
-.runtime-console-guidance-label {
-  display: block;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-.runtime-console-metric strong {
-  display: block;
-  margin-top: 8px;
-  color: var(--heading);
-  font-size: 15px;
-}
-
-.runtime-console-latest-event {
-  margin-top: 14px;
-  padding: 14px 16px;
-  border-radius: 16px;
-  background: rgba(15, 23, 42, 0.03);
-  border: 1px solid rgba(203, 213, 225, 0.84);
-}
-
-.runtime-console-latest-event strong {
-  display: block;
-  margin-top: 8px;
-  color: var(--heading);
-}
-
-.runtime-console-event-time {
-  display: block;
-  margin-top: 6px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.runtime-console-idle-list {
-  display: grid;
-  gap: 14px;
-}
-
-.runtime-console-idle-item {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-}
-
-.runtime-console-idle-dot {
-  width: 10px;
-  height: 10px;
-  margin-top: 8px;
-  border-radius: 999px;
-  background: linear-gradient(135deg, #1f5eff, #8eb1ff);
-  box-shadow: 0 0 0 5px rgba(31, 94, 255, 0.12);
-  flex-shrink: 0;
-}
-
 .runtime-console-panel--logs .sync-log-list {
-  margin-top: 16px;
+  margin-top: 10px;
+}
+
+.runtime-console-panel--logs {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .runtime-console-log-placeholder {
-  margin-top: 14px;
-  padding: 14px 16px;
+  margin-top: 10px;
+  padding: 12px 14px;
   border-radius: 14px;
   background: rgba(241, 245, 249, 0.72);
   color: var(--muted);
   font-size: 13px;
+}
+
+.runtime-terminal-subtitle {
+  margin-top: 4px;
+  max-width: none;
+}
+
+.runtime-terminal-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.runtime-terminal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.runtime-terminal-meta-item {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  color: #334155;
+}
+
+.runtime-terminal {
+  margin-top: 8px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: #0b1020;
+  border: 1px solid rgba(15, 23, 42, 0.3);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  color: #dbe4ff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  min-height: 0;
+  height: 100%;
+}
+
+.sync-log-list.runtime-terminal {
+  display: block;
+  gap: 0;
+  padding-top: 0;
+  overflow: auto;
+  max-height: none;
+  flex: 1;
+}
+
+.runtime-terminal-line {
+  display: block;
+  padding: 0;
+  margin: 0 0 4px;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.runtime-terminal-line:last-child {
+  margin-bottom: 0;
+}
+
+.runtime-terminal-time {
+  color: #7dd3fc;
+}
+
+.runtime-terminal-label {
+  color: #a78bfa;
+  margin-left: 8px;
+}
+
+.runtime-terminal-message {
+  color: #cbd5e1;
+  margin-left: 8px;
+}
+
+.runtime-terminal-line.severity-warning .runtime-terminal-label,
+.runtime-terminal-line.severity-warning .runtime-terminal-message {
+  color: #facc15;
+}
+
+.runtime-terminal-line.severity-error .runtime-terminal-label,
+.runtime-terminal-line.severity-error .runtime-terminal-message {
+  color: #f87171;
+}
+
+.runtime-terminal-line.severity-success .runtime-terminal-label,
+.runtime-terminal-line.severity-success .runtime-terminal-message {
+  color: #4ade80;
+}
+
+.runtime-terminal-empty {
+  color: #94a3b8;
 }
 
 .runtime-console .sync-log-toggle {

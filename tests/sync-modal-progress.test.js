@@ -1043,3 +1043,131 @@ test('admin modal form values are rebuilt from state on rerender', () => {
   assert.match(html, /<option value="11" selected>/);
   assert.match(html, /<option value="inactive" selected>/);
 });
+
+test('runtime console logs render as single terminal stream without summary chips or split sections', () => {
+  const helperScript = fs.readFileSync(
+    path.join(__dirname, '../public/sync-modal-progress.js'),
+    'utf8'
+  );
+  const appScript = fs.readFileSync(
+    path.join(__dirname, '../public/app.js'),
+    'utf8'
+  );
+
+  const noop = () => {};
+  const nodes = {
+    'page-eyebrow': { textContent: '' },
+    'page-title': { textContent: '' },
+    'page-description': { textContent: '' },
+    app: { innerHTML: '' }
+  };
+  const context = vm.createContext({
+    window: {
+      JobUiHelpers: {
+        formatJobStatus: noop,
+        getJobStatusBadgeClass: noop,
+        isJobActionEnabled: noop
+      },
+      CandidateUiHelpers: {
+        formatLifecycleStatus: noop,
+        formatResumeState: noop,
+        formatGuardStatus: noop,
+        getLifecycleBadgeClass: noop,
+        getResumeBadgeClass: noop,
+        getGuardBadgeClass: noop,
+        buildCandidateTimeline: () => [],
+        buildResumePreviewUrl: noop
+      },
+      SyncLogScroll: {
+        captureSyncLogScrollSnapshot: () => null,
+        resolveSyncLogScrollTop: () => 0
+      },
+      RuntimeLogFeed: {
+        classifyRuntimeLogEvent(event) {
+          return {
+            ...event,
+            severity: event.severity || 'info',
+            label: event.label || event.eventType || '运行事件',
+            stageLabel: event.stageLabel || event.stage || '运行过程'
+          };
+        },
+        summarizeRuntimeLogs(events) {
+          return {
+            totalCount: events.length,
+            warningCount: 0,
+            errorCount: 0,
+            highlightCount: events.length,
+            lastSignal: events[events.length - 1] || null
+          };
+        },
+        splitRuntimeLogFeed(events) {
+          return {
+            highlights: events,
+            stream: [...events].reverse()
+          };
+        }
+      },
+      location: { href: '' },
+      setInterval: noop,
+      clearInterval: noop
+    },
+    document: {
+      addEventListener: noop,
+      getElementById(id) {
+        return nodes[id] || null;
+      },
+      querySelector() {
+        return null;
+      },
+      body: { appendChild: noop }
+    },
+    fetch: noop,
+    module: undefined,
+    console
+  });
+
+  vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+  vm.runInContext(appScript, context, { filename: 'app.js' });
+  vm.runInContext(`
+    state.summary = { activeRun: null };
+    state.view = 'command';
+    state.syncModal = {
+      open: true,
+      runId: 88,
+      status: 'running',
+      startedAt: '2026-04-08T11:00:00.000Z',
+      error: '',
+      events: [
+        { occurredAt: '2026-04-08T11:00:01.000Z', eventType: 'schedule_triggered', stage: 'bootstrap', message: '已触发任务' },
+        { occurredAt: '2026-04-08T11:00:03.000Z', eventType: 'nanobot_stream', stage: 'execute', message: '正在打开推荐列表' }
+      ],
+      progress: createSyncModalProgressState(),
+      isExpanded: true,
+      pollTimer: null,
+      lastEventId: 0,
+      taskType: 'source',
+      showLiveView: true,
+      browserFocus: false,
+      consoleTitle: '我的 BOSS 浏览器',
+      standbyMessage: ''
+    };
+    manageOverviewPolling = () => {};
+    renderCommandCenter = () => '<section>command</section>';
+    render();
+  `, context);
+
+  const html = nodes.app.innerHTML;
+  assert.match(html, /runtime-terminal/);
+  assert.match(html, /runtime-terminal-line/);
+  assert.doesNotMatch(html, /runtime-log-summary/);
+  assert.doesNotMatch(html, /runtime-log-sections/);
+  assert.doesNotMatch(html, /关键节点/);
+  assert.doesNotMatch(html, /runtime-console-panel--hero/);
+  assert.doesNotMatch(html, /runtime-console-metrics/);
+  assert.doesNotMatch(html, /runtime-stage-strip/);
+  assert.doesNotMatch(html, /runtime-terminal-stage/);
+  assert.match(html, /\[NANOBOT_STREAM\]/);
+  assert.match(html, /正在打开推荐列表/);
+  assert.doesNotMatch(html, /sync-log-toggle/);
+  assert.ok(html.indexOf('[SCHEDULE_TRIGGERED]') < html.indexOf('[NANOBOT_STREAM]'));
+});
