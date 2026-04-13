@@ -4034,6 +4034,115 @@ test('AgentService recordMessage generates a fallback bossMessageId when omitted
   assert.match(String(insertQuery.params[1]), /^auto:12:inbound:2026-03-25T08:05:00\.000Z/);
 });
 
+test('AgentService recordMessage does not touch candidate inbound state for duplicated inbound messages', async () => {
+  const queryCalls = [];
+  const { AgentService } = require('../src/services/agent-service');
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql, params = []) {
+        queryCalls.push({ sql, params });
+
+        if (sql.includes('from job_candidates') && sql.includes('where id = $1')) {
+          return {
+            rows: [{
+              id: 88,
+              resume_state: 'not_requested',
+              last_resume_requested_at: null,
+              resume_request_count: 0
+            }],
+            rowCount: 1
+          };
+        }
+
+        if (sql.includes('insert into candidate_messages')) {
+          return { rows: [], rowCount: 0 };
+        }
+
+        if (sql.includes('update job_candidates')) {
+          throw new Error('duplicate inbound sync should not update candidate state');
+        }
+
+        if (sql.includes('insert into sourcing_run_events')) {
+          return { rows: [], rowCount: 1 };
+        }
+
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    }
+  });
+
+  const result = await agentService.recordMessage({
+    runId: 12,
+    candidateId: 88,
+    eventId: 'message:dup',
+    occurredAt: '2026-03-25T08:05:00.000Z',
+    bossEncryptGeekId: 'geek-1',
+    bossMessageId: 'dup-1',
+    direction: 'inbound',
+    messageType: 'text',
+    contentText: '我对岗位感兴趣'
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.duplicated, true);
+});
+
+test('AgentService recordMessage supports skipping candidate inbound state updates', async () => {
+  const queryCalls = [];
+  const { AgentService } = require('../src/services/agent-service');
+
+  const agentService = new AgentService({
+    pool: {
+      async query(sql, params = []) {
+        queryCalls.push({ sql, params });
+
+        if (sql.includes('from job_candidates') && sql.includes('where id = $1')) {
+          return {
+            rows: [{
+              id: 88,
+              resume_state: 'not_requested',
+              last_resume_requested_at: null,
+              resume_request_count: 0
+            }],
+            rowCount: 1
+          };
+        }
+
+        if (sql.includes('insert into candidate_messages')) {
+          return { rows: [{ id: 7 }], rowCount: 1 };
+        }
+
+        if (sql.includes('update job_candidates')) {
+          throw new Error('skipCandidateStateUpdate should bypass candidate touch');
+        }
+
+        if (sql.includes('insert into sourcing_run_events')) {
+          return { rows: [], rowCount: 1 };
+        }
+
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    }
+  });
+
+  const result = await agentService.recordMessage({
+    runId: 12,
+    candidateId: 88,
+    eventId: 'message:historical',
+    occurredAt: '2026-03-25T08:05:00.000Z',
+    bossEncryptGeekId: 'geek-1',
+    bossMessageId: 'historical-1',
+    direction: 'inbound',
+    messageType: 'text',
+    contentText: '我对岗位感兴趣',
+    skipCandidateStateUpdate: true
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.duplicated, false);
+});
+
 test('AgentService recordMessage requires jobKey when candidateId is absent', async () => {
   const { AgentService } = require('../src/services/agent-service');
 

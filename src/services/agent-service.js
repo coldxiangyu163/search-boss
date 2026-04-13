@@ -636,7 +636,8 @@ class AgentService {
     direction,
     messageType,
     contentText,
-    rawPayload = {}
+    rawPayload = {},
+    skipCandidateStateUpdate = false
   }) {
     const candidate = await this.resolveJobCandidateForWrite({
       candidateId,
@@ -676,7 +677,7 @@ class AgentService {
       ]
     );
 
-    if (direction === 'inbound') {
+    if (direction === 'inbound' && result.rows[0]?.id && !skipCandidateStateUpdate) {
       await this.pool.query(
         `
           update job_candidates

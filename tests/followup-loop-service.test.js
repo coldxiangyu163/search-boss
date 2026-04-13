@@ -514,9 +514,88 @@ test('FollowupLoopService does not record reply or request resume when send is u
   assert.equal(result.stats.replied, 0);
   assert.equal(result.stats.resumeRequested, 0);
   assert.equal(result.stats.errors, 1);
-  assert.equal(agentService.messages.filter((item) => item.direction === 'outbound').length, 0);
+  assert.equal(agentService.messages.filter((item) => item.direction === 'outbound' && !item.bossMessageId?.startsWith('thread:')).length, 0);
+  assert.equal(agentService.messages.filter((item) => item.bossMessageId?.startsWith('thread:')).length, 2);
   assert.equal(agentService.actions.length, 0);
   assert.equal(bossCliRunner.calls.some((c) => c.command === 'clickRequestResume'), false);
+});
+
+test('FollowupLoopService syncs repeated visible messages with distinct message ids', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    visibleThreads: [
+      { name: '王五', dataId: '789-0', index: 0, hasUnread: true }
+    ],
+    messageResults: {
+      '789-0': {
+        ok: true,
+        messages: [
+          { from: '王五', type: 'text', text: '好的', time: '10:00' },
+          { from: '王五', type: 'text', text: '好的', time: '10:00' },
+          { from: 'me', type: 'text', text: '收到', time: '10:01' }
+        ]
+      }
+    }
+  });
+
+  const agentService = createMockAgentService();
+  const seenIds = new Set();
+  const persistedMessages = [];
+  agentService.recordMessage = async (payload) => {
+    if (seenIds.has(payload.bossMessageId)) {
+      return { ok: true, duplicated: true, messageId: null };
+    }
+    seenIds.add(payload.bossMessageId);
+    persistedMessages.push(payload);
+    return { ok: true, duplicated: false, messageId: persistedMessages.length };
+  };
+
+  const service = new FollowupLoopService({
+    bossCliRunner,
+    agentService,
+    llmEvaluator: createMockLlmEvaluator([{ action: 'skip', reason: 'sync only' }]),
+    threadDelayMin: 0,
+    threadDelayMax: 0
+  });
+
+  const result = await service.run({ runId: 355, jobKey: '面点师傅（B0038011）_8eca6cad' });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stats.messagesSynced, 3);
+  assert.equal(persistedMessages.length, 3);
+  assert.equal(new Set(persistedMessages.map((item) => item.bossMessageId)).size, 3);
+});
+
+test('FollowupLoopService does not count duplicated synced messages', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    visibleThreads: [
+      { name: '王五', dataId: '789-0', index: 0, hasUnread: true }
+    ],
+    messageResults: {
+      '789-0': {
+        ok: true,
+        messages: [
+          { from: '王五', type: 'text', text: '可以的，怎么发？', time: '10:00' }
+        ]
+      }
+    }
+  });
+
+  const agentService = createMockAgentService();
+  agentService.recordMessage = async () => ({ ok: true, duplicated: true, messageId: null });
+
+  const service = new FollowupLoopService({
+    bossCliRunner,
+    agentService,
+    llmEvaluator: createMockLlmEvaluator([{ action: 'skip', reason: 'already synced' }]),
+    threadDelayMin: 0,
+    threadDelayMax: 0
+  });
+
+  const result = await service.run({ runId: 356, jobKey: '面点师傅（B0038011）_8eca6cad' });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stats.messagesSynced, 0);
+  assert.equal(agentService.events.some((item) => item.eventType === 'messages_synced'), false);
 });
 
 test('FollowupLoopService does not record resume request when confirm dialog never appears', async () => {

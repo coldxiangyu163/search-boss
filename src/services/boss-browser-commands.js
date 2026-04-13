@@ -2023,11 +2023,25 @@ function buildReadOpenThreadMessagesExpression({ limit }) {
         const parentItem = item.closest('.message-item') || item;
         const timeEl = parentItem.querySelector('.message-time .time, .time');
         const time = (timeEl?.textContent || '').trim();
+        const keyNodes = [item, parentItem];
+        const keyAttrs = ['data-mid', 'data-message-id', 'data-msgid', 'data-id', 'data-key'];
+        let domKey = '';
+        for (const node of keyNodes) {
+          if (!node || domKey) continue;
+          for (const attr of keyAttrs) {
+            const value = node.getAttribute && node.getAttribute(attr);
+            if (value) {
+              domKey = String(value).trim();
+              break;
+            }
+          }
+        }
         return {
           from: isSelf ? 'me' : 'other',
           text,
           time,
-          type: 'text'
+          type: 'text',
+          domKey
         };
       }).filter((m) => m.text.length > 0);
 

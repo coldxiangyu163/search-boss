@@ -1,4 +1,5 @@
 const path = require('node:path');
+const crypto = require('node:crypto');
 
 class FollowupLoopService {
   constructor({
@@ -36,6 +37,7 @@ class FollowupLoopService {
       consentAccepted: 0,
       attachmentFound: 0,
       resumeDownloaded: 0,
+      messagesSynced: 0,
       skipped: 0,
       errors: 0
     };
@@ -345,7 +347,7 @@ class FollowupLoopService {
     // Step 5: No attachment — read visible messages from the open right panel
     let messages;
     try {
-      const msgResult = await runner.readOpenThreadMessages({ runId });
+      const msgResult = await runner.readOpenThreadMessages({ runId, limit: 50 });
       messages = Array.isArray(msgResult?.messages) ? msgResult.messages : [];
     } catch (error) {
       stats.errors += 1;
@@ -357,6 +359,17 @@ class FollowupLoopService {
       return;
     }
 
+    // Step 5b: Sync all visible messages to DB
+    const synced = await this.#syncAllThreadMessages({
+      runId,
+      jobKey,
+      encryptUid,
+      candidateId,
+      candidateName: thread.name,
+      messages
+    });
+    stats.messagesSynced += synced;
+
     // Step 6: Check if last message is from candidate (inbound)
     const lastMessage = messages[messages.length - 1];
     const lastMessageFromCandidate = lastMessage && lastMessage.from !== 'me';
@@ -365,15 +378,6 @@ class FollowupLoopService {
       stats.skipped += 1;
       return;
     }
-
-    // Step 7: Record inbound message
-    await this.#recordInboundMessage({
-      runId,
-      jobKey,
-      encryptUid,
-      candidateId,
-      message: lastMessage
-    });
 
     // Step 8: Check followup-decision from backend
     let followupDecision = null;
@@ -924,27 +928,68 @@ class FollowupLoopService {
     return '您好，方便的话也可以发我一份简历，我进一步看下。';
   }
 
-  async #recordInboundMessage({ runId, jobKey, encryptUid, candidateId, message }) {
-    if (!message) {
-      return;
+  async #syncAllThreadMessages({ runId, jobKey, encryptUid, candidateId, candidateName, messages }) {
+    if (!messages || messages.length === 0) return 0;
+
+    let synced = 0;
+    const duplicateCounters = new Map();
+    const syncedAt = new Date();
+
+    for (let index = 0; index < messages.length; index += 1) {
+      const msg = messages[index];
+      if (!msg.text) continue;
+      const direction = msg.from === 'me' ? 'outbound' : 'inbound';
+      const stableId = buildThreadMessageStableId({
+        encryptUid,
+        direction,
+        msg,
+        duplicateCounters
+      });
+
+      try {
+        const result = await this.agentService.recordMessage({
+          runId,
+          candidateId,
+          eventId: `followup-sync:${runId}:${stableId}`,
+          occurredAt: buildThreadMessageOccurredAt({
+            syncedAt,
+            index,
+            total: messages.length
+          }),
+          jobKey,
+          bossEncryptGeekId: encryptUid,
+          bossMessageId: stableId,
+          direction,
+          messageType: msg.type || 'text',
+          contentText: msg.text,
+          rawPayload: {
+            source: 'followup_visible_thread_sync',
+            displayTimeText: msg.time || '',
+            domKey: msg.domKey || null,
+            visibleIndex: index
+          },
+          skipCandidateStateUpdate: true
+        });
+
+        if (!result?.duplicated) {
+          synced += 1;
+        }
+      } catch (error) {
+        // Non-fatal: ON CONFLICT DO NOTHING handles duplicates
+      }
     }
 
-    try {
-      await this.agentService.recordMessage({
-        runId,
-        candidateId,
-        eventId: `followup-loop-inbound:${runId}:${encryptUid}:${message.time || Date.now()}`,
-        occurredAt: new Date().toISOString(),
-        jobKey,
-        bossEncryptGeekId: encryptUid,
-        bossMessageId: `auto:${runId}:inbound:${message.time || new Date().toISOString()}`,
-        direction: 'inbound',
-        messageType: message.type || 'text',
-        contentText: message.text || ''
+    if (synced > 0) {
+      await this.#recordEvent(runId, {
+        eventId: `followup-sync-done:${runId}:${encryptUid}`,
+        eventType: 'messages_synced',
+        stage: 'followup_loop',
+        message: `synced ${synced}/${messages.length} messages for ${candidateName || encryptUid}`,
+        payload: { encryptUid, candidateName, synced, total: messages.length }
       });
-    } catch (error) {
-      // Non-fatal
     }
+
+    return synced;
   }
 
   async #resolveCandidateId({ encryptUid }) {
@@ -1023,6 +1068,28 @@ function extractJobNameShort(fullJobName) {
 
   const match = fullJobName.match(/^([^（(]+)/);
   return match ? match[1].trim() : fullJobName.trim();
+}
+
+function contentHash(text) {
+  return crypto.createHash('md5').update(text || '').digest('hex').slice(0, 12);
+}
+
+function buildThreadMessageStableId({ encryptUid, direction, msg, duplicateCounters }) {
+  const domKey = typeof msg?.domKey === 'string' ? msg.domKey.trim() : '';
+  if (domKey) {
+    return `thread:${encryptUid}:${direction}:dom:${contentHash(domKey)}`;
+  }
+
+  const signature = `${direction}:${msg?.time || ''}:${contentHash(msg?.text || '')}`;
+  const nextCount = (duplicateCounters.get(signature) || 0) + 1;
+  duplicateCounters.set(signature, nextCount);
+  return `thread:${encryptUid}:${signature}:${nextCount}`;
+}
+
+function buildThreadMessageOccurredAt({ syncedAt, index, total }) {
+  const baseTime = syncedAt instanceof Date ? syncedAt.getTime() : Date.now();
+  const remaining = Math.max(total - index, 1);
+  return new Date(baseTime - remaining * 1000).toISOString();
 }
 
 function parseChatDecision(raw) {
