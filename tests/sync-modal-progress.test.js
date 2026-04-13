@@ -528,3 +528,518 @@ test('manageOverviewPolling starts realtime refresh on overview views only', () 
   assert.equal(stopped.timer, null);
   assert.equal(stopped.clearedIntervalId, 99);
 });
+
+test('manageOverviewPolling pauses realtime refresh while runtime console live overlay is open', () => {
+  const helperScript = fs.readFileSync(
+    path.join(__dirname, '../public/sync-modal-progress.js'),
+    'utf8'
+  );
+  const appScript = fs.readFileSync(
+    path.join(__dirname, '../public/app.js'),
+    'utf8'
+  );
+
+  const noop = () => {};
+  const context = vm.createContext({
+    window: {
+      JobUiHelpers: {
+        formatJobStatus: noop,
+        getJobStatusBadgeClass: noop,
+        isJobActionEnabled: noop
+      },
+      CandidateUiHelpers: {
+        formatLifecycleStatus: noop,
+        formatResumeState: noop,
+        formatGuardStatus: noop,
+        getLifecycleBadgeClass: noop,
+        getResumeBadgeClass: noop,
+        getGuardBadgeClass: noop,
+        buildCandidateTimeline: noop,
+        buildResumePreviewUrl: noop
+      },
+      SyncLogScroll: {
+        captureSyncLogScrollSnapshot: noop,
+        resolveSyncLogScrollTop: noop
+      },
+      location: { href: '' },
+      setInterval() {
+        return 99;
+      },
+      clearInterval(id) {
+        this.__clearedIntervalId = id;
+      }
+    },
+    document: {
+      addEventListener: noop,
+      getElementById: noop,
+      querySelector: noop
+    },
+    fetch: noop,
+    module: undefined,
+    console
+  });
+
+  vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+  vm.runInContext(appScript, context, { filename: 'app.js' });
+  vm.runInContext(`
+    state.view = 'command';
+    state.overviewPollTimer = 99;
+    state.syncModal.open = true;
+    state.syncModal.showLiveView = true;
+    manageOverviewPolling();
+  `, context);
+
+  const result = vm.runInContext(`({
+    timer: state.overviewPollTimer,
+    clearedIntervalId: window.__clearedIntervalId
+  })`, context);
+
+  assert.equal(result.timer, null);
+  assert.equal(result.clearedIntervalId, 99);
+});
+
+test('render mounts runtime console overlay inside app content instead of appending to body', () => {
+  const helperScript = fs.readFileSync(
+    path.join(__dirname, '../public/sync-modal-progress.js'),
+    'utf8'
+  );
+  const appScript = fs.readFileSync(
+    path.join(__dirname, '../public/app.js'),
+    'utf8'
+  );
+
+  const noop = () => {};
+  const nodes = {
+    'page-eyebrow': { textContent: '' },
+    'page-title': { textContent: '' },
+    'page-description': { textContent: '' },
+    app: { innerHTML: '' }
+  };
+  const context = vm.createContext({
+    window: {
+      JobUiHelpers: {
+        formatJobStatus: noop,
+        getJobStatusBadgeClass: noop,
+        isJobActionEnabled: noop
+      },
+      CandidateUiHelpers: {
+        formatLifecycleStatus: noop,
+        formatResumeState: noop,
+        formatGuardStatus: noop,
+        getLifecycleBadgeClass: noop,
+        getResumeBadgeClass: noop,
+        getGuardBadgeClass: noop,
+        buildCandidateTimeline: noop,
+        buildResumePreviewUrl: noop
+      },
+      SyncLogScroll: {
+        captureSyncLogScrollSnapshot: () => null,
+        resolveSyncLogScrollTop: () => 0
+      },
+      location: { href: '' },
+      setInterval: noop,
+      clearInterval: noop
+    },
+    document: {
+      addEventListener: noop,
+      fullscreenElement: null,
+      exitFullscreen: () => Promise.resolve(),
+      getElementById(id) {
+        return nodes[id] || null;
+      },
+      querySelector() {
+        return null;
+      },
+      body: {
+        appendChild() {
+          this.__appendCount = (this.__appendCount || 0) + 1;
+        }
+      }
+    },
+    fetch: noop,
+    module: undefined,
+    console
+  });
+
+  vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+  vm.runInContext(appScript, context, { filename: 'app.js' });
+  vm.runInContext(`
+    state.summary = { activeRun: null };
+    state.view = 'command';
+    state.syncModal = {
+      open: true,
+      runId: null,
+      status: 'idle',
+      startedAt: null,
+      error: '',
+      events: [],
+      progress: createSyncModalProgressState(),
+      isExpanded: false,
+      pollTimer: null,
+      lastEventId: 0,
+      taskType: 'browser_live',
+      showLiveView: true,
+      browserFocus: false,
+      consoleTitle: '我的 BOSS 浏览器',
+      standbyMessage: '待机中'
+    };
+    renderCommandCenter = () => '<section>command</section>';
+    manageOverviewPolling = () => {};
+    render();
+  `, context);
+
+  assert.equal(context.document.body.__appendCount || 0, 0);
+  assert.match(nodes.app.innerHTML, /sync-live-overlay/);
+});
+
+test('render mounts state-driven modal backdrops from root content shell instead of page-local renderers', () => {
+  const helperScript = fs.readFileSync(
+    path.join(__dirname, '../public/sync-modal-progress.js'),
+    'utf8'
+  );
+  const appScript = fs.readFileSync(
+    path.join(__dirname, '../public/app.js'),
+    'utf8'
+  );
+
+  const noop = () => {};
+  const nodes = {
+    'page-eyebrow': { textContent: '' },
+    'page-title': { textContent: '' },
+    'page-description': { textContent: '' },
+    app: { innerHTML: '' }
+  };
+  const context = vm.createContext({
+    window: {
+      JobUiHelpers: {
+        formatJobStatus: noop,
+        getJobStatusBadgeClass: noop,
+        isJobActionEnabled: noop
+      },
+      CandidateUiHelpers: {
+        formatLifecycleStatus: noop,
+        formatResumeState: noop,
+        formatGuardStatus: noop,
+        getLifecycleBadgeClass: noop,
+        getResumeBadgeClass: noop,
+        getGuardBadgeClass: noop,
+        buildCandidateTimeline: () => [],
+        buildResumePreviewUrl: noop
+      },
+      SyncLogScroll: {
+        captureSyncLogScrollSnapshot: () => null,
+        resolveSyncLogScrollTop: () => 0
+      },
+      location: { href: '' },
+      setInterval: noop,
+      clearInterval: noop
+    },
+    document: {
+      addEventListener: noop,
+      getElementById(id) {
+        return nodes[id] || null;
+      },
+      querySelector() {
+        return null;
+      },
+      body: { appendChild: noop }
+    },
+    fetch: noop,
+    module: undefined,
+    console
+  });
+
+  vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+  vm.runInContext(appScript, context, { filename: 'app.js' });
+  vm.runInContext(`
+    state.summary = { activeRun: null };
+    state.view = 'automation';
+    state.scheduleModal.open = true;
+    state.scheduleModal.mode = 'create';
+    state.scheduleModal.form = {
+      jobKey: '',
+      taskType: 'source',
+      timeRanges: [{ startHour: 9, startMinute: 0, endHour: 18, endMinute: 0 }],
+      intervalMinutes: 60,
+      targetCount: 5,
+      maxThreads: 20,
+      recommendTab: 'default',
+      interactionTypes: ['request_resume'],
+      priority: 5,
+      cooldownMinutes: 60,
+      dailyMaxRuns: 0
+    };
+    renderAutomation = () => '<section>automation</section>';
+    manageOverviewPolling = () => {};
+    render();
+  `, context);
+
+  const html = nodes.app.innerHTML;
+  const backdropCount = (html.match(/class=\"modal-backdrop\"/g) || []).length;
+  assert.equal(backdropCount, 1);
+  assert.match(html, /schedule-modal/);
+});
+
+test('render mounts legacy admin modals from root content shell and preserves open state across rerender', () => {
+  const helperScript = fs.readFileSync(
+    path.join(__dirname, '../public/sync-modal-progress.js'),
+    'utf8'
+  );
+  const appScript = fs.readFileSync(
+    path.join(__dirname, '../public/app.js'),
+    'utf8'
+  );
+
+  const noop = () => {};
+  const nodes = {
+    'page-eyebrow': { textContent: '' },
+    'page-title': { textContent: '' },
+    'page-description': { textContent: '' },
+    app: { innerHTML: '' }
+  };
+  const context = vm.createContext({
+    window: {
+      JobUiHelpers: {
+        formatJobStatus: noop,
+        getJobStatusBadgeClass: noop,
+        isJobActionEnabled: noop
+      },
+      CandidateUiHelpers: {
+        formatLifecycleStatus: noop,
+        formatResumeState: noop,
+        formatGuardStatus: noop,
+        getLifecycleBadgeClass: noop,
+        getResumeBadgeClass: noop,
+        getGuardBadgeClass: noop,
+        buildCandidateTimeline: () => [],
+        buildResumePreviewUrl: noop
+      },
+      SyncLogScroll: {
+        captureSyncLogScrollSnapshot: () => null,
+        resolveSyncLogScrollTop: () => 0
+      },
+      location: { href: '' },
+      setInterval: noop,
+      clearInterval: noop
+    },
+    document: {
+      addEventListener: noop,
+      getElementById(id) {
+        return nodes[id] || null;
+      },
+      querySelector() {
+        return null;
+      },
+      body: { appendChild: noop }
+    },
+    fetch: noop,
+    module: undefined,
+    console
+  });
+
+  vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+  vm.runInContext(appScript, context, { filename: 'app.js' });
+  vm.runInContext(`
+    state.summary = { activeRun: null };
+    state.view = 'admin-org';
+    state.currentUser = { role: 'dept_admin' };
+    state.adminDepartments = [];
+    state.adminUsers = [];
+    state.adminHrAccounts = [];
+    state.adminModalOpenId = 'hr-modal';
+    renderAdminOrg = () => '<section>admin-org</section>';
+    manageOverviewPolling = () => {};
+    render();
+  `, context);
+
+  assert.match(nodes.app.innerHTML, /id="hr-modal"/);
+  assert.match(nodes.app.innerHTML, /id="hr-modal" class="modal-overlay" style="display:flex"/);
+});
+
+test('showModal initializes admin modal state without depending on existing form DOM values', () => {
+  const helperScript = fs.readFileSync(
+    path.join(__dirname, '../public/sync-modal-progress.js'),
+    'utf8'
+  );
+  const appScript = fs.readFileSync(
+    path.join(__dirname, '../public/app.js'),
+    'utf8'
+  );
+
+  const noop = () => {};
+  const nodes = {
+    'page-eyebrow': { textContent: '' },
+    'page-title': { textContent: '' },
+    'page-description': { textContent: '' },
+    app: { innerHTML: '' },
+    'dept-modal': { style: {} }
+  };
+  const context = vm.createContext({
+    window: {
+      JobUiHelpers: {
+        formatJobStatus: noop,
+        getJobStatusBadgeClass: noop,
+        isJobActionEnabled: noop
+      },
+      CandidateUiHelpers: {
+        formatLifecycleStatus: noop,
+        formatResumeState: noop,
+        formatGuardStatus: noop,
+        getLifecycleBadgeClass: noop,
+        getResumeBadgeClass: noop,
+        getGuardBadgeClass: noop,
+        buildCandidateTimeline: () => [],
+        buildResumePreviewUrl: noop
+      },
+      SyncLogScroll: {
+        captureSyncLogScrollSnapshot: () => null,
+        resolveSyncLogScrollTop: () => 0
+      },
+      location: { href: '' },
+      setInterval: noop,
+      clearInterval: noop
+    },
+    document: {
+      addEventListener: noop,
+      getElementById(id) {
+        return nodes[id] || null;
+      },
+      querySelector() {
+        return null;
+      },
+      body: { appendChild: noop }
+    },
+    fetch: noop,
+    module: undefined,
+    console
+  });
+
+  vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+  vm.runInContext(appScript, context, { filename: 'app.js' });
+  vm.runInContext(`
+    state.summary = { activeRun: null };
+    state.view = 'admin-org';
+    state.currentUser = { role: 'system_admin' };
+    state.adminDepartments = [];
+    state.adminUsers = [];
+    state.adminHrAccounts = [];
+    state.adminModalForms.dept = {
+      editId: 'old',
+      title: '旧标题',
+      name: '旧部门',
+      status: 'inactive',
+      showStatus: true
+    };
+    manageOverviewPolling = () => {};
+    showModal('dept-modal');
+  `, context);
+
+  const result = vm.runInContext(`({
+    openId: state.adminModalOpenId,
+    form: state.adminModalForms.dept,
+    html: document.getElementById('app').innerHTML
+  })`, context);
+
+  assert.equal(result.openId, 'dept-modal');
+  assert.equal(result.form.editId, '');
+  assert.equal(result.form.title, '新增部门');
+  assert.equal(result.form.name, '');
+  assert.equal(result.form.status, 'active');
+  assert.equal(result.form.showStatus, false);
+  assert.match(result.html, /id="dept-modal" class="modal-overlay" style="display:flex"/);
+});
+
+test('admin modal form values are rebuilt from state on rerender', () => {
+  const helperScript = fs.readFileSync(
+    path.join(__dirname, '../public/sync-modal-progress.js'),
+    'utf8'
+  );
+  const appScript = fs.readFileSync(
+    path.join(__dirname, '../public/app.js'),
+    'utf8'
+  );
+
+  const noop = () => {};
+  const nodes = {
+    'page-eyebrow': { textContent: '' },
+    'page-title': { textContent: '' },
+    'page-description': { textContent: '' },
+    app: { innerHTML: '' }
+  };
+  const context = vm.createContext({
+    window: {
+      JobUiHelpers: {
+        formatJobStatus: noop,
+        getJobStatusBadgeClass: noop,
+        isJobActionEnabled: noop
+      },
+      CandidateUiHelpers: {
+        formatLifecycleStatus: noop,
+        formatResumeState: noop,
+        formatGuardStatus: noop,
+        getLifecycleBadgeClass: noop,
+        getResumeBadgeClass: noop,
+        getGuardBadgeClass: noop,
+        buildCandidateTimeline: () => [],
+        buildResumePreviewUrl: noop
+      },
+      SyncLogScroll: {
+        captureSyncLogScrollSnapshot: () => null,
+        resolveSyncLogScrollTop: () => 0
+      },
+      location: { href: '' },
+      setInterval: noop,
+      clearInterval: noop
+    },
+    document: {
+      addEventListener: noop,
+      getElementById(id) {
+        return nodes[id] || null;
+      },
+      querySelector() {
+        return null;
+      },
+      body: { appendChild: noop }
+    },
+    fetch: noop,
+    module: undefined,
+    console
+  });
+
+  vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+  vm.runInContext(appScript, context, { filename: 'app.js' });
+  vm.runInContext(`
+    state.summary = { activeRun: null };
+    state.view = 'admin-org';
+    state.currentUser = { role: 'system_admin' };
+    state.adminDepartments = [{ id: 11, name: '销售', status: 'active' }];
+    state.adminUsers = [];
+    state.adminHrAccounts = [];
+    state.adminModalOpenId = 'user-modal';
+    state.adminModalForms.user = {
+      editId: '7',
+      title: '编辑用户',
+      name: '张三',
+      email: 'zhangsan@test.com',
+      phone: '13800138000',
+      role: 'enterprise_admin',
+      departmentId: '11',
+      password: '',
+      status: 'inactive',
+      showPassword: false,
+      showStatus: true
+    };
+    renderAdminOrg = () => '<section>admin-org</section>';
+    manageOverviewPolling = () => {};
+    render();
+  `, context);
+
+  const html = nodes.app.innerHTML;
+  assert.match(html, /id="user-modal" class="modal-overlay" style="display:flex"/);
+  assert.match(html, /id="user-name"[^>]*value="张三"/);
+  assert.match(html, /id="user-email"[^>]*value="zhangsan@test\.com"/);
+  assert.match(html, /id="user-phone"[^>]*value="13800138000"/);
+  assert.match(html, /<option value="enterprise_admin" selected>/);
+  assert.match(html, /<option value="11" selected>/);
+  assert.match(html, /<option value="inactive" selected>/);
+});

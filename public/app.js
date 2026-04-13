@@ -1,3 +1,81 @@
+function createDeptAdminModalForm() {
+  return {
+    editId: '',
+    title: '新增部门',
+    name: '',
+    status: 'active',
+    showStatus: false
+  };
+}
+
+function createUserAdminModalForm() {
+  return {
+    editId: '',
+    title: '新增用户',
+    name: '',
+    email: '',
+    phone: '',
+    role: 'hr',
+    departmentId: '',
+    password: '',
+    status: 'active',
+    showPassword: true,
+    showStatus: false
+  };
+}
+
+function createHrAdminModalForm() {
+  return {
+    editId: '',
+    title: '新增HR账号',
+    name: '',
+    userId: '',
+    departmentId: '',
+    notes: '',
+    status: 'active',
+    showStatus: false
+  };
+}
+
+function createLimitsAdminModalForm() {
+  return {
+    userId: '',
+    title: '配额设置',
+    expiresAt: '',
+    maxHrAccounts: 0
+  };
+}
+
+function createBossAccountAdminModalForm() {
+  return {
+    editId: '',
+    title: '新增BOSS账号',
+    hrAccountId: '',
+    bossLoginName: '',
+    displayName: '',
+    status: 'active',
+    hrDisabled: false,
+    showStatus: false
+  };
+}
+
+function createBrowserInstanceAdminModalForm(nextPort = 9223) {
+  return {
+    editId: '',
+    title: '新增浏览器实例',
+    bossAccountId: '',
+    instanceName: '',
+    cdpEndpoint: 'http://127.0.0.1:' + nextPort,
+    userDataDir: '~/.chrome-boss-profiles/<账号>',
+    downloadDir: '~/.chrome-boss-downloads/<账号>',
+    debugPort: String(nextPort),
+    host: 'localhost',
+    status: 'idle',
+    bossDisabled: false,
+    showStatus: false
+  };
+}
+
 const state = {
   currentUser: null,
   view: 'command',
@@ -73,6 +151,15 @@ const state = {
     browserFocus: false,
     consoleTitle: '',
     standbyMessage: ''
+  },
+  adminModalOpenId: '',
+  adminModalForms: {
+    dept: createDeptAdminModalForm(),
+    user: createUserAdminModalForm(),
+    hr: createHrAdminModalForm(),
+    limits: createLimitsAdminModalForm(),
+    ba: createBossAccountAdminModalForm(),
+    bi: createBrowserInstanceAdminModalForm()
   },
   jobDetailModal: {
     open: false,
@@ -343,6 +430,9 @@ async function handleLogout() {
 }
 
 function shouldPollOverviewView(view) {
+  if (state.syncModal.open && state.syncModal.showLiveView) {
+    return false;
+  }
   return view === 'command' || view === 'admin-overview';
 }
 
@@ -439,46 +529,50 @@ async function loadData() {
   state.candidateListError = '';
   render();
 
-  const [schedules, summary, jobs, candidates, workConfigResult] = await Promise.all([
-    fetchJson('/api/schedules'),
-    fetchJson('/api/dashboard/summary'),
-    fetchJson('/api/jobs'),
-    fetchCandidates(),
-    fetchJson('/api/work-config').catch(() => ({ item: null }))
-  ]);
-
-  state.schedules = schedules.items;
-  state.workConfig = workConfigResult.item;
-  state.summary = summary;
-  state.jobs = jobs.items;
-  state.candidates = candidates.items;
-  state.candidatePagination = candidates.pagination || {
-    page: state.candidateQuery.page,
-    pageSize: state.candidateQuery.pageSize,
-    total: candidates.items.length,
-    totalPages: candidates.items.length ? 1 : 0
-  };
-  resetCandidateBulkDownloadState();
-  state.candidateListLoading = false;
-
-  if (isAdmin()) {
-    const [hrOverview, departments, users, hrAccounts, bossAccounts, browserInstances] = await Promise.all([
-      fetchJson('/api/admin/dashboard/hr-overview'),
-      fetchJson('/api/admin/departments').catch(() => ({ items: [] })),
-      fetchJson('/api/admin/users').catch(() => ({ items: [] })),
-      fetchJson('/api/admin/hr-accounts').catch(() => ({ items: [] })),
-      fetchJson('/api/admin/boss-accounts').catch(() => ({ items: [] })),
-      fetchJson('/api/admin/browser-instances').catch(() => ({ items: [] }))
+  try {
+    const [schedules, summary, jobs, candidates, workConfigResult] = await Promise.all([
+      fetchJson('/api/schedules'),
+      fetchJson('/api/dashboard/summary'),
+      fetchJson('/api/jobs'),
+      fetchCandidates(),
+      fetchJson('/api/work-config').catch(() => ({ item: null }))
     ]);
-    state.hrOverview = hrOverview?.items || [];
-    state.adminDepartments = departments?.items || [];
-    state.adminUsers = users?.items || [];
-    state.adminHrAccounts = hrAccounts?.items || [];
-    state.adminBossAccounts = bossAccounts?.items || [];
-    state.adminBrowserInstances = browserInstances?.items || [];
-  }
 
-  render();
+    state.schedules = schedules.items;
+    state.workConfig = workConfigResult.item;
+    state.summary = summary;
+    state.jobs = jobs.items;
+    state.candidates = candidates.items;
+    state.candidatePagination = candidates.pagination || {
+      page: state.candidateQuery.page,
+      pageSize: state.candidateQuery.pageSize,
+      total: candidates.items.length,
+      totalPages: candidates.items.length ? 1 : 0
+    };
+    resetCandidateBulkDownloadState();
+
+    if (isAdmin()) {
+      const [hrOverview, departments, users, hrAccounts, bossAccounts, browserInstances] = await Promise.all([
+        fetchJson('/api/admin/dashboard/hr-overview'),
+        fetchJson('/api/admin/departments').catch(() => ({ items: [] })),
+        fetchJson('/api/admin/users').catch(() => ({ items: [] })),
+        fetchJson('/api/admin/hr-accounts').catch(() => ({ items: [] })),
+        fetchJson('/api/admin/boss-accounts').catch(() => ({ items: [] })),
+        fetchJson('/api/admin/browser-instances').catch(() => ({ items: [] }))
+      ]);
+      state.hrOverview = hrOverview?.items || [];
+      state.adminDepartments = departments?.items || [];
+      state.adminUsers = users?.items || [];
+      state.adminHrAccounts = hrAccounts?.items || [];
+      state.adminBossAccounts = bossAccounts?.items || [];
+      state.adminBrowserInstances = browserInstances?.items || [];
+    }
+  } catch (err) {
+    console.error('[loadData] 数据加载失败:', err);
+  } finally {
+    state.candidateListLoading = false;
+    render();
+  }
 }
 
 async function fetchCandidates() {
@@ -1122,6 +1216,55 @@ async function fetchJson(url, options) {
 }
 
 function render() {
+  try {
+    renderInner();
+  } catch (err) {
+    console.error('[render] 渲染异常:', err);
+    dismissAllOverlays();
+  }
+}
+
+function dismissAllOverlays() {
+  const overlay = document.getElementById('sync-live-overlay');
+  if (overlay) overlay.remove();
+
+  if (typeof document.querySelectorAll === 'function') {
+    document.querySelectorAll('.modal-overlay[style*="flex"], .modal-backdrop, .drawer-backdrop').forEach((el) => {
+      if (el.style) {
+        el.style.display = 'none';
+      } else if (typeof el.remove === 'function') {
+        el.remove();
+      }
+    });
+  }
+
+  if (state.syncModal.open) {
+    closeSyncModal();
+    return;
+  }
+  if (state.jobDetailModal.open) {
+    closeJobDetailModal();
+    return;
+  }
+  if (state.candidateDetailDrawer.open) {
+    closeCandidateDetailDrawer();
+    return;
+  }
+  if (state.scheduleModal.open) {
+    closeScheduleModal();
+    return;
+  }
+  if (state.taskRunDetail.open) {
+    closeTaskRunDetail();
+    return;
+  }
+  if (state.adminModalOpenId) {
+    closeModal(state.adminModalOpenId);
+    return;
+  }
+}
+
+function renderInner() {
   manageOverviewPolling();
   const syncLogScrollSnapshot = getSyncLogScrollSnapshot();
   const titleEntry = titles[state.view] || titles['command'];
@@ -1132,48 +1275,46 @@ function render() {
 
   const app = document.getElementById('app');
 
-  manageSyncLiveOverlay();
-
   if (!state.summary) {
-    app.innerHTML = '<div class="card">加载中...</div>';
+    mountAppContent(app, '<div class="card">加载中...</div>');
     return;
   }
 
   if (state.view === 'admin-overview') {
-    app.innerHTML = renderAdminOverview();
+    mountAppContent(app, renderAdminOverview());
     return;
   }
 
   if (state.view === 'admin-org') {
-    app.innerHTML = renderAdminOrg();
+    mountAppContent(app, renderAdminOrg());
     return;
   }
 
   if (state.view === 'admin-resources') {
-    app.innerHTML = renderAdminResources();
+    mountAppContent(app, renderAdminResources());
     return;
   }
 
   if (state.view === 'command') {
-    app.innerHTML = renderCommandCenter();
+    mountAppContent(app, renderCommandCenter());
     restoreSyncLogScroll(syncLogScrollSnapshot);
     return;
   }
 
   if (state.view === 'jobs') {
-    app.innerHTML = renderJobs();
+    mountAppContent(app, renderJobs());
     restoreSyncLogScroll(syncLogScrollSnapshot);
     return;
   }
 
   if (state.view === 'candidates') {
-    app.innerHTML = renderCandidates();
+    mountAppContent(app, renderCandidates());
     restoreSyncLogScroll(syncLogScrollSnapshot);
     return;
   }
 
   if (state.view === 'automation') {
-    app.innerHTML = renderAutomation();
+    mountAppContent(app, renderAutomation());
     restoreSyncLogScroll(syncLogScrollSnapshot);
     return;
   }
@@ -1182,12 +1323,48 @@ function render() {
     if (!state.taskRunsLoaded && !state.taskRunsLoading) {
       loadTaskRuns();
     }
-    app.innerHTML = renderTaskRuns();
+    mountAppContent(app, renderTaskRuns());
     return;
   }
 
-  app.innerHTML = renderHealth();
+  mountAppContent(app, renderHealth());
   restoreSyncLogScroll(syncLogScrollSnapshot);
+}
+
+function mountAppContent(app, content) {
+  if (!app) {
+    return;
+  }
+
+  app.innerHTML = `${content}${renderAppOverlays()}`;
+
+  if (state.syncModal.open && state.syncModal.showLiveView) {
+    hydrateSyncLiveOverlay();
+  }
+}
+
+function renderAppOverlays() {
+  return [
+    renderSyncLiveOverlay(),
+    renderSyncModal(),
+    renderJobDetailModal(),
+    renderCandidateDetailDrawer(),
+    renderScheduleModal(),
+    renderTaskRunDetailModal(),
+    renderLegacyAdminModals()
+  ].join('');
+}
+
+function renderLegacyAdminModals() {
+  if (state.view === 'admin-org') {
+    return renderAdminOrgModals();
+  }
+
+  if (state.view === 'admin-resources') {
+    return renderAdminResourceModals();
+  }
+
+  return '';
 }
 
 function openSyncModal(taskType = 'sync_jobs') {
@@ -1891,94 +2068,6 @@ function renderAdminOrg() {
       </div>
     </section>
 
-    ${sys ? `<div id="dept-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('dept-modal')">
-      <div class="modal-content">
-        <h3 id="dept-modal-title">新增部门</h3>
-        <form onsubmit="return submitDept(event)">
-          <input type="hidden" id="dept-edit-id" value="">
-          <div class="form-group">
-            <label>部门名称</label>
-            <input type="text" id="dept-name" required placeholder="请输入部门名称">
-          </div>
-          <div class="form-group" id="dept-status-group" style="display:none">
-            <label>状态</label>
-            <select id="dept-status"><option value="active">启用</option><option value="inactive">停用</option></select>
-          </div>
-          <div class="modal-actions">
-            <button type="button" class="button-secondary" onclick="closeModal('dept-modal')">取消</button>
-            <button type="submit" class="button-primary">确定</button>
-          </div>
-        </form>
-      </div>
-    </div>` : ''}
-
-    ${sys ? `<div id="user-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('user-modal')">
-      <div class="modal-content">
-        <h3 id="user-modal-title">新增用户</h3>
-        <form onsubmit="return submitUser(event)">
-          <input type="hidden" id="user-edit-id" value="">
-          <div class="form-group"><label>姓名</label><input type="text" id="user-name" required placeholder="请输入姓名"></div>
-          <div class="form-group"><label>邮箱</label><input type="email" id="user-email" required placeholder="请输入邮箱"></div>
-          <div class="form-group"><label>手机号</label><input type="text" id="user-phone" placeholder="选填"></div>
-          <div class="form-group">
-            <label>角色</label>
-            <select id="user-role"><option value="hr">HR</option><option value="dept_admin">部门管理员</option><option value="enterprise_admin">企业管理员</option></select>
-          </div>
-          <div class="form-group"><label>所属部门</label><select id="user-dept"><option value="">不分配</option>${deptOptions}</select></div>
-          <div class="form-group" id="user-password-group"><label>密码</label><input type="password" id="user-password" placeholder="至少6位" minlength="6"></div>
-          <div class="form-group" id="user-status-group" style="display:none">
-            <label>状态</label>
-            <select id="user-status"><option value="active">启用</option><option value="inactive">停用</option></select>
-          </div>
-          <div class="modal-actions">
-            <button type="button" class="button-secondary" onclick="closeModal('user-modal')">取消</button>
-            <button type="submit" class="button-primary">确定</button>
-          </div>
-        </form>
-      </div>
-    </div>` : ''}
-
-    <div id="hr-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('hr-modal')">
-      <div class="modal-content">
-        <h3 id="hr-modal-title">新增HR账号</h3>
-        <form onsubmit="return submitHrAccount(event)">
-          <input type="hidden" id="hr-edit-id" value="">
-          <div class="form-group"><label>HR 名称</label><input type="text" id="hr-name" required placeholder="请输入HR名称"></div>
-          <div class="form-group">
-            <label>关联用户</label>
-            <select id="hr-user-id" required>
-              <option value="">请选择用户</option>
-              ${users.filter((u) => u.role === 'hr' && u.status === 'active').map((u) => `<option value="${u.id}">${u.name} (${u.email})</option>`).join('')}
-            </select>
-          </div>
-          <div class="form-group"><label>所属部门</label><select id="hr-dept"><option value="">不分配</option>${deptOptions}</select></div>
-          <div class="form-group"><label>备注</label><input type="text" id="hr-notes" placeholder="选填"></div>
-          <div class="form-group" id="hr-status-group" style="display:none">
-            <label>状态</label>
-            <select id="hr-status"><option value="active">启用</option><option value="inactive">停用</option></select>
-          </div>
-          <div class="modal-actions">
-            <button type="button" class="button-secondary" onclick="closeModal('hr-modal')">取消</button>
-            <button type="submit" class="button-primary">确定</button>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <div id="limits-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('limits-modal')">
-      <div class="modal-content">
-        <h3 id="limits-modal-title">配额设置</h3>
-        <form onsubmit="return submitLimits(event)">
-          <input type="hidden" id="limits-user-id" value="">
-          <div class="form-group"><label>有效期</label><input type="date" id="limits-expires-at"></div>
-          <div class="form-group"><label>HR 账号上限（0 表示不限）</label><input type="number" id="limits-max-hr" min="0" value="0"></div>
-          <div class="modal-actions">
-            <button type="button" class="button-secondary" onclick="closeModal('limits-modal')">取消</button>
-            <button type="submit" class="button-primary">确定</button>
-          </div>
-        </form>
-      </div>
-    </div>
   `;
 
   return html;
@@ -2049,49 +2138,6 @@ function renderSysAdminBossAndBrowser(bossAccounts, browserInstances, hrOptions,
       </div>
     </section>
 
-    <div id="ba-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('ba-modal')">
-      <div class="modal-content">
-        <h3 id="ba-modal-title">新增BOSS账号</h3>
-        <form onsubmit="return submitBossAccount(event)">
-          <input type="hidden" id="ba-edit-id" value="">
-          <div class="form-group"><label>关联HR账号</label><select id="ba-hr" required><option value="">请选择</option>${hrOptions}</select></div>
-          <div class="form-group"><label>BOSS 登录名</label><input type="text" id="ba-login" placeholder="BOSS直聘登录账号"></div>
-          <div class="form-group"><label>显示名称</label><input type="text" id="ba-display" placeholder="便于识别的名称"></div>
-          <div class="form-group" id="ba-status-group" style="display:none">
-            <label>状态</label>
-            <select id="ba-status"><option value="active">启用</option><option value="inactive">停用</option></select>
-          </div>
-          <div class="modal-actions">
-            <button type="button" class="button-secondary" onclick="closeModal('ba-modal')">取消</button>
-            <button type="submit" class="button-primary">确定</button>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <div id="bi-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal('bi-modal')">
-      <div class="modal-content">
-        <h3 id="bi-modal-title">新增浏览器实例</h3>
-        <form onsubmit="return submitBrowserInstance(event)">
-          <input type="hidden" id="bi-edit-id" value="">
-          <div class="form-group"><label>关联BOSS账号</label><select id="bi-ba" required onchange="onBiAccountChange(this)">${baOptions.length ? '<option value="">请选择</option>' + baOptions : '<option value="">无可用账号</option>'}</select></div>
-          <div class="form-group"><label>实例名称</label><input type="text" id="bi-name" placeholder="如：Chrome-HR1"></div>
-          <div class="form-group"><label>CDP 端点</label><input type="text" id="bi-cdp" required placeholder="http://127.0.0.1:9222"></div>
-          <div class="form-group"><label>用户数据目录</label><input type="text" id="bi-userdata" required placeholder="/path/to/chrome-profile"></div>
-          <div class="form-group"><label>下载目录</label><input type="text" id="bi-download" required placeholder="/path/to/downloads"></div>
-          <div class="form-group"><label>调试端口</label><input type="number" id="bi-port" placeholder="9222"></div>
-          <div class="form-group"><label>主机</label><input type="text" id="bi-host" placeholder="localhost" value="localhost"></div>
-          <div class="form-group" id="bi-status-group" style="display:none">
-            <label>状态</label>
-            <select id="bi-status"><option value="idle">空闲</option><option value="offline">离线</option></select>
-          </div>
-          <div class="modal-actions">
-            <button type="button" class="button-secondary" onclick="closeModal('bi-modal')">取消</button>
-            <button type="submit" class="button-primary">确定</button>
-          </div>
-        </form>
-      </div>
-    </div>
   `;
 }
 
@@ -2105,24 +2151,292 @@ function renderAdminResources() {
   return renderSysAdminBossAndBrowser(bossAccounts, browserInstances, hrOptions, baOptions);
 }
 
+function renderLegacyModalShell(id, content) {
+  return `
+    <div id="${id}" class="modal-overlay" style="display:${state.adminModalOpenId === id ? 'flex' : 'none'}" onclick="if(event.target===this)closeModal('${id}')">
+      <div class="modal-content">
+        ${content}
+      </div>
+    </div>
+  `;
+}
+
+function renderAdminModalTitle(id, title) {
+  return `<h3 id="${id}">${escapeHtml(title)}</h3>`;
+}
+
+function renderAdminModalActions(modalId) {
+  return `
+    <div class="modal-actions">
+      <button type="button" class="button-secondary" onclick="closeModal('${modalId}')">取消</button>
+      <button type="submit" class="button-primary">确定</button>
+    </div>
+  `;
+}
+
+function renderAdminTextInput({
+  label,
+  id,
+  value = '',
+  modalKey,
+  field,
+  type = 'text',
+  placeholder = '',
+  required = false,
+  minlength = '',
+  disabled = false
+} = {}) {
+  return `
+    <div class="form-group">
+      <label>${label}</label>
+      <input
+        type="${type}"
+        id="${id}"
+        ${required ? 'required' : ''}
+        ${minlength ? `minlength="${minlength}"` : ''}
+        ${disabled ? 'disabled' : ''}
+        placeholder="${escapeHtml(placeholder)}"
+        value="${escapeHtml(value)}"
+        oninput="updateAdminModalField('${modalKey}', '${field}', this.value)"
+      >
+    </div>
+  `;
+}
+
+function renderAdminSelect({
+  label,
+  id,
+  value = '',
+  modalKey,
+  field,
+  optionsHtml = '',
+  required = false,
+  disabled = false,
+  changeHandler = '',
+  extraAttrs = ''
+} = {}) {
+  const onchange = changeHandler || `updateAdminModalField('${modalKey}', '${field}', this.value)`;
+  return `
+    <div class="form-group">
+      <label>${label}</label>
+      <select
+        id="${id}"
+        ${required ? 'required' : ''}
+        ${disabled ? 'disabled' : ''}
+        ${extraAttrs}
+        onchange="${onchange}"
+      >${optionsHtml}</select>
+    </div>
+  `;
+}
+
+function getNextBrowserInstancePort() {
+  const usedPorts = (state.adminBrowserInstances || []).map((b) => b.debug_port || 0);
+  return Math.max(9222, ...usedPorts) + 1;
+}
+
+function updateAdminModalForm(modalKey, updates = {}) {
+  state.adminModalForms[modalKey] = {
+    ...state.adminModalForms[modalKey],
+    ...updates
+  };
+}
+
+function updateAdminModalField(modalKey, field, value) {
+  if (!state.adminModalForms[modalKey]) {
+    return;
+  }
+  state.adminModalForms[modalKey][field] = value;
+}
+
+function openExistingAdminModal(id) {
+  state.adminModalOpenId = id;
+  render();
+}
+
+function renderAdminOrgModals() {
+  const depts = state.adminDepartments || [];
+  const users = state.adminUsers || [];
+  const deptOptions = depts.filter((d) => d.status === 'active').map((d) => `<option value="${d.id}">${d.name}</option>`).join('');
+  const sys = isSysAdmin();
+  const deptForm = state.adminModalForms.dept;
+  const userForm = state.adminModalForms.user;
+  const hrForm = state.adminModalForms.hr;
+  const limitsForm = state.adminModalForms.limits;
+  const modalHtml = [];
+
+  if (sys) {
+    modalHtml.push(renderLegacyModalShell('dept-modal', `
+      ${renderAdminModalTitle('dept-modal-title', deptForm.title)}
+      <form onsubmit="return submitDept(event)">
+        <input type="hidden" id="dept-edit-id" value="${escapeHtml(deptForm.editId)}">
+        ${renderAdminTextInput({ label: '部门名称', id: 'dept-name', required: true, placeholder: '请输入部门名称', value: deptForm.name, modalKey: 'dept', field: 'name' })}
+        <div class="form-group" id="dept-status-group" style="display:${deptForm.showStatus ? '' : 'none'}">
+          <label>状态</label>
+          <select id="dept-status" onchange="updateAdminModalField('dept', 'status', this.value)"><option value="active" ${deptForm.status === 'active' ? 'selected' : ''}>启用</option><option value="inactive" ${deptForm.status === 'inactive' ? 'selected' : ''}>停用</option></select>
+        </div>
+        ${renderAdminModalActions('dept-modal')}
+      </form>
+    `));
+
+    modalHtml.push(renderLegacyModalShell('user-modal', `
+      ${renderAdminModalTitle('user-modal-title', userForm.title)}
+      <form onsubmit="return submitUser(event)">
+        <input type="hidden" id="user-edit-id" value="${escapeHtml(userForm.editId)}">
+        ${renderAdminTextInput({ label: '姓名', id: 'user-name', required: true, placeholder: '请输入姓名', value: userForm.name, modalKey: 'user', field: 'name' })}
+        ${renderAdminTextInput({ label: '邮箱', id: 'user-email', type: 'email', required: true, placeholder: '请输入邮箱', value: userForm.email, modalKey: 'user', field: 'email' })}
+        ${renderAdminTextInput({ label: '手机号', id: 'user-phone', placeholder: '选填', value: userForm.phone, modalKey: 'user', field: 'phone' })}
+        ${renderAdminSelect({
+          label: '角色',
+          id: 'user-role',
+          value: userForm.role,
+          modalKey: 'user',
+          field: 'role',
+          optionsHtml: `<option value="hr" ${userForm.role === 'hr' ? 'selected' : ''}>HR</option><option value="dept_admin" ${userForm.role === 'dept_admin' ? 'selected' : ''}>部门管理员</option><option value="enterprise_admin" ${userForm.role === 'enterprise_admin' ? 'selected' : ''}>企业管理员</option>`
+        })}
+        ${renderAdminSelect({
+          label: '所属部门',
+          id: 'user-dept',
+          value: userForm.departmentId,
+          modalKey: 'user',
+          field: 'departmentId',
+          optionsHtml: `<option value="">不分配</option>${depts.filter((d) => d.status === 'active').map((d) => `<option value="${d.id}" ${String(userForm.departmentId) === String(d.id) ? 'selected' : ''}>${d.name}</option>`).join('')}`
+        })}
+        <div class="form-group" id="user-password-group" style="display:${userForm.showPassword ? '' : 'none'}"><label>密码</label><input type="password" id="user-password" placeholder="至少6位" minlength="6" value="${escapeHtml(userForm.password)}" oninput="updateAdminModalField('user', 'password', this.value)"></div>
+        <div class="form-group" id="user-status-group" style="display:${userForm.showStatus ? '' : 'none'}">
+          <label>状态</label>
+          <select id="user-status" onchange="updateAdminModalField('user', 'status', this.value)"><option value="active" ${userForm.status === 'active' ? 'selected' : ''}>启用</option><option value="inactive" ${userForm.status === 'inactive' ? 'selected' : ''}>停用</option></select>
+        </div>
+        ${renderAdminModalActions('user-modal')}
+      </form>
+    `));
+  }
+
+  modalHtml.push(renderLegacyModalShell('hr-modal', `
+    ${renderAdminModalTitle('hr-modal-title', hrForm.title)}
+    <form onsubmit="return submitHrAccount(event)">
+      <input type="hidden" id="hr-edit-id" value="${escapeHtml(hrForm.editId)}">
+      ${renderAdminTextInput({ label: 'HR 名称', id: 'hr-name', required: true, placeholder: '请输入HR名称', value: hrForm.name, modalKey: 'hr', field: 'name' })}
+      ${renderAdminSelect({
+        label: '关联用户',
+        id: 'hr-user-id',
+        value: hrForm.userId,
+        modalKey: 'hr',
+        field: 'userId',
+        required: true,
+        optionsHtml: `<option value="">请选择用户</option>${users.filter((u) => u.role === 'hr' && u.status === 'active').map((u) => `<option value="${u.id}" ${String(hrForm.userId) === String(u.id) ? 'selected' : ''}>${u.name} (${u.email})</option>`).join('')}`
+      })}
+      ${renderAdminSelect({
+        label: '所属部门',
+        id: 'hr-dept',
+        value: hrForm.departmentId,
+        modalKey: 'hr',
+        field: 'departmentId',
+        optionsHtml: `<option value="">不分配</option>${depts.filter((d) => d.status === 'active').map((d) => `<option value="${d.id}" ${String(hrForm.departmentId) === String(d.id) ? 'selected' : ''}>${d.name}</option>`).join('')}`
+      })}
+      ${renderAdminTextInput({ label: '备注', id: 'hr-notes', placeholder: '选填', value: hrForm.notes, modalKey: 'hr', field: 'notes' })}
+      <div class="form-group" id="hr-status-group" style="display:${hrForm.showStatus ? '' : 'none'}">
+        <label>状态</label>
+        <select id="hr-status" onchange="updateAdminModalField('hr', 'status', this.value)"><option value="active" ${hrForm.status === 'active' ? 'selected' : ''}>启用</option><option value="inactive" ${hrForm.status === 'inactive' ? 'selected' : ''}>停用</option></select>
+      </div>
+      ${renderAdminModalActions('hr-modal')}
+    </form>
+  `));
+
+  modalHtml.push(renderLegacyModalShell('limits-modal', `
+    ${renderAdminModalTitle('limits-modal-title', limitsForm.title)}
+    <form onsubmit="return submitLimits(event)">
+      <input type="hidden" id="limits-user-id" value="${escapeHtml(limitsForm.userId)}">
+      ${renderAdminTextInput({ label: '有效期', id: 'limits-expires-at', type: 'date', value: limitsForm.expiresAt, modalKey: 'limits', field: 'expiresAt' })}
+      <div class="form-group"><label>HR 账号上限（0 表示不限）</label><input type="number" id="limits-max-hr" min="0" value="${escapeHtml(limitsForm.maxHrAccounts)}" oninput="updateAdminModalField('limits', 'maxHrAccounts', Number(this.value) || 0)"></div>
+      ${renderAdminModalActions('limits-modal')}
+    </form>
+  `));
+
+  return modalHtml.join('');
+}
+
+function renderAdminResourceModals() {
+  const hrAccounts = state.adminHrAccounts || [];
+  const bossAccounts = state.adminBossAccounts || [];
+  const baForm = state.adminModalForms.ba;
+  const biForm = state.adminModalForms.bi;
+
+  return [
+    renderLegacyModalShell('ba-modal', `
+      ${renderAdminModalTitle('ba-modal-title', baForm.title)}
+      <form onsubmit="return submitBossAccount(event)">
+        <input type="hidden" id="ba-edit-id" value="${escapeHtml(baForm.editId)}">
+        ${renderAdminSelect({
+          label: '关联HR账号',
+          id: 'ba-hr',
+          value: baForm.hrAccountId,
+          modalKey: 'ba',
+          field: 'hrAccountId',
+          required: true,
+          disabled: baForm.hrDisabled,
+          optionsHtml: `<option value="">请选择</option>${hrAccounts.filter((h) => h.status === 'active').map((h) => `<option value="${h.id}" ${String(baForm.hrAccountId) === String(h.id) ? 'selected' : ''}>${h.name}</option>`).join('')}`
+        })}
+        ${renderAdminTextInput({ label: 'BOSS 登录名', id: 'ba-login', placeholder: 'BOSS直聘登录账号', value: baForm.bossLoginName, modalKey: 'ba', field: 'bossLoginName' })}
+        ${renderAdminTextInput({ label: '显示名称', id: 'ba-display', placeholder: '便于识别的名称', value: baForm.displayName, modalKey: 'ba', field: 'displayName' })}
+        <div class="form-group" id="ba-status-group" style="display:${baForm.showStatus ? '' : 'none'}">
+          <label>状态</label>
+          <select id="ba-status" onchange="updateAdminModalField('ba', 'status', this.value)"><option value="active" ${baForm.status === 'active' ? 'selected' : ''}>启用</option><option value="inactive" ${baForm.status === 'inactive' ? 'selected' : ''}>停用</option></select>
+        </div>
+        ${renderAdminModalActions('ba-modal')}
+      </form>
+    `),
+    renderLegacyModalShell('bi-modal', `
+      ${renderAdminModalTitle('bi-modal-title', biForm.title)}
+      <form onsubmit="return submitBrowserInstance(event)">
+        <input type="hidden" id="bi-edit-id" value="${escapeHtml(biForm.editId)}">
+        ${renderAdminSelect({
+          label: '关联BOSS账号',
+          id: 'bi-ba',
+          value: biForm.bossAccountId,
+          modalKey: 'bi',
+          field: 'bossAccountId',
+          required: true,
+          disabled: biForm.bossDisabled,
+          changeHandler: `onBiAccountChange(this.value)`,
+          optionsHtml: bossAccounts.filter((b) => b.status === 'active').length
+            ? '<option value=\"\">请选择</option>' + bossAccounts.filter((b) => b.status === 'active').map((b) => `<option value="${b.id}" ${String(biForm.bossAccountId) === String(b.id) ? 'selected' : ''}>${b.display_name || b.boss_login_name || 'BOSS#' + b.id}</option>`).join('')
+            : '<option value=\"\">无可用账号</option>'
+        })}
+        ${renderAdminTextInput({ label: '实例名称', id: 'bi-name', placeholder: '如：Chrome-HR1', value: biForm.instanceName, modalKey: 'bi', field: 'instanceName' })}
+        ${renderAdminTextInput({ label: 'CDP 端点', id: 'bi-cdp', required: true, placeholder: 'http://127.0.0.1:9222', value: biForm.cdpEndpoint, modalKey: 'bi', field: 'cdpEndpoint' })}
+        ${renderAdminTextInput({ label: '用户数据目录', id: 'bi-userdata', required: true, placeholder: '/path/to/chrome-profile', value: biForm.userDataDir, modalKey: 'bi', field: 'userDataDir' })}
+        ${renderAdminTextInput({ label: '下载目录', id: 'bi-download', required: true, placeholder: '/path/to/downloads', value: biForm.downloadDir, modalKey: 'bi', field: 'downloadDir' })}
+        ${renderAdminTextInput({ label: '调试端口', id: 'bi-port', type: 'number', placeholder: '9222', value: biForm.debugPort, modalKey: 'bi', field: 'debugPort' })}
+        ${renderAdminTextInput({ label: '主机', id: 'bi-host', placeholder: 'localhost', value: biForm.host, modalKey: 'bi', field: 'host' })}
+        <div class="form-group" id="bi-status-group" style="display:${biForm.showStatus ? '' : 'none'}">
+          <label>状态</label>
+          <select id="bi-status" onchange="updateAdminModalField('bi', 'status', this.value)"><option value="idle" ${biForm.status === 'idle' ? 'selected' : ''}>空闲</option><option value="offline" ${biForm.status === 'offline' ? 'selected' : ''}>离线</option></select>
+        </div>
+        ${renderAdminModalActions('bi-modal')}
+      </form>
+    `)
+  ].join('');
+}
+
 function showLimitsModal(u) {
-  document.getElementById('limits-modal-title').textContent = '配额设置 - ' + u.name;
-  document.getElementById('limits-user-id').value = u.id;
-  document.getElementById('limits-expires-at').value = u.expires_at ? u.expires_at.split('T')[0] : '';
-  document.getElementById('limits-max-hr').value = u.max_hr_accounts || 0;
-  document.getElementById('limits-modal').style.display = 'flex';
+  updateAdminModalForm('limits', {
+    userId: String(u.id),
+    title: '配额设置 - ' + u.name,
+    expiresAt: u.expires_at ? u.expires_at.split('T')[0] : '',
+    maxHrAccounts: u.max_hr_accounts || 0
+  });
+  openExistingAdminModal('limits-modal');
 }
 
 async function submitLimits(e) {
   e.preventDefault();
-  const userId = document.getElementById('limits-user-id').value;
-  const expiresAt = document.getElementById('limits-expires-at').value || null;
-  const maxHrAccounts = parseInt(document.getElementById('limits-max-hr').value) || 0;
+  const { userId, expiresAt, maxHrAccounts } = state.adminModalForms.limits;
   try {
     await fetchJson('/api/admin/users/' + userId + '/limits', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expiresAt, maxHrAccounts })
+      body: JSON.stringify({ expiresAt: expiresAt || null, maxHrAccounts: Number(maxHrAccounts) || 0 })
     });
     closeModal('limits-modal');
     await loadData();
@@ -2131,82 +2445,49 @@ async function submitLimits(e) {
 }
 
 function showModal(id) {
-  const modal = document.getElementById(id);
-  if (!modal) return;
-  if (id === 'dept-modal' && !document.getElementById('dept-edit-id').value) {
-    document.getElementById('dept-modal-title').textContent = '新增部门';
-    document.getElementById('dept-edit-id').value = '';
-    document.getElementById('dept-name').value = '';
-    document.getElementById('dept-status-group').style.display = 'none';
+  if (id === 'dept-modal') {
+    updateAdminModalForm('dept', createDeptAdminModalForm());
   }
-  if (id === 'user-modal' && !document.getElementById('user-edit-id').value) {
-    document.getElementById('user-modal-title').textContent = '新增用户';
-    document.getElementById('user-edit-id').value = '';
-    document.getElementById('user-name').value = '';
-    document.getElementById('user-email').value = '';
-    document.getElementById('user-phone').value = '';
-    document.getElementById('user-role').value = 'hr';
-    document.getElementById('user-dept').value = '';
-    document.getElementById('user-password').value = '';
-    document.getElementById('user-password-group').style.display = '';
-    document.getElementById('user-status-group').style.display = 'none';
+  if (id === 'user-modal') {
+    updateAdminModalForm('user', createUserAdminModalForm());
   }
-  if (id === 'hr-modal' && !document.getElementById('hr-edit-id').value) {
-    document.getElementById('hr-modal-title').textContent = '新增HR账号';
-    document.getElementById('hr-edit-id').value = '';
-    document.getElementById('hr-name').value = '';
-    document.getElementById('hr-user-id').value = '';
-    document.getElementById('hr-dept').value = '';
-    document.getElementById('hr-notes').value = '';
-    document.getElementById('hr-status-group').style.display = 'none';
+  if (id === 'hr-modal') {
+    updateAdminModalForm('hr', createHrAdminModalForm());
   }
-  if (id === 'ba-modal' && !document.getElementById('ba-edit-id').value) {
-    document.getElementById('ba-modal-title').textContent = '新增BOSS账号';
-    document.getElementById('ba-edit-id').value = '';
-    document.getElementById('ba-hr').value = '';
-    document.getElementById('ba-hr').disabled = false;
-    document.getElementById('ba-login').value = '';
-    document.getElementById('ba-display').value = '';
-    document.getElementById('ba-status-group').style.display = 'none';
+  if (id === 'limits-modal') {
+    updateAdminModalForm('limits', createLimitsAdminModalForm());
   }
-  if (id === 'bi-modal' && !document.getElementById('bi-edit-id').value) {
-    document.getElementById('bi-modal-title').textContent = '新增浏览器实例';
-    document.getElementById('bi-edit-id').value = '';
-    document.getElementById('bi-ba').value = '';
-    document.getElementById('bi-ba').disabled = false;
-    const usedPorts = (state.adminBrowserInstances || []).map((b) => b.debug_port || 0);
-    const nextPort = Math.max(9222, ...usedPorts) + 1;
-    document.getElementById('bi-name').value = '';
-    document.getElementById('bi-cdp').value = 'http://127.0.0.1:' + nextPort;
-    document.getElementById('bi-userdata').value = '~/.chrome-boss-profiles/<账号>';
-    document.getElementById('bi-download').value = '~/.chrome-boss-downloads/<账号>';
-    document.getElementById('bi-port').value = nextPort;
-    document.getElementById('bi-host').value = 'localhost';
-    document.getElementById('bi-status-group').style.display = 'none';
+  if (id === 'ba-modal') {
+    updateAdminModalForm('ba', createBossAccountAdminModalForm());
   }
-  modal.style.display = 'flex';
+  if (id === 'bi-modal') {
+    updateAdminModalForm('bi', createBrowserInstanceAdminModalForm(getNextBrowserInstancePort()));
+  }
+  openExistingAdminModal(id);
 }
 
 function closeModal(id) {
-  document.getElementById(id).style.display = 'none';
+  if (!id || state.adminModalOpenId === id) {
+    state.adminModalOpenId = '';
+    render();
+  }
 }
 
 async function submitDept(e) {
   e.preventDefault();
-  const id = document.getElementById('dept-edit-id').value;
-  const name = document.getElementById('dept-name').value.trim();
-  const status = document.getElementById('dept-status').value;
-  if (!name) return false;
+  const { editId: id, name, status } = state.adminModalForms.dept;
+  const safeName = name.trim();
+  if (!safeName) return false;
   try {
     if (id) {
       await fetchJson('/api/admin/departments/' + id, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, status })
+        body: JSON.stringify({ name: safeName, status })
       });
     } else {
       await fetchJson('/api/admin/departments', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
+        body: JSON.stringify({ name: safeName })
       });
     }
     closeModal('dept-modal');
@@ -2216,12 +2497,14 @@ async function submitDept(e) {
 }
 
 function editDept(id, name, status) {
-  document.getElementById('dept-modal-title').textContent = '编辑部门';
-  document.getElementById('dept-edit-id').value = id;
-  document.getElementById('dept-name').value = name;
-  document.getElementById('dept-status').value = status;
-  document.getElementById('dept-status-group').style.display = '';
-  showModal('dept-modal');
+  updateAdminModalForm('dept', {
+    editId: String(id),
+    title: '编辑部门',
+    name,
+    status: status || 'active',
+    showStatus: true
+  });
+  openExistingAdminModal('dept-modal');
 }
 
 async function deleteDept(id, name) {
@@ -2234,26 +2517,31 @@ async function deleteDept(id, name) {
 
 async function submitUser(e) {
   e.preventDefault();
-  const id = document.getElementById('user-edit-id').value;
-  const name = document.getElementById('user-name').value.trim();
-  const email = document.getElementById('user-email').value.trim();
-  const phone = document.getElementById('user-phone').value.trim();
-  const role = document.getElementById('user-role').value;
-  const departmentId = document.getElementById('user-dept').value || null;
-  const password = document.getElementById('user-password').value;
-  const status = document.getElementById('user-status').value;
-  if (!name || !email) return false;
+  const {
+    editId: id,
+    name,
+    email,
+    phone,
+    role,
+    departmentId,
+    password,
+    status
+  } = state.adminModalForms.user;
+  const safeName = name.trim();
+  const safeEmail = email.trim();
+  const safePhone = phone.trim();
+  if (!safeName || !safeEmail) return false;
   try {
     if (id) {
       await fetchJson('/api/admin/users/' + id, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, phone: phone || null, role, departmentId, status })
+        body: JSON.stringify({ name: safeName, email: safeEmail, phone: safePhone || null, role, departmentId: departmentId || null, status })
       });
     } else {
       if (!password || password.length < 6) { alert('密码不能少于6位'); return false; }
       await fetchJson('/api/admin/users', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, phone: phone || null, password, role, departmentId })
+        body: JSON.stringify({ name: safeName, email: safeEmail, phone: safePhone || null, password, role, departmentId: departmentId || null })
       });
     }
     closeModal('user-modal');
@@ -2263,17 +2551,20 @@ async function submitUser(e) {
 }
 
 function editUser(u) {
-  document.getElementById('user-modal-title').textContent = '编辑用户';
-  document.getElementById('user-edit-id').value = u.id;
-  document.getElementById('user-name').value = u.name;
-  document.getElementById('user-email').value = u.email || '';
-  document.getElementById('user-phone').value = u.phone || '';
-  document.getElementById('user-role').value = u.role;
-  document.getElementById('user-dept').value = u.department_id || '';
-  document.getElementById('user-password-group').style.display = 'none';
-  document.getElementById('user-status-group').style.display = '';
-  document.getElementById('user-status').value = u.status || 'active';
-  showModal('user-modal');
+  updateAdminModalForm('user', {
+    editId: String(u.id),
+    title: '编辑用户',
+    name: u.name || '',
+    email: u.email || '',
+    phone: u.phone || '',
+    role: u.role || 'hr',
+    departmentId: u.department_id || '',
+    password: '',
+    status: u.status || 'active',
+    showPassword: false,
+    showStatus: true
+  });
+  openExistingAdminModal('user-modal');
 }
 
 async function resetPassword(userId, name) {
@@ -2299,23 +2590,20 @@ async function deleteUser(id, name) {
 
 async function submitHrAccount(e) {
   e.preventDefault();
-  const id = document.getElementById('hr-edit-id').value;
-  const name = document.getElementById('hr-name').value.trim();
-  const userId = document.getElementById('hr-user-id').value;
-  const departmentId = document.getElementById('hr-dept').value || null;
-  const notes = document.getElementById('hr-notes').value.trim();
-  const status = document.getElementById('hr-status').value;
-  if (!name || !userId) return false;
+  const { editId: id, name, userId, departmentId, notes, status } = state.adminModalForms.hr;
+  const safeName = name.trim();
+  const safeNotes = notes.trim();
+  if (!safeName || !userId) return false;
   try {
     if (id) {
       await fetchJson('/api/admin/hr-accounts/' + id, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, status, notes: notes || null })
+        body: JSON.stringify({ name: safeName, status, notes: safeNotes || null })
       });
     } else {
       await fetchJson('/api/admin/hr-accounts', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, departmentId, name, notes: notes || null })
+        body: JSON.stringify({ userId, departmentId: departmentId || null, name: safeName, notes: safeNotes || null })
       });
     }
     closeModal('hr-modal');
@@ -2325,15 +2613,17 @@ async function submitHrAccount(e) {
 }
 
 function editHrAccount(h) {
-  document.getElementById('hr-modal-title').textContent = '编辑HR账号';
-  document.getElementById('hr-edit-id').value = h.id;
-  document.getElementById('hr-name').value = h.name;
-  document.getElementById('hr-user-id').value = h.user_id || '';
-  document.getElementById('hr-dept').value = h.department_id || '';
-  document.getElementById('hr-notes').value = h.notes || '';
-  document.getElementById('hr-status-group').style.display = '';
-  document.getElementById('hr-status').value = h.status || 'active';
-  showModal('hr-modal');
+  updateAdminModalForm('hr', {
+    editId: String(h.id),
+    title: '编辑HR账号',
+    name: h.name || '',
+    userId: h.user_id || '',
+    departmentId: h.department_id || '',
+    notes: h.notes || '',
+    status: h.status || 'active',
+    showStatus: true
+  });
+  openExistingAdminModal('hr-modal');
 }
 
 async function deleteHrAccount(id, name) {
@@ -2346,21 +2636,19 @@ async function deleteHrAccount(id, name) {
 
 async function submitBossAccount(e) {
   e.preventDefault();
-  const id = document.getElementById('ba-edit-id').value;
-  const hrAccountId = document.getElementById('ba-hr').value;
-  const bossLoginName = document.getElementById('ba-login').value.trim();
-  const displayName = document.getElementById('ba-display').value.trim();
-  const status = document.getElementById('ba-status').value;
+  const { editId: id, hrAccountId, bossLoginName, displayName, status } = state.adminModalForms.ba;
+  const safeBossLoginName = bossLoginName.trim();
+  const safeDisplayName = displayName.trim();
   try {
     if (id) {
       await fetchJson('/api/admin/boss-accounts/' + id, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bossLoginName, displayName, status })
+        body: JSON.stringify({ bossLoginName: safeBossLoginName, displayName: safeDisplayName, status })
       });
     } else {
       await fetchJson('/api/admin/boss-accounts', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hrAccountId, bossLoginName, displayName })
+        body: JSON.stringify({ hrAccountId, bossLoginName: safeBossLoginName, displayName: safeDisplayName })
       });
     }
     closeModal('ba-modal');
@@ -2370,15 +2658,17 @@ async function submitBossAccount(e) {
 }
 
 function editBossAccount(b) {
-  document.getElementById('ba-modal-title').textContent = '编辑BOSS账号';
-  document.getElementById('ba-edit-id').value = b.id;
-  document.getElementById('ba-hr').value = b.hr_account_id || '';
-  document.getElementById('ba-hr').disabled = true;
-  document.getElementById('ba-login').value = b.boss_login_name || '';
-  document.getElementById('ba-display').value = b.display_name || '';
-  document.getElementById('ba-status-group').style.display = '';
-  document.getElementById('ba-status').value = b.status || 'active';
-  showModal('ba-modal');
+  updateAdminModalForm('ba', {
+    editId: String(b.id),
+    title: '编辑BOSS账号',
+    hrAccountId: b.hr_account_id || '',
+    bossLoginName: b.boss_login_name || '',
+    displayName: b.display_name || '',
+    status: b.status || 'active',
+    hrDisabled: true,
+    showStatus: true
+  });
+  openExistingAdminModal('ba-modal');
 }
 
 async function deleteBossAccount(id) {
@@ -2389,40 +2679,55 @@ async function deleteBossAccount(id) {
   } catch (err) { alert(err.message); }
 }
 
-function onBiAccountChange(sel) {
-  if (document.getElementById('bi-edit-id').value) return;
-  const baId = sel.value;
+function onBiAccountChange(baId) {
+  if (state.adminModalForms.bi.editId) return;
   const ba = (state.adminBossAccounts || []).find((b) => String(b.id) === String(baId));
-  if (!ba) return;
+  updateAdminModalField('bi', 'bossAccountId', baId || '');
+  if (!ba) {
+    render();
+    return;
+  }
   const label = ba.display_name || ba.boss_login_name || '';
   const key = (ba.boss_login_name || '').replace(/^boss_/, '') || 'account' + ba.id;
-  const port = document.getElementById('bi-port').value || '9222';
-  document.getElementById('bi-name').value = 'Chrome-' + label.replace(/BOSS$/, '').trim();
-  document.getElementById('bi-userdata').value = '~/.chrome-boss-profiles/' + key;
-  document.getElementById('bi-download').value = '~/.chrome-boss-downloads/' + key;
+  const port = state.adminModalForms.bi.debugPort || '9222';
+  updateAdminModalForm('bi', {
+    bossAccountId: baId || '',
+    instanceName: 'Chrome-' + label.replace(/BOSS$/, '').trim(),
+    userDataDir: '~/.chrome-boss-profiles/' + key,
+    downloadDir: '~/.chrome-boss-downloads/' + key,
+    cdpEndpoint: 'http://127.0.0.1:' + port
+  });
+  render();
 }
 
 async function submitBrowserInstance(e) {
   e.preventDefault();
-  const id = document.getElementById('bi-edit-id').value;
-  const bossAccountId = document.getElementById('bi-ba').value;
-  const instanceName = document.getElementById('bi-name').value.trim();
-  const cdpEndpoint = document.getElementById('bi-cdp').value.trim();
-  const userDataDir = document.getElementById('bi-userdata').value.trim();
-  const downloadDir = document.getElementById('bi-download').value.trim();
-  const debugPort = document.getElementById('bi-port').value || null;
-  const host = document.getElementById('bi-host').value.trim() || 'localhost';
-  const status = document.getElementById('bi-status').value;
+  const {
+    editId: id,
+    bossAccountId,
+    instanceName,
+    cdpEndpoint,
+    userDataDir,
+    downloadDir,
+    debugPort,
+    host,
+    status
+  } = state.adminModalForms.bi;
+  const safeInstanceName = instanceName.trim();
+  const safeCdpEndpoint = cdpEndpoint.trim();
+  const safeUserDataDir = userDataDir.trim();
+  const safeDownloadDir = downloadDir.trim();
+  const safeHost = host.trim() || 'localhost';
   try {
     if (id) {
       await fetchJson('/api/admin/browser-instances/' + id, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instanceName, cdpEndpoint, userDataDir, downloadDir, debugPort, host, status })
+        body: JSON.stringify({ instanceName: safeInstanceName, cdpEndpoint: safeCdpEndpoint, userDataDir: safeUserDataDir, downloadDir: safeDownloadDir, debugPort: debugPort || null, host: safeHost, status })
       });
     } else {
       await fetchJson('/api/admin/browser-instances', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bossAccountId, instanceName, cdpEndpoint, userDataDir, downloadDir, debugPort, host })
+        body: JSON.stringify({ bossAccountId, instanceName: safeInstanceName, cdpEndpoint: safeCdpEndpoint, userDataDir: safeUserDataDir, downloadDir: safeDownloadDir, debugPort: debugPort || null, host: safeHost })
       });
     }
     closeModal('bi-modal');
@@ -2432,19 +2737,21 @@ async function submitBrowserInstance(e) {
 }
 
 function editBrowserInstance(bi) {
-  document.getElementById('bi-modal-title').textContent = '编辑浏览器实例';
-  document.getElementById('bi-edit-id').value = bi.id;
-  document.getElementById('bi-ba').value = bi.boss_account_id || '';
-  document.getElementById('bi-ba').disabled = true;
-  document.getElementById('bi-name').value = bi.instance_name || '';
-  document.getElementById('bi-cdp').value = bi.cdp_endpoint || '';
-  document.getElementById('bi-userdata').value = bi.user_data_dir || '';
-  document.getElementById('bi-download').value = bi.download_dir || '';
-  document.getElementById('bi-port').value = bi.debug_port || '';
-  document.getElementById('bi-host').value = bi.host || 'localhost';
-  document.getElementById('bi-status-group').style.display = '';
-  document.getElementById('bi-status').value = bi.status || 'idle';
-  showModal('bi-modal');
+  updateAdminModalForm('bi', {
+    editId: String(bi.id),
+    title: '编辑浏览器实例',
+    bossAccountId: bi.boss_account_id || '',
+    instanceName: bi.instance_name || '',
+    cdpEndpoint: bi.cdp_endpoint || '',
+    userDataDir: bi.user_data_dir || '',
+    downloadDir: bi.download_dir || '',
+    debugPort: bi.debug_port || '',
+    host: bi.host || 'localhost',
+    status: bi.status || 'idle',
+    bossDisabled: true,
+    showStatus: true
+  });
+  openExistingAdminModal('bi-modal');
 }
 
 async function checkBrowserInstance(id) {
@@ -2713,8 +3020,6 @@ function renderJobs() {
         </tbody>
       </table>
     </section>
-    ${renderSyncModal()}
-    ${renderJobDetailModal()}
   `;
 }
 
@@ -2838,7 +3143,6 @@ function renderCandidates() {
       ${state.candidateListLoading ? '<div class="empty-state">正在加载候选人列表...</div>' : renderCandidateTable()}
       ${renderCandidatePagination()}
     </section>
-    ${renderCandidateDetailDrawer()}
   `;
 }
 
@@ -3752,8 +4056,6 @@ function renderAutomation() {
         </table>
       ` : '<div class="empty-state">当前暂无调度任务，点击「添加任务」创建。</div>'}
     </section>
-    ${renderScheduleModal()}
-    ${renderSyncModal()}
   `;
 }
 
@@ -4416,7 +4718,6 @@ function renderTaskRuns() {
         ${paginationHtml}
       ` : ''}
     </section>
-    ${renderTaskRunDetailModal()}
   `;
 }
 
@@ -5035,29 +5336,36 @@ document.addEventListener('fullscreenchange', () => {
   }
 });
 
-function manageSyncLiveOverlay() {
-  if (!state.syncModal.open || !state.syncModal.showLiveView) {
-    const overlay = document.getElementById('sync-live-overlay');
-    if (overlay) overlay.remove();
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (state.syncModal.open) { closeSyncModal(); return; }
+  if (state.jobDetailModal.open) { closeJobDetailModal(); return; }
+  if (state.candidateDetailDrawer.open) { closeCandidateDetailDrawer(); return; }
+  if (state.scheduleModal.open) { closeScheduleModal(); return; }
+  if (state.taskRunDetail.open) { closeTaskRunDetail(); return; }
+  if (state.adminModalOpenId) { closeModal(state.adminModalOpenId); return; }
+  const visibleOverlay = document.querySelector('.modal-overlay[style*="flex"]');
+  if (visibleOverlay) { visibleOverlay.style.display = 'none'; return; }
+  const visibleBackdrop = document.querySelector('.modal-backdrop, .drawer-backdrop');
+  if (visibleBackdrop) {
+    if (visibleBackdrop.style) {
+      visibleBackdrop.style.display = 'none';
+    } else if (typeof visibleBackdrop.remove === 'function') {
+      visibleBackdrop.remove();
+    }
     return;
   }
+  const stuckOverlay = document.getElementById('sync-live-overlay');
+  if (stuckOverlay) { stuckOverlay.remove(); }
+});
 
-  const overlay = document.getElementById('sync-live-overlay');
-  if (!overlay) {
-    createSyncLiveOverlay();
-  } else {
-    updateSyncLiveOverlayContent();
+function renderSyncLiveOverlay() {
+  if (!state.syncModal.open || !state.syncModal.showLiveView) {
+    return '';
   }
-}
 
-function createSyncLiveOverlay() {
-  const overlay = document.createElement('div');
-  overlay.id = 'sync-live-overlay';
-  overlay.className = 'modal-overlay';
-  overlay.style.display = 'flex';
-  overlay.onclick = (e) => { if (e.target === overlay) closeSyncModal(); };
-
-  overlay.innerHTML = `
+  return `
+    <div id="sync-live-overlay" class="modal-overlay" style="display:flex" onclick="if (event.target === this) closeSyncModal()">
     <div class="runtime-console ${state.syncModal.browserFocus ? 'is-browser-focus' : ''}" id="runtime-console-shell" onclick="event.stopPropagation()">
       <div class="runtime-console-browser">
         <div class="runtime-console-browser-header">
@@ -5094,14 +5402,17 @@ function createSyncLiveOverlay() {
           ${renderSyncLiveLogsContent()}
       </aside>
     </div>
+    </div>
   `;
+}
 
-  document.body.appendChild(overlay);
-
+function hydrateSyncLiveOverlay() {
   const img = document.getElementById('live-view-img');
-  if (img) {
+  if (img && !img.__liveViewClickBound) {
     img.addEventListener('click', handleLiveViewClick);
+    img.__liveViewClickBound = true;
   }
+  updateLiveViewStatus();
 }
 
 function updateSyncLiveOverlayContent() {
