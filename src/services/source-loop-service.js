@@ -215,22 +215,11 @@ class SourceLoopService {
       // Non-fatal: will fall back to DOM text in scrollAndReadResumeDetail
     }
 
-    // Phase 3: Read candidate list and evaluate each via LLM, greet through popup
-    let listResult;
-    try {
-      listResult = await runner.inspectRecommendList({ runId, limit: effectiveTargetCount + this.maxSkips });
-    } catch (error) {
-      await this.#failRun(runId, `recommend_list_failed:${error.message}`, stats);
-      return { ok: false, stats, reason: 'recommend_list_unavailable' };
-    }
+    // Phase 3: Refresh the visible list each round so list identity and detail traversal stay aligned
+    const processedGeekIds = new Set();
+    let sawAnyCandidate = false;
 
-    const candidates = listResult.candidates || [];
-    if (!candidates.length) {
-      await this.#failRun(runId, 'recommend_list_empty', stats);
-      return { ok: false, stats, reason: 'recommend_list_empty' };
-    }
-
-    for (const candidate of candidates) {
+    while (true) {
       if (signal?.aborted) break;
       if (stats.greeted >= effectiveTargetCount) break;
       if ((stats.skipped + stats.errors) >= this.maxSkips) break;
@@ -246,6 +235,29 @@ class SourceLoopService {
         }
       }
 
+      let listResult;
+      try {
+        listResult = await runner.inspectRecommendList({ runId, limit: effectiveTargetCount + this.maxSkips });
+      } catch (error) {
+        await this.#failRun(runId, `recommend_list_failed:${error.message}`, stats);
+        return { ok: false, stats, reason: 'recommend_list_unavailable' };
+      }
+
+      const candidates = listResult.candidates || [];
+      if (!candidates.length) {
+        if (!sawAnyCandidate) {
+          await this.#failRun(runId, 'recommend_list_empty', stats);
+          return { ok: false, stats, reason: 'recommend_list_empty' };
+        }
+        break;
+      }
+
+      sawAnyCandidate = true;
+      const candidate = candidates.find((item) => item?.geekId && !processedGeekIds.has(item.geekId));
+      if (!candidate) {
+        break;
+      }
+
       await this.#processCandidate({
         runId,
         jobKey,
@@ -253,6 +265,7 @@ class SourceLoopService {
         customRequirement,
         enterpriseKnowledge,
         candidate,
+        processedGeekIds,
         stats,
         runner
       });
@@ -332,7 +345,7 @@ class SourceLoopService {
     return { ok: true, stats: summary };
   }
 
-  async #processCandidate({ runId, jobKey, jobRequirement, customRequirement, enterpriseKnowledge, candidate, stats, runner }) {
+  async #processCandidate({ runId, jobKey, jobRequirement, customRequirement, enterpriseKnowledge, candidate, processedGeekIds, stats, runner }) {
     const bossEncryptGeekId = candidate.geekId;
     const candidateText = candidate.text || '';
     const candidateName = candidate.name || parseCardText(candidateText).name;
@@ -349,6 +362,8 @@ class SourceLoopService {
       return;
     }
 
+    processedGeekIds.add(bossEncryptGeekId);
+
     // Already chatting detection from button text
     if (candidate.alreadyChatting) {
       stats.alreadyChatting += 1;
@@ -362,68 +377,36 @@ class SourceLoopService {
       return;
     }
 
-    // Step 1: Open detail popup by clicking on the candidate card
-    const popupOpened = await this.#openCandidateDetail({ runId, bossEncryptGeekId, candidateName, candidate, runner });
-    const detailSummary = await this.#inspectOpenedCandidateDetail({
-      runId,
-      bossEncryptGeekId,
-      candidateName,
-      popupOpened,
-      runner
-    });
-    const resolvedBossEncryptGeekId = detailSummary?.bossEncryptGeekId || bossEncryptGeekId;
-    const resolvedCandidateName = detailSummary?.name || candidateName;
-
-    if (popupOpened && detailSummary?.bossEncryptGeekId && detailSummary.bossEncryptGeekId !== bossEncryptGeekId) {
-      await this.#recordEvent(runId, {
-        eventId: `source-loop-detail-mismatch:${runId}:${bossEncryptGeekId}`,
-        eventType: 'source_loop_warning',
-        stage: 'source_loop',
-        message: `detail identity mismatch: ${candidateName} -> ${resolvedCandidateName}`,
-        payload: {
-          snapshotBossEncryptGeekId: bossEncryptGeekId,
-          snapshotCandidateName: candidateName,
-          detailBossEncryptGeekId: detailSummary.bossEncryptGeekId,
-          detailCandidateName: detailSummary.name || ''
-        }
-      });
-    }
-
     await this.#recordEvent(runId, {
-      eventId: `source-loop-card-read:${runId}:${resolvedBossEncryptGeekId}`,
+      eventId: `source-loop-card-read:${runId}:${bossEncryptGeekId}`,
       eventType: 'candidate_card_read',
       stage: 'source_loop',
-      message: `read card: ${resolvedCandidateName}`,
+      message: `read card: ${candidateName}`,
       payload: {
-        bossEncryptGeekId: resolvedBossEncryptGeekId,
-        candidateName: resolvedCandidateName,
+        bossEncryptGeekId,
+        candidateName,
         cardTextLength: candidateText.length,
-        alreadyChatting: candidate.alreadyChatting || false,
-        detailVerified: Boolean(detailSummary),
-        snapshotBossEncryptGeekId: bossEncryptGeekId,
-        snapshotCandidateName: candidateName,
-        detailSummaryTextLength: detailSummary?.detailText?.length || 0
+        alreadyChatting: candidate.alreadyChatting || false
       }
     });
 
+    // Step 1: Open detail popup by clicking on the freshly fetched candidate card
+    const popupOpened = await this.#openCandidateDetail({ runId, bossEncryptGeekId, candidateName, candidate, runner });
+
     // DB dedup (scoped to current job)
     try {
-      const existing = await this.agentService.findLatestCandidateByGeekId(resolvedBossEncryptGeekId, jobKey);
+      const existing = await this.agentService.findLatestCandidateByGeekId(bossEncryptGeekId, jobKey);
       if (existing && existing.lifecycleStatus && existing.lifecycleStatus !== 'discovered') {
         stats.alreadyChatting += 1;
         if (popupOpened) {
           try { await runner.closeRecommendPopup({ runId }); } catch (_) {}
         }
         await this.#recordEvent(runId, {
-          eventId: `source-loop-dedup:${runId}:${resolvedBossEncryptGeekId}`,
+          eventId: `source-loop-dedup:${runId}:${bossEncryptGeekId}`,
           eventType: 'candidate_already_chatting',
           stage: 'source_loop',
-          message: `db dedup: ${resolvedCandidateName} already ${existing.lifecycleStatus}`,
-          payload: {
-            bossEncryptGeekId: resolvedBossEncryptGeekId,
-            candidateName: resolvedCandidateName,
-            status: existing.lifecycleStatus
-          }
+          message: `db dedup: ${candidateName} already ${existing.lifecycleStatus}`,
+          payload: { bossEncryptGeekId, candidateName, status: existing.lifecycleStatus }
         });
         return;
       }
@@ -439,13 +422,13 @@ class SourceLoopService {
         if (resumeResult?.ok && resumeResult.fullText) {
           fullResumeText = resumeResult.fullText;
           await this.#recordEvent(runId, {
-            eventId: `source-loop-resume-read:${runId}:${resolvedBossEncryptGeekId}`,
+            eventId: `source-loop-resume-read:${runId}:${bossEncryptGeekId}`,
             eventType: 'resume_detail_read',
             stage: 'source_loop',
-            message: `read full resume: ${resolvedCandidateName} (${fullResumeText.length} chars, ${resumeResult.segments} segments)`,
+            message: `read full resume: ${candidateName} (${fullResumeText.length} chars, ${resumeResult.segments} segments)`,
             payload: {
-              bossEncryptGeekId: resolvedBossEncryptGeekId,
-              candidateName: resolvedCandidateName,
+              bossEncryptGeekId,
+              candidateName,
               textLength: fullResumeText.length,
               segments: resumeResult.segments,
               mode: resumeResult.mode
@@ -457,13 +440,13 @@ class SourceLoopService {
       }
     }
 
-    // Step 3: LLM evaluation based on full resume detail (fall back to card text if scroll/read failed)
-    const evaluationText = fullResumeText || detailSummary?.detailText || candidateText;
+    // Step 3: LLM evaluation based on full resume detail (fall back to the current list card text)
+    const evaluationText = fullResumeText || candidateText;
     let decision;
     try {
       decision = await this.llmEvaluator.evaluateCandidate({
         jobRequirement,
-        candidateDetail: { name: resolvedCandidateName, detailText: evaluationText },
+        candidateDetail: { name: candidateName, detailText: evaluationText },
         customRequirement,
         enterpriseKnowledge
       });
@@ -474,18 +457,18 @@ class SourceLoopService {
 
     // Record LLM analysis in event log
     await this.#recordEvent(runId, {
-      eventId: `source-loop-llm:${runId}:${resolvedBossEncryptGeekId}`,
+      eventId: `source-loop-llm:${runId}:${bossEncryptGeekId}`,
       eventType: 'candidate_evaluated',
       stage: 'source_loop',
-      message: `LLM ${decision.action}: ${resolvedCandidateName} [${decision.tier}] ${decision.reason}`,
+      message: `LLM ${decision.action}: ${candidateName} [${decision.tier}] ${decision.reason}`,
       payload: {
-        bossEncryptGeekId: resolvedBossEncryptGeekId,
-        candidateName: resolvedCandidateName,
+        bossEncryptGeekId,
+        candidateName,
         action: decision.action,
         tier: decision.tier,
         reason: decision.reason,
         facts: decision.facts,
-        evaluationSource: fullResumeText ? 'full_resume' : (detailSummary?.detailText ? 'detail_summary' : 'card_text'),
+        evaluationSource: fullResumeText ? 'full_resume' : 'card_text',
         evaluationTextLength: evaluationText.length
       }
     });
@@ -494,11 +477,11 @@ class SourceLoopService {
     try {
       await this.agentService.upsertCandidate({
         runId,
-        eventId: `source-loop-candidate:${runId}:${resolvedBossEncryptGeekId}`,
+        eventId: `source-loop-candidate:${runId}:${bossEncryptGeekId}`,
         occurredAt: new Date().toISOString(),
         jobKey,
-        bossEncryptGeekId: resolvedBossEncryptGeekId,
-        name: resolvedCandidateName,
+        bossEncryptGeekId,
+        name: candidateName,
         city: parsed.city,
         education: parsed.education,
         experience: parsed.experience,
@@ -509,11 +492,9 @@ class SourceLoopService {
           priority: decision.tier,
           facts: decision.facts,
           reasoning: decision.reason,
-          evaluationMode: fullResumeText ? 'full_resume_detail' : (detailSummary?.detailText ? 'detail_summary_fallback' : 'list_card_fallback'),
+          evaluationMode: fullResumeText ? 'full_resume_detail' : 'list_card_fallback',
           fullResumeText: fullResumeText ? fullResumeText.slice(0, 10000) : undefined,
-          resumeReadAt: fullResumeText ? new Date().toISOString() : undefined,
-          snapshotBossEncryptGeekId: bossEncryptGeekId,
-          snapshotCandidateName: candidateName
+          resumeReadAt: fullResumeText ? new Date().toISOString() : undefined
         }
       });
     } catch (error) {
@@ -525,8 +506,8 @@ class SourceLoopService {
       const greetResult = await this.#greetInOpenPopup({
         runId,
         jobKey,
-        bossEncryptGeekId: resolvedBossEncryptGeekId,
-        candidateName: resolvedCandidateName,
+        bossEncryptGeekId,
+        candidateName,
         runner
       });
 
@@ -545,34 +526,12 @@ class SourceLoopService {
 
       stats.skipped += 1;
       await this.#recordEvent(runId, {
-        eventId: `source-loop-skip:${runId}:${resolvedBossEncryptGeekId}`,
+        eventId: `source-loop-skip:${runId}:${bossEncryptGeekId}`,
         eventType: 'candidate_skipped',
         stage: 'source_loop',
         message: `skipped: ${decision.reason}`,
-        payload: {
-          bossEncryptGeekId: resolvedBossEncryptGeekId,
-          candidateName: resolvedCandidateName,
-          tier: decision.tier,
-          reason: decision.reason
-        }
+        payload: { bossEncryptGeekId, candidateName, tier: decision.tier, reason: decision.reason }
       });
-    }
-  }
-
-  async #inspectOpenedCandidateDetail({ runId, bossEncryptGeekId, candidateName, popupOpened, runner }) {
-    if (!popupOpened || typeof runner.inspectRecommendDetail !== 'function') {
-      return null;
-    }
-
-    try {
-      const detail = await runner.inspectRecommendDetail({ runId });
-      return {
-        bossEncryptGeekId: detail?.bossEncryptGeekId || bossEncryptGeekId,
-        name: detail?.name || candidateName,
-        detailText: detail?.detailText || ''
-      };
-    } catch (error) {
-      return null;
     }
   }
 

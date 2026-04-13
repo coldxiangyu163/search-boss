@@ -6,10 +6,10 @@ const { SourceLoopService, parseCardText } = require('../src/services/source-loo
 function createMockBossCliRunner({
   listResult = { ok: true, total: 0, candidates: [] },
   greetResults = [],
-  bindResult = { ok: true, session: { targetId: 'tab-1' } },
-  detailResult
+  bindResult = { ok: true, session: { targetId: 'tab-1' } }
 } = {}) {
   let greetIndex = 0;
+  let listIndex = 0;
   const calls = [];
   const runner = {
     calls,
@@ -43,6 +43,15 @@ function createMockBossCliRunner({
     },
     async inspectRecommendList(opts) {
       calls.push({ command: 'inspectRecommendList', ...opts });
+      if (typeof listResult === 'function') {
+        return listResult({ callIndex: listIndex++, opts });
+      }
+      if (Array.isArray(listResult)) {
+        const value = listResult[Math.min(listIndex, listResult.length - 1)];
+        listIndex += 1;
+        return value;
+      }
+      listIndex += 1;
       return listResult;
     },
     async scrollCardIntoView(opts) {
@@ -74,16 +83,6 @@ function createMockBossCliRunner({
       return { ok: true, mode: 'canvas', fullText: '张三 28岁 4年 本科 工作经历 2020-2024 某公司 面点师 教育经历 2016-2020 某大学 食品科学 本科', segments: 3, textLength: 120 };
     }
   };
-
-  if (detailResult !== undefined) {
-    runner.inspectRecommendDetail = async (opts) => {
-      calls.push({ command: 'inspectRecommendDetail', ...opts });
-      if (detailResult instanceof Error) {
-        throw detailResult;
-      }
-      return detailResult;
-    };
-  }
 
   return runner;
 }
@@ -465,12 +464,6 @@ test('SourceLoopService opens detail, scrolls full resume, then evaluates with L
         cardX: 300,
         cardY: 100
       }]
-    },
-    detailResult: {
-      ok: true,
-      bossEncryptGeekId: 'geek-1',
-      name: '张三',
-      detailText: '张三 工作经历 教育经历'
     }
   });
   bossCliRunner.scrollAndReadResumeDetail = async (opts) => {
@@ -502,11 +495,11 @@ test('SourceLoopService opens detail, scrolls full resume, then evaluates with L
   // LLM should receive full resume text, not card text
   assert.equal(receivedDetail.detailText, fullResumeText);
 
-  // Verify call order: setupCanvas -> resetCanvas -> clickAtCoords (open popup) -> inspectRecommendDetail -> scrollAndReadResumeDetail -> clickRecommendGreet
+  // Verify call order follows the original stable detail path
   const callOrder = bossCliRunner.calls
-    .filter((c) => ['setupResumeCanvasCapture', 'resetResumeCanvasCapture', 'clickAtCoords', 'inspectRecommendDetail', 'scrollAndReadResumeDetail', 'clickRecommendGreet'].includes(c.command))
+    .filter((c) => ['setupResumeCanvasCapture', 'resetResumeCanvasCapture', 'clickAtCoords', 'scrollAndReadResumeDetail', 'clickRecommendGreet'].includes(c.command))
     .map((c) => c.command);
-  assert.deepStrictEqual(callOrder, ['setupResumeCanvasCapture', 'resetResumeCanvasCapture', 'clickAtCoords', 'inspectRecommendDetail', 'scrollAndReadResumeDetail', 'clickRecommendGreet']);
+  assert.deepStrictEqual(callOrder, ['setupResumeCanvasCapture', 'resetResumeCanvasCapture', 'clickAtCoords', 'scrollAndReadResumeDetail', 'clickRecommendGreet']);
 
   const evalEvents = agentService.events.filter((e) => e.eventType === 'candidate_evaluated');
   assert.equal(evalEvents.length, 1);
@@ -519,50 +512,40 @@ test('SourceLoopService opens detail, scrolls full resume, then evaluates with L
   assert.ok(candidateRecord.metadata.fullResumeText);
 });
 
-test('SourceLoopService uses verified detail identity instead of stale list snapshot', async () => {
+test('SourceLoopService refreshes visible list each round instead of consuming one stale snapshot', async () => {
   const bossCliRunner = createMockBossCliRunner({
-    listResult: makeCandidateList([
-      { geekId: 'snapshot-geek', name: '列表候选人' }
-    ]),
-    detailResult: {
-      ok: true,
-      bossEncryptGeekId: 'detail-geek',
-      name: '详情候选人',
-      detailText: '详情候选人 30岁 6年 本科 工作经历 教育经历'
-    }
+    listResult: [
+      makeCandidateList([
+        { geekId: 'geek-1', name: '张三', cardX: 100, cardY: 100 },
+        { geekId: 'geek-2', name: '李四', cardX: 120, cardY: 120 }
+      ]),
+      makeCandidateList([
+        { geekId: 'geek-2', name: '李四', cardX: 140, cardY: 140 }
+      ]),
+      { ok: true, total: 0, candidates: [] }
+    ]
   });
 
   const agentService = createMockAgentService();
   const llmEvaluator = createMockLlmEvaluator([
-    { action: 'greet', tier: 'A', reason: 'verified detail match', facts: {} }
+    { action: 'greet', tier: 'A', reason: 'first', facts: {} },
+    { action: 'greet', tier: 'A', reason: 'second', facts: {} }
   ]);
 
   const service = new SourceLoopService({
     bossCliRunner,
     agentService,
     llmEvaluator,
-    targetCount: 1,
+    targetCount: 2,
     candidateDelayMin: 0,
     candidateDelayMax: 0
   });
 
   await service.run({ runId: 112, jobKey: '测试岗位_abc' });
 
-  const warningEvent = agentService.events.find((e) => e.eventType === 'source_loop_warning');
-  assert.ok(warningEvent);
-  assert.equal(warningEvent.payload.snapshotBossEncryptGeekId, 'snapshot-geek');
-  assert.equal(warningEvent.payload.detailBossEncryptGeekId, 'detail-geek');
-
-  const readEvent = agentService.events.find((e) => e.eventType === 'candidate_card_read');
-  assert.ok(readEvent);
-  assert.equal(readEvent.payload.bossEncryptGeekId, 'detail-geek');
-  assert.equal(readEvent.payload.candidateName, '详情候选人');
-  assert.equal(readEvent.payload.detailVerified, true);
-
-  assert.equal(agentService.candidates[0].bossEncryptGeekId, 'detail-geek');
-  assert.equal(agentService.candidates[0].name, '详情候选人');
-  assert.equal(agentService.actions[0].bossEncryptGeekId, 'detail-geek');
-  assert.equal(agentService.actions[0].payload.candidateName, '详情候选人');
+  assert.equal(bossCliRunner.calls.filter((c) => c.command === 'inspectRecommendList').length, 2);
+  assert.deepEqual(agentService.candidates.map((c) => c.bossEncryptGeekId), ['geek-1', 'geek-2']);
+  assert.deepEqual(agentService.actions.map((a) => a.bossEncryptGeekId), ['geek-1', 'geek-2']);
 });
 
 test('SourceLoopService skips switchRecommendToLatest in default recommend mode', async () => {
