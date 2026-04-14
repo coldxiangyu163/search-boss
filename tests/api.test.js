@@ -5037,3 +5037,131 @@ test('GET /api/runs/:runId/events rejects access to other HR run', async () => {
   assert.equal(response.status, 403);
   assert.equal(response.body.error, 'forbidden');
 });
+
+test('GET /api/admin/departments scopes dept_admin to current department', async () => {
+  let capturedParams = null;
+  let capturedSql = '';
+  const app = createAuthedApp({
+    user: { id: 3, role: 'dept_admin', department_id: 10 },
+    pool: {
+      query(sql, params) {
+        capturedSql = sql;
+        capturedParams = params;
+        return { rows: [{ id: 10, name: '销售市场部', status: 'active' }] };
+      }
+    },
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } }
+    }
+  });
+
+  const response = await request(app).get('/api/admin/departments');
+
+  assert.equal(response.status, 200);
+  assert.match(capturedSql, /where id = \$1/i);
+  assert.deepEqual(capturedParams, [10]);
+  assert.deepEqual(response.body.items, [{ id: 10, name: '销售市场部', status: 'active' }]);
+});
+
+test('GET /api/admin/boss-accounts scopes dept_admin to current department', async () => {
+  let capturedParams = null;
+  let capturedSql = '';
+  const app = createAuthedApp({
+    user: { id: 3, role: 'dept_admin', department_id: 10 },
+    pool: {
+      query(sql, params) {
+        capturedSql = sql;
+        capturedParams = params;
+        return { rows: [{ id: 7, hr_account_name: '赵强HR' }] };
+      }
+    },
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } }
+    }
+  });
+
+  const response = await request(app).get('/api/admin/boss-accounts');
+
+  assert.equal(response.status, 200);
+  assert.match(capturedSql, /where ha\.department_id = \$1/i);
+  assert.deepEqual(capturedParams, [10]);
+  assert.equal(response.body.items.length, 1);
+  assert.equal(response.body.items[0].id, 7);
+});
+
+test('GET /api/admin/browser-instances scopes dept_admin to current department', async () => {
+  let capturedParams = null;
+  let capturedSql = '';
+  const app = createAuthedApp({
+    user: { id: 3, role: 'dept_admin', department_id: 10 },
+    pool: {
+      query(sql, params) {
+        capturedSql = sql;
+        capturedParams = params;
+        return { rows: [{ id: 11, hr_account_name: '赵强HR' }] };
+      }
+    },
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } }
+    }
+  });
+
+  const response = await request(app).get('/api/admin/browser-instances');
+
+  assert.equal(response.status, 200);
+  assert.match(capturedSql, /where ha\.department_id = \$1/i);
+  assert.deepEqual(capturedParams, [10]);
+  assert.equal(response.body.items.length, 1);
+  assert.equal(response.body.items[0].id, 11);
+});
+
+test('POST /api/admin/users rejects legacy enterprise_admin role with invalid_role', async () => {
+  let called = false;
+  const app = createAuthedApp({
+    user: { id: 1, role: 'system_admin', department_id: 1 },
+    services: {
+      auth: {
+        async createUser() {
+          called = true;
+          return {};
+        }
+      },
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } }
+    }
+  });
+
+  const response = await request(app)
+    .post('/api/admin/users')
+    .send({
+      name: 'Legacy',
+      email: 'legacy@test.com',
+      password: 'test123',
+      role: 'enterprise_admin',
+      departmentId: 1
+    });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'invalid_role');
+  assert.equal(called, false);
+});
+
+test('PATCH /api/admin/users/:id rejects legacy enterprise_admin role with invalid_role', async () => {
+  const app = createAuthedApp({
+    user: { id: 1, role: 'system_admin', department_id: 1 },
+    pool: {
+      query() {
+        throw new Error('unexpected query');
+      }
+    },
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } }
+    }
+  });
+
+  const response = await request(app)
+    .patch('/api/admin/users/9')
+    .send({ role: 'enterprise_admin' });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'invalid_role');
+});

@@ -141,6 +141,33 @@ test('POST /api/auth/logout returns ok', async () => {
   assert.equal(res.body.ok, true);
 });
 
+test('AuthService.createUser rejects legacy enterprise_admin role', async () => {
+  const { AuthService } = require('../src/services/auth-service');
+  let called = false;
+  const pool = {
+    async query() {
+      called = true;
+      return { rows: [] };
+    }
+  };
+  const service = new AuthService({ pool });
+
+  await assert.rejects(
+    () => service.createUser({
+      name: 'Legacy Admin',
+      email: 'legacy@test.com',
+      password: 'test123',
+      role: 'enterprise_admin',
+      departmentId: 1
+    }),
+    (error) => {
+      assert.equal(error.message, 'invalid_role');
+      return true;
+    }
+  );
+  assert.equal(called, false);
+});
+
 test('GET /api/auth/me returns 401 when not logged in', async () => {
   const { AuthService } = require('../src/services/auth-service');
   const pool = createMockPool([]);
