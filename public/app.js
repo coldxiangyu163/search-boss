@@ -320,6 +320,23 @@ function isSysAdmin() {
   return state.currentUser && state.currentUser.role === 'system_admin';
 }
 
+function isDeptAdmin() {
+  return state.currentUser && state.currentUser.role === 'dept_admin';
+}
+
+function getViewTitleEntry(view) {
+  if (!isDeptAdmin()) {
+    return titles[view] || titles.command;
+  }
+  const deptTitles = {
+    'admin-overview': ['HR 概览', '部门招聘运营看板', '查看本部门 HR 的业务数据与执行状态。'],
+    jobs: ['职位管理', '部门职位招聘执行情况', '统一查看本部门职位需求、城市分布与当前转化效率。'],
+    candidates: ['候选人管理', '部门候选人全流程跟进', '围绕本部门人才状态、简历获取与入站行为进行管理。'],
+    'task-runs': ['任务列表', '部门任务执行记录', '查看本部门定时任务与手动任务的执行详情与状态。']
+  };
+  return deptTitles[view] || titles[view] || titles.command;
+}
+
 function getNavItems() {
   if (isSysAdmin()) {
     return [
@@ -1269,7 +1286,7 @@ function dismissAllOverlays() {
 function renderInner() {
   manageOverviewPolling();
   const syncLogScrollSnapshot = getSyncLogScrollSnapshot();
-  const titleEntry = titles[state.view] || titles['command'];
+  const titleEntry = getViewTitleEntry(state.view);
   const [eyebrow, title, description] = titleEntry;
   document.getElementById('page-eyebrow').textContent = eyebrow;
   document.getElementById('page-title').textContent = title;
@@ -1878,6 +1895,7 @@ function formatDelta(delta) {
 function renderAdminOverview() {
   const hrs = state.hrOverview || [];
   const { kpis, health } = state.summary;
+  const deptAdmin = isDeptAdmin();
 
   const totalJobs = hrs.reduce((s, h) => s + (h.job_count || 0), 0);
   const totalCandidates = hrs.reduce((s, h) => s + (h.candidate_count || 0), 0);
@@ -1887,9 +1905,9 @@ function renderAdminOverview() {
   return `
     <section class="card-grid">
       ${metricCard('HR 人数', hrs.length, '当前活跃 HR 数')}
-      ${metricCard('在招职位', totalJobs, '全部 HR 职位合计')}
-      ${metricCard('今日打招呼', totalGreeted, '全部 HR 合计')}
-      ${metricCard('今日简历', totalResumes, '全部 HR 合计')}
+      ${metricCard('在招职位', totalJobs, deptAdmin ? '本部门 HR 职位合计' : '全部 HR 职位合计')}
+      ${metricCard('今日打招呼', totalGreeted, deptAdmin ? '本部门 HR 合计' : '全部 HR 合计')}
+      ${metricCard('今日简历', totalResumes, deptAdmin ? '本部门 HR 合计' : '全部 HR 合计')}
     </section>
     <section>
       <div class="table-card">
@@ -1937,17 +1955,17 @@ function renderAdminOverview() {
       <div class="table-card">
         <div class="card-header">
           <div>
-            <p class="eyebrow">系统数据</p>
-            <h3 class="card-title">全局指标</h3>
+            <p class="eyebrow">${deptAdmin ? '部门数据' : '系统数据'}</p>
+            <h3 class="card-title">${deptAdmin ? '部门指标' : '全局指标'}</h3>
           </div>
         </div>
         <div class="status-grid">
           <div class="status-box">
-            <span class="muted">总职位数</span>
+            <span class="muted">${deptAdmin ? '部门职位数' : '总职位数'}</span>
             <strong>${kpis.jobs}</strong>
           </div>
           <div class="status-box">
-            <span class="muted">总候选人数</span>
+            <span class="muted">${deptAdmin ? '部门候选人数' : '总候选人数'}</span>
             <strong>${kpis.candidates}</strong>
           </div>
         </div>
@@ -3018,13 +3036,14 @@ function showClickIndicator(x, y) {
 
 function renderJobs() {
   const admin = isAdmin();
+  const deptAdmin = isDeptAdmin();
   return `
     <section class="table-card">
       <div class="card-header">
         <div>
           <p class="eyebrow">职位管理</p>
           <h3 class="card-title">职位列表</h3>
-          <p class="card-subtitle">${admin ? '全局职位概览，按 HR 查看候选人规模与转化数据。' : '按职位查看候选人规模与关键转化数据。'}</p>
+          <p class="card-subtitle">${admin ? (deptAdmin ? '本部门职位概览，按 HR 查看候选人规模与转化数据。' : '全局职位概览，按 HR 查看候选人规模与转化数据。') : '按职位查看候选人规模与关键转化数据。'}</p>
         </div>
         <div class="jobs-header-actions">
           <span class="badge">共 ${state.jobs.length} 个职位</span>
@@ -4689,6 +4708,7 @@ function renderTaskRunTriggerBadge(scheduledJobId) {
 function renderTaskRuns() {
   const runs = state.taskRuns || [];
   const { page, totalPages, total } = state.taskRunsPagination;
+  const deptAdmin = isDeptAdmin();
 
   const statusOptions = [
     { value: '', label: '全部状态' },
@@ -4722,7 +4742,7 @@ function renderTaskRuns() {
         <div>
           <p class="eyebrow">执行记录</p>
           <h3 class="card-title">任务执行列表</h3>
-          <p class="card-subtitle">查看所有定时任务与手动任务的执行记录、状态与结果。</p>
+          <p class="card-subtitle">${deptAdmin ? '查看本部门定时任务与手动任务的执行记录、状态与结果。' : '查看所有定时任务与手动任务的执行记录、状态与结果。'}</p>
         </div>
         <div class="jobs-header-actions">
           <select onchange="changeTaskRunsFilter('status', this.value)" style="margin-right:8px">
