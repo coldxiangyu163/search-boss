@@ -258,7 +258,7 @@ class SourceLoopService {
         break;
       }
 
-      await this.#processCandidate({
+      const candidateResult = await this.#processCandidate({
         runId,
         jobKey,
         jobRequirement,
@@ -269,6 +269,16 @@ class SourceLoopService {
         stats,
         runner
       });
+
+      if (candidateResult?.stopReason === 'boss_chat_quota_exhausted') {
+        stats.totalEvaluated += 1;
+        return this.#handleQuotaExhausted({
+          runId,
+          effectiveTargetCount,
+          stats,
+          quotaInfo: candidateResult
+        });
+      }
 
       stats.totalEvaluated += 1;
 
@@ -486,7 +496,7 @@ class SourceLoopService {
         education: parsed.education,
         experience: parsed.experience,
         school: parsed.school,
-        status: decision.action === 'greet' ? 'greeted' : 'discovered',
+        status: 'discovered',
         metadata: {
           decision: decision.action,
           priority: decision.tier,
@@ -511,6 +521,13 @@ class SourceLoopService {
         runner
       });
 
+      if (greetResult.quotaExhausted) {
+        return {
+          stopReason: 'boss_chat_quota_exhausted',
+          quotaMessage: greetResult.resultText || greetResult.reason || 'boss_chat_quota_exhausted'
+        };
+      }
+
       if (greetResult.greeted) {
         stats.greeted += 1;
       } else if (greetResult.alreadyChatting) {
@@ -533,6 +550,8 @@ class SourceLoopService {
         payload: { bossEncryptGeekId, candidateName, tier: decision.tier, reason: decision.reason }
       });
     }
+
+    return null;
   }
 
   async #openCandidateDetail({ runId, bossEncryptGeekId, candidateName, candidate, runner }) {
@@ -593,9 +612,28 @@ class SourceLoopService {
     // Click greet button inside the already-open popup
     try {
       const greetResult = await runner.clickRecommendGreet({ runId });
+      if (greetResult?.quotaExhausted || greetResult?.reason === 'boss_chat_quota_exhausted') {
+        return {
+          greeted: false,
+          alreadyChatting: false,
+          quotaExhausted: true,
+          reason: 'boss_chat_quota_exhausted',
+          resultText: greetResult.resultText || ''
+        };
+      }
       if (greetResult.alreadyChatting) {
         try { await runner.closeRecommendPopup({ runId }); } catch (_) {}
         return { greeted: false, alreadyChatting: true };
+      }
+      if (!greetResult.greeted) {
+        try { await runner.closeRecommendPopup({ runId }); } catch (_) {}
+        return {
+          greeted: false,
+          alreadyChatting: false,
+          quotaExhausted: false,
+          reason: greetResult.reason || 'boss_recommend_greet_result_pending',
+          resultText: greetResult.resultText || ''
+        };
       }
     } catch (error) {
       try { await runner.closeRecommendPopup({ runId }); } catch (_) {}
@@ -638,6 +676,51 @@ class SourceLoopService {
     });
 
     return { greeted: true, alreadyChatting: false };
+  }
+
+  async #handleQuotaExhausted({ runId, effectiveTargetCount, stats, quotaInfo }) {
+    const hrAccountId = typeof this.agentService._resolveHrAccountIdFromRun === 'function'
+      ? await this.agentService._resolveHrAccountIdFromRun(runId)
+      : null;
+    const blockedUntil = nextLocalDayStartIso();
+    const summary = {
+      targetCount: effectiveTargetCount,
+      achievedCount: stats.greeted,
+      ...stats,
+      reason: 'boss_chat_quota_exhausted',
+      quotaMessage: quotaInfo?.quotaMessage || '今日沟通权益数已达上限',
+      blockedUntil,
+      hrAccountId
+    };
+
+    if (typeof this.agentService.pauseSourceSchedulesForDay === 'function') {
+      await this.agentService.pauseSourceSchedulesForDay({
+        hrAccountId,
+        reason: 'boss_chat_quota_exhausted',
+        blockedUntil,
+        details: {
+          runId,
+          quotaMessage: summary.quotaMessage
+        }
+      });
+    }
+
+    await this.#recordEvent(runId, {
+      eventId: `source-loop-blocked:${runId}`,
+      eventType: 'source_loop_blocked',
+      stage: 'source_loop',
+      message: `source blocked: ${summary.quotaMessage}`,
+      payload: summary
+    });
+
+    const stopFn = this.agentService.stopRun || this.agentService.failRun;
+    await stopFn.call(this.agentService, {
+      runId,
+      message: 'boss_chat_quota_exhausted',
+      payload: summary
+    });
+
+    return { ok: false, stats: summary, reason: 'boss_chat_quota_exhausted' };
   }
 
   async #failRun(runId, message, stats) {
@@ -708,6 +791,12 @@ function buildRecommendInitialUrl(jobId) {
   }
 
   return `https://www.zhipin.com/web/chat/recommend?jobid=${encodeURIComponent(jobId)}`;
+}
+
+function nextLocalDayStartIso(referenceDate = new Date()) {
+  const next = new Date(referenceDate);
+  next.setHours(24, 0, 0, 0);
+  return next.toISOString();
 }
 
 module.exports = {

@@ -206,6 +206,10 @@ class SchedulerService {
           continue;
         }
 
+        if (isSourceScheduleBlocked(schedule, now)) {
+          continue;
+        }
+
         if (this.#shouldRunNow(schedule, now)) {
           try {
             await this.triggerSchedule(schedule.id);
@@ -242,6 +246,10 @@ class SchedulerService {
     const eligible = [];
 
     for (const task of roster) {
+      if (isSourceScheduleBlocked(task, now)) {
+        continue;
+      }
+
       const cooldownMs = (task.cooldown_minutes || 60) * 60_000;
       if (task.last_run_at) {
         const elapsed = now.getTime() - new Date(task.last_run_at).getTime();
@@ -412,6 +420,12 @@ class SchedulerService {
   async #startJobTask({ jobKey, taskType, schedule = null, hrAccountId }) {
     const scheduledJobId = schedule?.id || null;
     const resolvedHrAccountId = hrAccountId || schedule?.hr_account_id || null;
+    if (taskType === 'source' && isSourceScheduleBlocked(schedule)) {
+      const error = new Error('source_schedule_blocked');
+      error.reason = schedule.payload.sourceScheduleBlock.reason || 'boss_chat_quota_exhausted';
+      error.blockedUntil = schedule.payload.sourceScheduleBlock.blockedUntil || null;
+      throw error;
+    }
     const startedAt = new Date().toISOString();
     const run = await this.agentService.createRun({
       runKey: `${taskType}:${jobKey}:${Date.now()}`,
@@ -521,7 +535,7 @@ class SchedulerService {
         if (schedulePayload.recommendTab) overrides.recommendTab = schedulePayload.recommendTab;
         if (runnerOverride) overrides.bossCliRunner = runnerOverride;
         const loopResult = await this.sourceLoopService.run({ runId, jobKey, signal, ...overrides });
-        if (loopResult?.reason === 'manually_stopped') {
+        if (loopResult?.reason === 'manually_stopped' || loopResult?.reason === 'boss_chat_quota_exhausted') {
           await this.#finalizeStoppedScheduledRun({ schedule, scheduledRunId });
         } else {
           await this.#finalizeScheduledRun({ schedule, scheduledRunId, scheduledJobId });
@@ -793,6 +807,24 @@ function classifyAgentExit(latestPhaseEvent) {
   }
 
   return `agent_exit_after_${String(phase)}`;
+}
+
+function isSourceScheduleBlocked(schedule, now = new Date()) {
+  if (schedule?.task_type !== 'source') {
+    return false;
+  }
+
+  const block = schedule?.payload?.sourceScheduleBlock;
+  if (!block?.blockedUntil) {
+    return false;
+  }
+
+  const blockedUntil = new Date(block.blockedUntil);
+  if (Number.isNaN(blockedUntil.getTime())) {
+    return false;
+  }
+
+  return blockedUntil.getTime() > now.getTime();
 }
 
 module.exports = {

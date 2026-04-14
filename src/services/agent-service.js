@@ -452,6 +452,37 @@ class AgentService {
     };
   }
 
+  async pauseSourceSchedulesForDay({ hrAccountId, reason = 'boss_chat_quota_exhausted', blockedUntil, details = {} } = {}) {
+    const effectiveBlockedUntil = blockedUntil || nextLocalDayStartIso();
+    const updatedAt = new Date().toISOString();
+
+    const result = await this.pool.query(
+      `
+        update scheduled_jobs
+        set payload = coalesce(payload, '{}'::jsonb) || jsonb_build_object(
+              'sourceScheduleBlock',
+              jsonb_build_object(
+                'reason', $2::text,
+                'blockedUntil', $3::text,
+                'updatedAt', $4::text,
+                'details', $5::jsonb
+              )
+            ),
+            updated_at = now()
+        where task_type = 'source'
+          and enabled = true
+          and hr_account_id is not distinct from $1
+      `,
+      [hrAccountId || null, reason, effectiveBlockedUntil, updatedAt, details || {}]
+    );
+
+    return {
+      ok: true,
+      updatedCount: result.rowCount || 0,
+      blockedUntil: effectiveBlockedUntil
+    };
+  }
+
   async recordAction({
     runId,
     candidateId,
@@ -1557,6 +1588,12 @@ function normalizeCandidateStatus(status) {
     return status;
   }
   return 'discovered';
+}
+
+function nextLocalDayStartIso(referenceDate = new Date()) {
+  const next = new Date(referenceDate);
+  next.setHours(24, 0, 0, 0);
+  return next.toISOString();
 }
 
 function normalizeImportedEvent(rawEvent, { attemptId, sourceFile }) {

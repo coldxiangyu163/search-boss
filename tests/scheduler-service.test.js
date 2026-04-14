@@ -383,6 +383,53 @@ test('SchedulerService rejects trigger when task lock is held', async () => {
   assert.equal(taskLock.getHolder().runId, 99);
 });
 
+test('SchedulerService blocks manual source trigger when same-day source block is active', async () => {
+  let createRunCalled = false;
+
+  const pool = {
+    async query(sql) {
+      if (sql.includes('from scheduled_jobs') && sql.includes('job_key = $1')) {
+        return {
+          rows: [{
+            id: 10,
+            job_key: '健康顾问_B0047007',
+            task_type: 'source',
+            payload: {
+              sourceScheduleBlock: {
+                reason: 'boss_chat_quota_exhausted',
+                blockedUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString()
+              }
+            },
+            hr_account_id: 6
+          }]
+        };
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+
+  const agentService = {
+    async createRun() {
+      createRunCalled = true;
+      throw new Error('should not create run');
+    }
+  };
+
+  const scheduler = new SchedulerService({ pool, agentService });
+
+  await assert.rejects(
+    () => scheduler.triggerJobTask('健康顾问_B0047007', 'source'),
+    (error) => {
+      assert.equal(error.message, 'source_schedule_blocked');
+      assert.equal(error.reason, 'boss_chat_quota_exhausted');
+      assert.match(error.blockedUntil, /T/);
+      return true;
+    }
+  );
+
+  assert.equal(createRunCalled, false);
+});
+
 test('SchedulerService ticker still triggers another HR account when one HR lock is held', async () => {
   const taskLock = new TaskLock();
   const now = new Date();
@@ -622,6 +669,75 @@ test('SchedulerService stopRun aborts running task and finalizes scheduled run',
   assert.equal(taskLock.isBusy(), false);
 });
 
+test('SchedulerService finalizes scheduled source run as stopped when source loop exits on quota exhaustion', async () => {
+  const taskLock = new TaskLock();
+  const queryCalls = [];
+
+  const pool = {
+    async query(sql, params = []) {
+      queryCalls.push({ sql, params });
+
+      if (sql.includes('from scheduled_jobs') && sql.includes('where id = $1')) {
+        return {
+          rows: [{
+            id: 10,
+            job_key: '健康顾问_B0047007',
+            task_type: 'source',
+            payload: {},
+            hr_account_id: 6
+          }]
+        };
+      }
+
+      if (sql.includes('update sourcing_runs')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes('insert into scheduled_job_runs')) {
+        return { rows: [{ id: 501 }], rowCount: 1 };
+      }
+
+      if (sql.includes('update scheduled_job_runs')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes('update scheduled_jobs')) {
+        return { rows: [], rowCount: 1 };
+      }
+
+      if (sql.includes('from sourcing_runs') && sql.includes('hr_account_id')) {
+        return { rows: [{ hr_account_id: 6 }] };
+      }
+
+      return { rows: [] };
+    }
+  };
+
+  const agentService = {
+    async createRun(payload) {
+      return { id: 102, runKey: payload.runKey, status: 'pending' };
+    },
+    async recordRunEvent() {
+      return { ok: true };
+    }
+  };
+
+  const sourceLoopService = {
+    async run() {
+      return { ok: false, reason: 'boss_chat_quota_exhausted', stats: { greeted: 0, errors: 0 } };
+    }
+  };
+
+  const scheduler = new SchedulerService({ pool, agentService, sourceLoopService, taskLock });
+  const result = await scheduler.triggerSchedule(10);
+
+  assert.equal(result.ok, true);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const stoppedQuery = queryCalls.find((c) => c.sql.includes('update scheduled_job_runs') && c.sql.includes("'stopped'"));
+  assert.ok(stoppedQuery, 'should update scheduled_job_runs status to stopped when quota is exhausted');
+});
+
 test('SchedulerService stopRun returns error for unknown runId', async () => {
   const scheduler = new SchedulerService({ pool: { async query() { return { rows: [] }; } }, agentService: {} });
   const result = await scheduler.stopRun(999);
@@ -736,6 +852,74 @@ test('SchedulerService queue mode picks highest priority task with cooldown elap
   assert.deepEqual(triggeredScheduleIds, [3]);
 });
 
+test('SchedulerService queue mode skips source schedules blocked for the rest of the day', async () => {
+  const taskLock = new TaskLock();
+  const now = new Date();
+  const triggeredScheduleIds = [];
+  const blockedUntil = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
+
+  const scheduler = new SchedulerService({
+    pool: {
+      async query(sql) {
+        if (sql.includes('hr_account_work_config')) {
+          return { rows: [{ hr_account_id: 1, work_windows: [{ start: '00:00', end: '23:59' }], enabled: true, queue_mode: 'priority' }] };
+        }
+        if (sql.includes('from scheduled_jobs')) {
+          return { rows: [] };
+        }
+        if (sql.includes('from sourcing_runs') && sql.includes('current_date')) {
+          return { rows: [{ count: '0' }] };
+        }
+        return { rows: [] };
+      }
+    },
+    agentService: {},
+    taskLock
+  });
+
+  scheduler.listSchedules = async () => ([
+    {
+      id: 1,
+      job_key: 'job-a',
+      task_type: 'source',
+      enabled: true,
+      payload: {
+        sourceScheduleBlock: {
+          reason: 'boss_chat_quota_exhausted',
+          blockedUntil
+        }
+      },
+      hr_account_id: 1,
+      last_run_at: null,
+      priority: 1,
+      cooldown_minutes: 60,
+      daily_max_runs: 0
+    },
+    {
+      id: 2,
+      job_key: 'job-b',
+      task_type: 'followup',
+      enabled: true,
+      payload: {},
+      hr_account_id: 1,
+      last_run_at: null,
+      priority: 2,
+      cooldown_minutes: 60,
+      daily_max_runs: 0
+    }
+  ]);
+  scheduler.triggerSchedule = async (id) => {
+    triggeredScheduleIds.push(id);
+    return { ok: true };
+  };
+
+  scheduler.startTicker();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  scheduler.stopTicker();
+
+  assert.deepEqual(triggeredScheduleIds, [2]);
+});
+
 test('SchedulerService queue mode skips tasks within cooldown period', async () => {
   const taskLock = new TaskLock();
   const now = new Date();
@@ -801,8 +985,50 @@ test('SchedulerService upsertSchedule persists priority and cooldown fields', as
     dailyMaxRuns: 5
   });
 
+  assert.deepEqual(insertedParams[3], {});
   assert.equal(insertedParams[6], 2);
   assert.equal(insertedParams[7], 30);
   assert.equal(insertedParams[8], 5);
   assert.equal(result.priority, 2);
+  assert.equal(result.daily_max_runs, 5);
+});
+
+test('SchedulerService upsertSchedule keeps explicit raw execution fields unchanged for legacy round-trip', async () => {
+  let insertedParams = null;
+
+  const pool = {
+    async query(_sql, params) {
+      insertedParams = params;
+      return {
+        rows: [{
+          id: 9,
+          job_key: 'legacy-job',
+          task_type: 'followup',
+          priority: 7,
+          cooldown_minutes: 15,
+          daily_max_runs: 2,
+          payload: { maxThreads: 9 }
+        }]
+      };
+    }
+  };
+
+  const scheduler = new SchedulerService({ pool, agentService: {} });
+  await scheduler.upsertSchedule({
+    jobKey: 'legacy-job',
+    taskType: 'followup',
+    cronExpression: '',
+    payload: { maxThreads: 9 },
+    enabled: false,
+    hrAccountId: 3,
+    priority: 7,
+    cooldownMinutes: 15,
+    dailyMaxRuns: 2
+  });
+
+  assert.equal(insertedParams[4], false);
+  assert.equal(insertedParams[6], 7);
+  assert.equal(insertedParams[7], 15);
+  assert.equal(insertedParams[8], 2);
+  assert.deepEqual(insertedParams[3], { maxThreads: 9 });
 });

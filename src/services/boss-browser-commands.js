@@ -1167,6 +1167,23 @@ async function clickRecommendGreet({
     };
   }
 
+  const preClickQuotaState = await inspectRecommendQuotaState({
+    cdpClient,
+    targetId,
+    urlPrefix
+  });
+
+  if (preClickQuotaState?.blocked) {
+    return {
+      ok: false,
+      greeted: false,
+      resultText: preClickQuotaState.dialogText || '',
+      alreadyChatting: false,
+      quotaExhausted: true,
+      reason: preClickQuotaState.reason || 'boss_chat_quota_exhausted'
+    };
+  }
+
   await humanMouseMove({ cdpClient, targetId, urlPrefix, toX: target.x, toY: target.y });
   await cdpClient.dispatchMouseClick({
     targetId,
@@ -1177,9 +1194,26 @@ async function clickRecommendGreet({
 
   const clickedAt = Date.now();
   let settled = false;
+  let pendingReason = 'boss_recommend_greet_result_pending';
   while (!settled && Date.now() - clickedAt < 2_000) {
     await new Promise((resolve) => setTimeout(resolve, 200));
     try {
+      const quotaState = await inspectRecommendQuotaState({
+        cdpClient,
+        targetId,
+        urlPrefix
+      });
+      if (quotaState?.blocked) {
+        return {
+          ok: false,
+          greeted: false,
+          resultText: quotaState.dialogText || '',
+          alreadyChatting: false,
+          quotaExhausted: true,
+          reason: quotaState.reason || 'boss_chat_quota_exhausted'
+        };
+      }
+
       const state = await evaluateJson({
         cdpClient,
         targetId,
@@ -1195,17 +1229,103 @@ async function clickRecommendGreet({
           alreadyChatting: state.alreadyChatting || false
         };
       }
+      pendingReason = state?.reason || pendingReason;
     } catch (_) {
       // ignore transient errors during stabilization
     }
   }
 
+  const finalQuotaState = await inspectRecommendQuotaState({
+    cdpClient,
+    targetId,
+    urlPrefix
+  });
+
+  if (finalQuotaState?.blocked) {
+    return {
+      ok: false,
+      greeted: false,
+      resultText: finalQuotaState.dialogText || '',
+      alreadyChatting: false,
+      quotaExhausted: true,
+      reason: finalQuotaState.reason || 'boss_chat_quota_exhausted'
+    };
+  }
+
   return {
-    ok: true,
-    greeted: true,
+    ok: false,
+    greeted: false,
     resultText: '',
-    alreadyChatting: false
+    alreadyChatting: false,
+    quotaExhausted: false,
+    reason: pendingReason
   };
+}
+
+async function inspectRecommendQuotaState({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildRecommendQuotaStateExpression()
+  });
+
+  if (!result?.ok) {
+    return { ok: false, blocked: false, reason: result?.reason || 'boss_recommend_quota_state_unavailable' };
+  }
+
+  return result;
+}
+
+function buildRecommendQuotaStateExpression() {
+  return `(() => {
+    try {
+      const keywordPattern = /今日沟通权益数已达上限|沟通权益数已达上限|需付费购买/;
+      const isVisible = (el) => {
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== 'none'
+          && style.visibility !== 'hidden'
+          && Number(style.opacity || 1) !== 0
+          && rect.width > 0
+          && rect.height > 0;
+      };
+
+      const selectors = [
+        '.dialog-wrap.active',
+        '.boss-dialog__wrapper',
+        '.business-block-wrap',
+        '.boss-popup__wrapper',
+        '.dialog-container'
+      ];
+
+      const candidates = selectors
+        .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+        .filter((el, index, arr) => arr.indexOf(el) === index);
+
+      for (const el of candidates) {
+        if (!isVisible(el)) continue;
+        const text = (el.innerText || '').replace(/\\s+/g, ' ').trim();
+        if (text && keywordPattern.test(text)) {
+          return JSON.stringify({
+            ok: true,
+            blocked: true,
+            reason: 'boss_chat_quota_exhausted',
+            dialogText: text.slice(0, 200)
+          });
+        }
+      }
+
+      return JSON.stringify({ ok: true, blocked: false });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_recommend_quota_state_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
 }
 
 function buildRecommendGreetTargetExpression() {

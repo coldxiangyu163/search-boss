@@ -1877,6 +1877,16 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
       return;
     }
 
+    if (error.message === 'source_schedule_blocked') {
+      res.status(409).json({
+        error: 'source_schedule_blocked',
+        reason: error.reason || 'boss_chat_quota_exhausted',
+        blockedUntil: error.blockedUntil || null,
+        message: '今日沟通权益已达上限，source 寻源已暂停至次日，请勿重复手动触发。'
+      });
+      return;
+    }
+
     res.status(500).json({
       error: error.message
     });

@@ -7,6 +7,7 @@ const {
   evaluateJson,
   bossFetch,
   clickRecommendPager,
+  clickRecommendGreet,
   clickRecommendGreetByCoords,
   inspectRecommendState,
   inspectRecommendDetail,
@@ -223,6 +224,113 @@ test('clickRecommendPager fails when the pager is not actionable', async () => {
     }),
     /boss_recommend_pager_not_visible/
   );
+});
+
+test('clickRecommendGreet returns quota exhausted when top-level entitlement dialog appears after click', async () => {
+  const dispatchCalls = [];
+  const evaluateResponses = [
+    {
+      type: 'string',
+      value: JSON.stringify({
+        ok: true,
+        x: 280,
+        y: 320,
+        buttonText: '打招呼',
+        alreadyChatting: false
+      })
+    },
+    {
+      type: 'string',
+      value: JSON.stringify({
+        ok: true,
+        blocked: false
+      })
+    },
+    {
+      type: 'string',
+      value: JSON.stringify({
+        ok: true,
+        blocked: true,
+        reason: 'boss_chat_quota_exhausted',
+        dialogText: '今日沟通权益数已达上限，需付费购买'
+      })
+    }
+  ];
+
+  const cdpClient = {
+    evaluate: async () => evaluateResponses.shift(),
+    dispatchMouseClick: async (payload) => {
+      dispatchCalls.push(payload);
+    }
+  };
+
+  const result = await clickRecommendGreet({
+    cdpClient,
+    targetId: 'target-1'
+  });
+
+  assert.equal(dispatchCalls.length, 1);
+  assert.equal(result.greeted, false);
+  assert.equal(result.quotaExhausted, true);
+  assert.equal(result.reason, 'boss_chat_quota_exhausted');
+  assert.match(result.resultText, /今日沟通权益数已达上限/);
+});
+
+test('clickRecommendGreet no longer reports success when post-click state stays pending', async () => {
+  const dispatchCalls = [];
+  const evaluateResponses = [
+    {
+      type: 'string',
+      value: JSON.stringify({
+        ok: true,
+        x: 280,
+        y: 320,
+        buttonText: '打招呼',
+        alreadyChatting: false
+      })
+    },
+    {
+      type: 'string',
+      value: JSON.stringify({
+        ok: true,
+        blocked: false
+      })
+    }
+  ];
+
+  for (let index = 0; index < 12; index += 1) {
+    evaluateResponses.push({
+      type: 'string',
+      value: JSON.stringify({
+        ok: true,
+        blocked: false
+      })
+    });
+    evaluateResponses.push({
+      type: 'string',
+      value: JSON.stringify({
+        ok: false,
+        reason: 'boss_recommend_greet_result_pending'
+      })
+    });
+  }
+
+  const cdpClient = {
+    evaluate: async () => evaluateResponses.shift(),
+    dispatchMouseClick: async (payload) => {
+      dispatchCalls.push(payload);
+    }
+  };
+
+  const result = await clickRecommendGreet({
+    cdpClient,
+    targetId: 'target-1'
+  });
+
+  assert.equal(dispatchCalls.length, 1);
+  assert.equal(result.greeted, false);
+  assert.equal(result.quotaExhausted, false);
+  assert.equal(result.reason, 'boss_recommend_greet_result_pending');
 });
 
 test('clickRecommendGreetByCoords moves the mouse before dispatching the click', async () => {

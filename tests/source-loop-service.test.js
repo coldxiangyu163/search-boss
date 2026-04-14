@@ -93,6 +93,8 @@ function createMockAgentService() {
   const actions = [];
   const completions = [];
   const failures = [];
+  const stops = [];
+  const pausedSourceSchedules = [];
 
   return {
     events,
@@ -100,6 +102,8 @@ function createMockAgentService() {
     actions,
     completions,
     failures,
+    stops,
+    pausedSourceSchedules,
     async _getJobNanobotContext(jobKey) {
       return {
         jobName: '测试岗位',
@@ -132,6 +136,17 @@ function createMockAgentService() {
     async failRun(payload) {
       failures.push(payload);
       return { ok: true, status: 'failed' };
+    },
+    async stopRun(payload) {
+      stops.push(payload);
+      return { ok: true, status: 'stopped' };
+    },
+    async _resolveHrAccountIdFromRun() {
+      return 6;
+    },
+    async pauseSourceSchedulesForDay(payload) {
+      pausedSourceSchedules.push(payload);
+      return { ok: true, updatedCount: 1 };
     }
   };
 }
@@ -239,6 +254,54 @@ test('SourceLoopService skips candidates when LLM says skip', async () => {
   assert.equal(result.stats.skipped, 2);
   assert.equal(agentService.actions.length, 1);
   assert.equal(agentService.candidates.length, 3);
+});
+
+test('SourceLoopService stops current run and pauses same-day source schedules when chat quota is exhausted', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    listResult: makeCandidateList([
+      { geekId: 'geek-1', name: '张三' }
+    ]),
+    greetResults: [
+      {
+        ok: true,
+        greeted: false,
+        alreadyChatting: false,
+        quotaExhausted: true,
+        reason: 'boss_chat_quota_exhausted',
+        resultText: '今日沟通权益数已达上限，需付费购买'
+      }
+    ]
+  });
+
+  const agentService = createMockAgentService();
+  const llmEvaluator = createMockLlmEvaluator([
+    { action: 'greet', tier: 'A', reason: 'good', facts: {} }
+  ]);
+
+  const service = new SourceLoopService({
+    bossCliRunner,
+    agentService,
+    llmEvaluator,
+    targetCount: 1,
+    candidateDelayMin: 0,
+    candidateDelayMax: 0
+  });
+
+  const result = await service.run({ runId: 101, jobKey: '测试岗位_abc' });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'boss_chat_quota_exhausted');
+  assert.equal(agentService.stops.length, 1);
+  assert.equal(agentService.completions.length, 0);
+  assert.equal(agentService.actions.length, 0);
+  assert.equal(agentService.candidates[0].status, 'discovered');
+  assert.equal(agentService.pausedSourceSchedules.length, 1);
+  assert.equal(agentService.pausedSourceSchedules[0].hrAccountId, 6);
+  assert.equal(agentService.pausedSourceSchedules[0].reason, 'boss_chat_quota_exhausted');
+
+  const blockedEvent = agentService.events.find((event) => event.eventType === 'source_loop_blocked');
+  assert.ok(blockedEvent);
+  assert.match(blockedEvent.message, /权益/);
 });
 
 test('SourceLoopService fails when browser bind fails', async () => {

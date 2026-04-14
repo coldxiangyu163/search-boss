@@ -1584,6 +1584,44 @@ test('POST /api/schedules/:id/trigger executes schedule', async () => {
   assert.equal(response.body.scheduledRunId, 5);
 });
 
+test('POST /api/schedules/:id/trigger returns direct hint when source schedule is blocked for the day', async () => {
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: {
+        async listSchedules() { return []; },
+        async upsertSchedule() { return {}; },
+        async triggerSchedule() {
+          const error = new Error('source_schedule_blocked');
+          error.reason = 'boss_chat_quota_exhausted';
+          error.blockedUntil = '2026-04-15T00:00:00.000Z';
+          throw error;
+        }
+      },
+      agent: {
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return { allowed: true }; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; },
+        async createRun() { return { id: 1 }; },
+        async recordRunEvent() { return { ok: true }; },
+        async completeRun() { return { ok: true, status: 'completed' }; }
+      }
+    },
+    config: { agentToken: 'search-boss-local-agent' }
+  });
+
+  const response = await request(app).post('/api/schedules/1/trigger');
+
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error, 'source_schedule_blocked');
+  assert.equal(response.body.reason, 'boss_chat_quota_exhausted');
+  assert.equal(response.body.blockedUntil, '2026-04-15T00:00:00.000Z');
+  assert.match(response.body.message, /今日沟通权益已达上限/);
+});
+
 test('POST /api/runs/:runId/stop allows same HR to stop own run', async () => {
   let stopRunId = null;
   const pool = {
@@ -1730,6 +1768,43 @@ test('POST /api/jobs/:jobKey/tasks/:taskType/trigger executes schedule by job an
   assert.equal(capturedJobKey, '健康顾问_B0047007');
   assert.equal(capturedTaskType, 'followup');
   assert.equal(response.body.runId, 21);
+});
+
+test('POST /api/jobs/:jobKey/tasks/:taskType/trigger returns direct hint when source schedule is blocked for the day', async () => {
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      scheduler: {
+        async listSchedules() { return []; },
+        async upsertSchedule() { return {}; },
+        async triggerJobTask() {
+          const error = new Error('source_schedule_blocked');
+          error.reason = 'boss_chat_quota_exhausted';
+          error.blockedUntil = '2026-04-15T00:00:00.000Z';
+          throw error;
+        }
+      },
+      agent: {
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return { allowed: true }; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; },
+        async createRun() { return { id: 1 }; },
+        async recordRunEvent() { return { ok: true }; },
+        async completeRun() { return { ok: true, status: 'completed' }; }
+      }
+    },
+    config: { agentToken: 'search-boss-local-agent' }
+  });
+
+  const response = await request(app).post('/api/jobs/%E5%81%A5%E5%BA%B7%E9%A1%BE%E9%97%AE_B0047007/tasks/source/trigger');
+
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error, 'source_schedule_blocked');
+  assert.equal(response.body.reason, 'boss_chat_quota_exhausted');
+  assert.equal(response.body.blockedUntil, '2026-04-15T00:00:00.000Z');
 });
 
 test('JobService triggerSync creates sync run and calls nanobot', async () => {
