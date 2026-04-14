@@ -393,7 +393,7 @@ test('authMiddleware sets req.user when session is valid', async () => {
 
 test('requireRole blocks unauthorized roles', () => {
   const { requireRole } = require('../src/middleware/auth');
-  const mw = requireRole('enterprise_admin');
+  const mw = requireRole('dept_admin');
 
   let statusCode = null;
   const req = { user: { role: 'hr' } };
@@ -408,7 +408,7 @@ test('requireRole blocks unauthorized roles', () => {
 
 test('requireRole allows matching role', () => {
   const { requireRole } = require('../src/middleware/auth');
-  const mw = requireRole('enterprise_admin', 'dept_admin');
+  const mw = requireRole('system_admin', 'dept_admin');
 
   let nextCalled = false;
   const req = { user: { role: 'dept_admin' } };
@@ -427,13 +427,18 @@ test('resolveHrScope returns correct scope per role', () => {
   );
 
   assert.deepEqual(
-    resolveHrScope({ user: { role: 'enterprise_admin', department_id: 3 } }),
+    resolveHrScope({ user: { role: 'dept_admin', department_id: 3 } }),
     { scope: 'department', departmentId: 3 }
   );
 
   assert.deepEqual(
     resolveHrScope({ user: { role: 'dept_admin', department_id: 5 } }),
     { scope: 'department', departmentId: 5 }
+  );
+
+  assert.equal(
+    resolveHrScope({ user: { role: 'enterprise_admin', department_id: 3 } }),
+    null
   );
 
   assert.deepEqual(

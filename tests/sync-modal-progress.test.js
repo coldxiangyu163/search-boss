@@ -1029,7 +1029,7 @@ test('admin modal form values are rebuilt from state on rerender', () => {
       name: '张三',
       email: 'zhangsan@test.com',
       phone: '13800138000',
-      role: 'enterprise_admin',
+      role: 'dept_admin',
       departmentId: '11',
       password: '',
       status: 'inactive',
@@ -1046,7 +1046,8 @@ test('admin modal form values are rebuilt from state on rerender', () => {
   assert.match(html, /id="user-name"[^>]*value="张三"/);
   assert.match(html, /id="user-email"[^>]*value="zhangsan@test\.com"/);
   assert.match(html, /id="user-phone"[^>]*value="13800138000"/);
-  assert.match(html, /<option value="enterprise_admin" selected>/);
+  assert.match(html, /<option value="dept_admin" selected>/);
+  assert.doesNotMatch(html, /enterprise_admin/);
   assert.match(html, /<option value="11" selected>/);
   assert.match(html, /<option value="inactive" selected>/);
 });

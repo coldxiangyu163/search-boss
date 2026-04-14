@@ -1668,7 +1668,7 @@ test('POST /api/runs/:runId/stop permission checks enforce correct access contro
   assert.equal(isSystemAdmin({ role: 'hr' }), false);
 
   assert.equal(isAdminRole({ role: 'system_admin' }), true);
-  assert.equal(isAdminRole({ role: 'enterprise_admin' }), true);
+  assert.equal(isAdminRole({ role: 'enterprise_admin' }), false);
   assert.equal(isAdminRole({ role: 'dept_admin' }), true);
   assert.equal(isAdminRole({ role: 'hr' }), false);
 
@@ -1687,9 +1687,8 @@ test('POST /api/runs/:runId/stop permission checks enforce correct access contro
   // dept_admin cannot stop runs in different department
   assert.equal(canStopRun({ role: 'dept_admin', department_id: 10 }, 20, 5), false);
 
-  // enterprise_admin can stop runs in same department
-  assert.equal(canStopRun({ role: 'enterprise_admin', department_id: 10 }, 10, 5), true);
-  // enterprise_admin cannot stop runs in different department
+  // removed enterprise_admin role cannot stop runs
+  assert.equal(canStopRun({ role: 'enterprise_admin', department_id: 10 }, 10, 5), false);
   assert.equal(canStopRun({ role: 'enterprise_admin', department_id: 10 }, 20, 5), false);
 
   // HR can stop own runs
@@ -4843,11 +4842,11 @@ test('GET /api/runs supports status and mode filters', async () => {
   assert.equal(capturedParams.mode, 'source');
 });
 
-test('GET /api/runs scopes enterprise_admin to current department', async () => {
+test('GET /api/runs scopes dept_admin to current department', async () => {
   let capturedParams = null;
 
   const app = createAuthedApp({
-    user: { id: 7, role: 'enterprise_admin', department_id: 12 },
+    user: { id: 7, role: 'dept_admin', department_id: 12 },
     services: {
       dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
       jobs: { async listJobs() { return []; } },
@@ -4910,6 +4909,39 @@ test('GET /api/runs supports pagination parameters', async () => {
   assert.equal(capturedParams.pageSize, 10);
 });
 
+test('GET /api/setup/status treats dept_admin as a completed setup admin role', async () => {
+  const pool = {
+    query(sql) {
+      if (sql.includes('select 1')) {
+        return { rows: [{ '?column?': 1 }] };
+      }
+      if (sql.includes("select count(*) from users where role in ('system_admin', 'dept_admin')")) {
+        return { rows: [{ count: '1' }] };
+      }
+      if (sql.includes('connect_pg_simple') || sql.includes('"session"')) {
+        return { rows: [] };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    }
+  };
+
+  const app = createApp({
+    pool,
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } }
+    }
+  });
+
+  const response = await request(app).get('/api/setup/status');
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, {
+    dbReady: true,
+    hasAdmin: true,
+    setupRequired: false
+  });
+});
+
 test('GET /api/runs returns empty list when no runs exist', async () => {
   const app = createApp({
     services: {
@@ -4968,7 +5000,7 @@ test('GET /api/runs clamps pageSize to valid range', async () => {
 
 test('GET /api/runs/:runId rejects detail access outside department scope', async () => {
   const app = createAuthedApp({
-    user: { id: 3, role: 'enterprise_admin', department_id: 10 },
+    user: { id: 3, role: 'dept_admin', department_id: 10 },
     pool: createRunAccessPool({ hr_account_id: 21, department_id: 99 }),
     services: {
       dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
