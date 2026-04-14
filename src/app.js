@@ -5,6 +5,7 @@ const express = require('express');
 const session = require('express-session');
 const PgStore = require('connect-pg-simple')(session);
 const { authMiddleware, requireRole, resolveHrScope, isSystemAdmin, isAdminRole } = require('./middleware/auth');
+const { assertSupportedUserRole } = require('./services/auth-service');
 const {
   LicenseService,
   getHrAccountLicenseStatus,

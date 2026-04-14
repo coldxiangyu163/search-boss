@@ -1,5 +1,16 @@
 const bcrypt = require('bcryptjs');
 
+const SUPPORTED_USER_ROLES = new Set(['system_admin', 'dept_admin', 'hr']);
+
+function assertSupportedUserRole(role) {
+  if (!role || SUPPORTED_USER_ROLES.has(role)) {
+    return;
+  }
+  const error = new Error('invalid_role');
+  error.statusCode = 400;
+  throw error;
+}
+
 class AuthService {
   constructor({ pool }) {
     this.pool = pool;
@@ -88,6 +99,7 @@ class AuthService {
   }
 
   async createUser({ name, email, phone, password, role, departmentId }) {
+    assertSupportedUserRole(role);
     const passwordHash = await bcrypt.hash(password, 10);
     const result = await this.pool.query(`
       insert into users (name, email, phone, password_hash, role, department_id)
@@ -99,4 +111,4 @@ class AuthService {
   }
 }
 
-module.exports = { AuthService };
+module.exports = { AuthService, SUPPORTED_USER_ROLES, assertSupportedUserRole };
