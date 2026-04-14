@@ -427,11 +427,6 @@ test('resolveHrScope returns correct scope per role', () => {
   );
 
   assert.deepEqual(
-    resolveHrScope({ user: { role: 'dept_admin', department_id: 3 } }),
-    { scope: 'department', departmentId: 3 }
-  );
-
-  assert.deepEqual(
     resolveHrScope({ user: { role: 'dept_admin', department_id: 5 } }),
     { scope: 'department', departmentId: 5 }
   );

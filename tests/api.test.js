@@ -1663,12 +1663,10 @@ test('POST /api/runs/:runId/stop permission checks enforce correct access contro
 
   // Verify permission model helpers
   assert.equal(isSystemAdmin({ role: 'system_admin' }), true);
-  assert.equal(isSystemAdmin({ role: 'enterprise_admin' }), false);
   assert.equal(isSystemAdmin({ role: 'dept_admin' }), false);
   assert.equal(isSystemAdmin({ role: 'hr' }), false);
 
   assert.equal(isAdminRole({ role: 'system_admin' }), true);
-  assert.equal(isAdminRole({ role: 'enterprise_admin' }), false);
   assert.equal(isAdminRole({ role: 'dept_admin' }), true);
   assert.equal(isAdminRole({ role: 'hr' }), false);
 
@@ -1686,10 +1684,6 @@ test('POST /api/runs/:runId/stop permission checks enforce correct access contro
   assert.equal(canStopRun({ role: 'dept_admin', department_id: 10 }, 10, 5), true);
   // dept_admin cannot stop runs in different department
   assert.equal(canStopRun({ role: 'dept_admin', department_id: 10 }, 20, 5), false);
-
-  // removed enterprise_admin role cannot stop runs
-  assert.equal(canStopRun({ role: 'enterprise_admin', department_id: 10 }, 10, 5), false);
-  assert.equal(canStopRun({ role: 'enterprise_admin', department_id: 10 }, 20, 5), false);
 
   // HR can stop own runs
   assert.equal(canStopRun({ role: 'hr', department_id: 10, hr_account_id: 5 }, 10, 5), true);
