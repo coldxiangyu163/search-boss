@@ -7,10 +7,9 @@ insert into departments (name)
 values ('默认部门')
 on conflict do nothing;
 
--- Step 2: Create default admin user (password: admin123)
+-- Step 2: Migrate legacy enterprise admins into dept admins
 update users
-set role = 'dept_admin',
-    updated_at = now()
+set role = 'dept_admin'
 where role = 'enterprise_admin';
 
 -- Step 3: Create default admin user (password: admin123)
@@ -18,7 +17,7 @@ where role = 'enterprise_admin';
 insert into users (department_id, name, email, password_hash, role)
 select d.id, '默认管理员', 'admin@company.com',
        '$2a$10$rQEY4VRzKQg3rHFGQN1.2OHXsQz1z6F4z0zK9LhJbVq3Q6q7nJXay',
-       'system_admin'
+       'dept_admin'
 from departments d
 where d.name = '默认部门'
   and not exists (select 1 from users where email = 'admin@company.com')

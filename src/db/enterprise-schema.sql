@@ -124,6 +124,9 @@ where role = 'enterprise_admin';
 do $$
 begin
   alter table users drop constraint if exists users_role_check;
+  update users
+    set role = 'dept_admin'
+    where role = 'enterprise_admin';
   alter table users add constraint users_role_check
     check (role in ('system_admin', 'dept_admin', 'hr'));
 exception when others then null;
