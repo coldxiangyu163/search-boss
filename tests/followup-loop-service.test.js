@@ -18,6 +18,7 @@ function createMockBossCliRunner({
 } = {}) {
   const calls = [];
   let lastClickedDataId = '';
+  let visibleThreadsIndex = 0;
   const resumeRequestStateQueues = new Map(
     Object.entries(resumeRequestStates).map(([key, value]) => [key, Array.isArray(value) ? value.slice() : value])
   );
@@ -46,6 +47,17 @@ function createMockBossCliRunner({
     },
     async inspectVisibleChatList(opts) {
       calls.push({ command: 'inspectVisibleChatList', ...opts });
+      if (typeof visibleThreads === 'function') {
+        const result = visibleThreads({ callIndex: visibleThreadsIndex++, opts });
+        const threads = Array.isArray(result?.threads) ? result.threads : [];
+        return { ok: true, total: threads.length, ...result };
+      }
+      if (Array.isArray(visibleThreads) && visibleThreads.length > 0 && Array.isArray(visibleThreads[0])) {
+        const threads = visibleThreads[Math.min(visibleThreadsIndex, visibleThreads.length - 1)] || [];
+        visibleThreadsIndex += 1;
+        return { ok: true, threads, total: threads.length };
+      }
+      visibleThreadsIndex += 1;
       return { ok: true, threads: visibleThreads, total: visibleThreads.length };
     },
     async clickChatRow(opts) {
@@ -598,6 +610,55 @@ test('FollowupLoopService resets chat page again after finishing processed threa
   assert.equal(navCalls[1].url, 'https://www.zhipin.com/web/chat/index');
 });
 
+test('FollowupLoopService refreshes unread thread list each round when new replies reorder the list', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    visibleThreads: [
+      [
+        { name: '候选人A', dataId: 'a-0', index: 0, hasUnread: true },
+        { name: '候选人B', dataId: 'b-0', index: 1, hasUnread: true }
+      ],
+      [
+        { name: '候选人C', dataId: 'c-0', index: 0, hasUnread: true },
+        { name: '候选人B', dataId: 'b-0', index: 1, hasUnread: true }
+      ],
+      [
+        { name: '候选人B', dataId: 'b-0', index: 0, hasUnread: true }
+      ],
+      []
+    ],
+    messageResults: {
+      'a-0': { ok: true, messages: [{ from: '候选人A', type: 'text', text: 'A消息', time: '10:00' }] },
+      'b-0': { ok: true, messages: [{ from: '候选人B', type: 'text', text: 'B消息', time: '10:01' }] },
+      'c-0': { ok: true, messages: [{ from: '候选人C', type: 'text', text: 'C消息', time: '10:02' }] }
+    }
+  });
+
+  const agentService = createMockAgentService();
+  const llmEvaluator = createMockLlmEvaluator([
+    { action: 'skip', reason: 'handled-a' },
+    { action: 'skip', reason: 'handled-c' },
+    { action: 'skip', reason: 'handled-b' }
+  ]);
+
+  const service = new FollowupLoopService({
+    bossCliRunner,
+    agentService,
+    llmEvaluator,
+    threadDelayMin: 0,
+    threadDelayMax: 0,
+    maxThreads: 3
+  });
+
+  const result = await service.run({ runId: 309, jobKey: '面点师傅（B0038011）_8eca6cad', mode: 'followup' });
+
+  assert.equal(result.ok, true);
+  assert.equal(bossCliRunner.calls.filter((c) => c.command === 'inspectVisibleChatList').length, 3);
+  assert.deepEqual(
+    bossCliRunner.calls.filter((c) => c.command === 'clickChatRow').map((item) => item.dataId),
+    ['a-0', 'c-0', 'b-0']
+  );
+});
+
 test('FollowupLoopService navigates to chat page when not already there', async () => {
   const bossCliRunner = createMockBossCliRunner({
     visibleThreads: [],
@@ -670,6 +731,46 @@ test('FollowupLoopService downloads resume when attachment present in followup m
 
   const closeCalls = bossCliRunner.calls.filter((c) => c.command === 'closeResumeDetail');
   assert.equal(closeCalls.length, 1, 'should close resume detail page after download');
+});
+
+test('FollowupLoopService waits briefly after successful resume download before closing preview', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    visibleThreads: [
+      { name: '张三', dataId: '123-0', index: 0, hasUnread: true }
+    ],
+    attachmentStates: {
+      '123-0': { ok: true, present: true, buttonEnabled: true, fileName: '张三.pdf' }
+    }
+  });
+
+  const sequence = [];
+  const originalCloseResumeDetail = bossCliRunner.closeResumeDetail;
+  bossCliRunner.closeResumeDetail = async (opts) => {
+    sequence.push({ type: 'closeResumeDetail' });
+    return originalCloseResumeDetail.call(bossCliRunner, opts);
+  };
+
+  const agentService = createMockAgentService();
+  const service = new FollowupLoopService({
+    bossCliRunner,
+    agentService,
+    llmEvaluator: createMockLlmEvaluator(),
+    threadDelayMin: 0,
+    threadDelayMax: 0,
+    resumePreviewCloseDelayMin: 900,
+    resumePreviewCloseDelayMax: 900,
+    sleep: async (ms) => {
+      sequence.push({ type: 'sleep', ms });
+    }
+  });
+
+  const result = await service.run({ runId: 4010, jobKey: '面点师傅（B0038011）_8eca6cad', mode: 'followup' });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(sequence, [
+    { type: 'sleep', ms: 900 },
+    { type: 'closeResumeDetail' }
+  ]);
 });
 
 test('FollowupLoopService closes resume detail page when download result is incomplete', async () => {

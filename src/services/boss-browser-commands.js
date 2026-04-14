@@ -1032,6 +1032,36 @@ function buildResumeDownloadExpression({ timeoutMs }) {
       return btoa(binary);
     };
 
+    const isViewerReady = (iframe) => {
+      if (!iframe) {
+        return false;
+      }
+
+      const loadedAttr = iframe.getAttribute ? iframe.getAttribute('data-loaded') : '';
+      if (loadedAttr === 'true' || iframe.dataset?.loaded === 'true') {
+        return true;
+      }
+
+      try {
+        const frameDoc = iframe.contentDocument || iframe.contentWindow?.document || null;
+        if (!frameDoc) {
+          return false;
+        }
+
+        if (String(frameDoc.readyState || '').toLowerCase() !== 'complete') {
+          return false;
+        }
+
+        const viewerRoot = frameDoc.querySelector(
+          'embed[type="application/pdf"], object[type="application/pdf"], canvas, .pdfViewer, #viewer, #app, [class*="viewer"]'
+        );
+        const viewerText = normalizeText(frameDoc.body?.innerText || '');
+        return Boolean(viewerRoot || viewerText);
+      } catch (_) {
+        return false;
+      }
+    };
+
     const findPreviewState = () => {
       const threadPane = document.querySelector('.chat-conversation, .conversation-box, .chat-message-list, .conversation-message');
       const cards = threadPane
@@ -1049,6 +1079,7 @@ function buildResumeDownloadExpression({ timeoutMs }) {
         viewerUrl: absoluteViewerUrl ? absoluteViewerUrl.toString() : '',
         downloadUrl: nestedUrl ? new URL(nestedUrl, window.location.origin).toString() : '',
         hasPreview: Boolean(iframe),
+        viewerReady: isViewerReady(iframe),
         button
       };
     };
@@ -1069,8 +1100,23 @@ function buildResumeDownloadExpression({ timeoutMs }) {
           }
         }
 
+        const deadline = Date.now() + ${timeoutMs};
+        let readyPolls = state.viewerReady ? 1 : 0;
+        while (Date.now() < deadline) {
+          if (state.hasPreview && state.downloadUrl && readyPolls >= 2) {
+            break;
+          }
+          await sleep(250);
+          state = findPreviewState();
+          readyPolls = state.viewerReady ? readyPolls + 1 : 0;
+        }
+
         if (!state.hasPreview || !state.downloadUrl) {
           return JSON.stringify({ ok: false, reason: 'boss_resume_preview_url_unavailable' });
+        }
+
+        if (readyPolls < 2) {
+          return JSON.stringify({ ok: false, reason: 'boss_resume_preview_not_ready' });
         }
 
         const response = await fetch(state.downloadUrl, { credentials: 'include' });

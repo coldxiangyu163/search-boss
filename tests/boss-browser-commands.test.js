@@ -630,6 +630,86 @@ test('downloadResumeAttachment returns browser-authenticated PDF bytes and metad
   assert.match(calls[0].expression, /attachment-iframe|card-btn/);
 });
 
+test('downloadResumeAttachment waits for preview viewer readiness before fetching PDF', async () => {
+  let viewerReady = false;
+  let sleepCount = 0;
+  let fetchCount = 0;
+
+  const iframeDocument = {
+    get readyState() {
+      return viewerReady ? 'complete' : 'loading';
+    },
+    body: {
+      get innerText() {
+        return viewerReady ? 'PDF viewer ready' : '';
+      }
+    },
+    querySelector(selector) {
+      if (!viewerReady) {
+        return null;
+      }
+      if (selector === 'embed[type="application/pdf"], object[type="application/pdf"], canvas, .pdfViewer, #viewer, #app, [class*="viewer"]') {
+        return { tagName: 'CANVAS' };
+      }
+      return null;
+    }
+  };
+
+  const cdpClient = createResumePreviewDownloadCdpClient({
+    iframeDocument,
+    onSleep() {
+      sleepCount += 1;
+      if (sleepCount >= 2) {
+        viewerReady = true;
+      }
+    },
+    fetchImpl: async () => {
+      fetchCount += 1;
+      if (!viewerReady) {
+        return { ok: false, status: 425 };
+      }
+      return createFetchResponse({ bodyText: 'ABC' });
+    }
+  });
+
+  const result = await downloadResumeAttachment({
+    cdpClient,
+    targetId: 'target-1',
+    timeoutMs: 2_000
+  });
+
+  assert.equal(result.fileName, '候选人简历.pdf');
+  assert.equal(result.base64, 'QUJD');
+  assert.equal(fetchCount, 1);
+  assert.equal(viewerReady, true);
+});
+
+test('downloadResumeAttachment fails when preview viewer never becomes ready', async () => {
+  const iframeDocument = {
+    readyState: 'loading',
+    body: {
+      innerText: ''
+    },
+    querySelector() {
+      return null;
+    }
+  };
+
+  const cdpClient = createResumePreviewDownloadCdpClient({
+    iframeDocument,
+    fetchImpl: async () => createFetchResponse({ bodyText: 'ABC' })
+  });
+
+  await assert.rejects(
+    () => downloadResumeAttachment({
+      cdpClient,
+      targetId: 'target-1',
+      timeoutMs: 1_000
+    }),
+    /boss_resume_preview_not_ready/
+  );
+});
+
 test('closeResumeDetail closes resume preview iframe via evaluate', async () => {
   const calls = [];
   const cdpClient = {
@@ -788,6 +868,126 @@ function createVmCdpClient({ document, window = {} }) {
         type: 'string',
         value: vm.runInContext(payload.expression, context)
       };
+    }
+  };
+}
+
+function createResumePreviewDownloadCdpClient({ iframeDocument, fetchImpl, onSleep }) {
+  let previewOpen = false;
+  const button = createFakeNode({
+    tagName: 'BUTTON',
+    className: 'card-btn',
+    textContent: '点击预览附件简历'
+  });
+  button.click = () => {
+    previewOpen = true;
+  };
+  const fileNameNode = createFakeNode({
+    className: 'message-card-top-title-wrap',
+    textContent: '候选人简历.pdf'
+  });
+  const card = createFakeNode({
+    className: 'message-card-wrap',
+    textContent: '候选人简历.pdf 点击预览附件简历',
+    querySelectorMap: {
+      '.card-btn, .message-card-buttons .card-btn': button,
+      '.message-card-top-title-wrap, .message-card-top-content, .message-card-top-wrap': fileNameNode
+    }
+  });
+  const threadPane = createFakeNode({
+    className: 'chat-conversation',
+    querySelectorAllMap: {
+      '.message-card-wrap, .message-item .message-card-wrap': [card]
+    }
+  });
+  const iframe = {
+    className: 'attachment-box attachment-iframe',
+    dataset: {},
+    getAttribute(name) {
+      if (name === 'src') {
+        return 'https://www.zhipin.com/wflow/zpgeek/download/preview4boss?url='
+          + encodeURIComponent('https://www.zhipin.com/wflow/zpgeek/download/file/resume.pdf');
+      }
+      return null;
+    },
+    get contentDocument() {
+      return iframeDocument;
+    },
+    get contentWindow() {
+      return { document: iframeDocument };
+    }
+  };
+  const document = {
+    querySelector(selector) {
+      if (selector === '.chat-conversation, .conversation-box, .chat-message-list, .conversation-message') {
+        return threadPane;
+      }
+      if (selector === 'iframe.attachment-box.attachment-iframe, iframe[src*="preview4boss"], iframe[src*="pdf-viewer-b"]') {
+        return previewOpen ? iframe : null;
+      }
+      return null;
+    }
+  };
+
+  return createAsyncVmCdpClient({ document, fetchImpl, onSleep });
+}
+
+function createAsyncVmCdpClient({ document, window = {}, fetchImpl, onSleep }) {
+  return {
+    evaluate: async (payload) => {
+      const context = vm.createContext({
+        window: {
+          location: { href: 'https://www.zhipin.com/web/chat/index', origin: 'https://www.zhipin.com' },
+          ...window
+        },
+        document,
+        JSON,
+        Array,
+        Object,
+        String,
+        Number,
+        Boolean,
+        RegExp,
+        Set,
+        Map,
+        Promise,
+        URL,
+        Uint8Array,
+        Date,
+        decodeURIComponent,
+        encodeURIComponent,
+        fetch: fetchImpl,
+        btoa(value) {
+          return Buffer.from(value, 'binary').toString('base64');
+        },
+        setTimeout(fn) {
+          if (typeof onSleep === 'function') {
+            onSleep();
+          }
+          fn();
+          return 1;
+        },
+        clearTimeout() {}
+      });
+      return {
+        type: 'string',
+        value: await vm.runInContext(payload.expression, context)
+      };
+    }
+  };
+}
+
+function createFetchResponse({ bodyText = '', status = 200, headers = {} } = {}) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: {
+      get(name) {
+        return headers[String(name || '').toLowerCase()] || null;
+      }
+    },
+    async arrayBuffer() {
+      return Uint8Array.from(Buffer.from(bodyText)).buffer;
     }
   };
 }

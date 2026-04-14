@@ -21,7 +21,10 @@ class FollowupLoopService {
     projectRoot = path.resolve(__dirname, '..', '..'),
     maxThreads = 20,
     threadDelayMin = 2_000,
-    threadDelayMax = 5_000
+    threadDelayMax = 5_000,
+    resumePreviewCloseDelayMin = 1_200,
+    resumePreviewCloseDelayMax = 2_200,
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   }) {
     this.bossCliRunner = bossCliRunner;
     this.agentService = agentService;
@@ -30,6 +33,9 @@ class FollowupLoopService {
     this.maxThreads = maxThreads;
     this.threadDelayMin = threadDelayMin;
     this.threadDelayMax = threadDelayMax;
+    this.resumePreviewCloseDelayMin = resumePreviewCloseDelayMin;
+    this.resumePreviewCloseDelayMax = resumePreviewCloseDelayMax;
+    this.sleep = sleep;
   }
 
   async run({ runId, jobKey, mode = 'followup', maxThreads: overrideMaxThreads, interactionTypes, bossCliRunner: runnerOverride, signal } = {}) {
@@ -142,58 +148,71 @@ class FollowupLoopService {
       });
     }
 
-    // Phase 5: Read visible unread list from DOM
-    let threads;
-    try {
-      const listResult = await runner.inspectVisibleChatList({
-        runId,
-        limit: effectiveMaxThreads
-      });
-      threads = Array.isArray(listResult?.threads) ? listResult.threads : [];
-    } catch (error) {
-      await this.#failRun(runId, `visible_list_failed:${error.message}`, stats);
-      return { ok: false, stats, reason: 'visible_list_unavailable' };
-    }
+    // Phase 5: Refresh visible unread list each round so reordering/new unread does not desync the traversal snapshot
+    const processedThreadKeys = new Set();
+    let sawAnyThread = false;
 
-    if (threads.length === 0) {
-      await this.#recordEvent(runId, {
-        eventId: `followup-loop-empty:${runId}`,
-        eventType: 'followup_loop_empty',
-        stage: 'followup_loop',
-        message: 'no unread threads visible',
-        payload: { jobKey }
-      });
-      await this.#resetChatPageAfterCompletion({ runId, runner });
-      await this.agentService.completeRun({
-        runId,
-        payload: { ...stats, reason: 'no_unread_threads' }
-      });
-      return { ok: true, stats };
-    }
-
-    await this.#recordEvent(runId, {
-      eventId: `followup-loop-threads:${runId}`,
-      eventType: 'followup_loop_threads_found',
-      stage: 'followup_loop',
-      message: `found ${threads.length} visible threads`,
-      payload: { threadCount: threads.length, threads: threads.map((t) => ({ name: t.name, dataId: t.dataId, index: t.index })) }
-    });
-
-    // Phase 6: Process each thread with anti-risk delays
-    for (let i = 0; i < threads.length; i++) {
+    // Phase 6: Process threads with anti-risk delays
+    while (true) {
       if (signal?.aborted) break;
-      const thread = threads[i];
       if (stats.processed >= effectiveMaxThreads) {
         break;
       }
 
+      let threads;
+      try {
+        const listResult = await runner.inspectVisibleChatList({
+          runId,
+          limit: effectiveMaxThreads
+        });
+        threads = Array.isArray(listResult?.threads) ? listResult.threads : [];
+      } catch (error) {
+        await this.#failRun(runId, `visible_list_failed:${error.message}`, stats);
+        return { ok: false, stats, reason: 'visible_list_unavailable' };
+      }
+
+      if (threads.length === 0) {
+        if (!sawAnyThread) {
+          await this.#recordEvent(runId, {
+            eventId: `followup-loop-empty:${runId}`,
+            eventType: 'followup_loop_empty',
+            stage: 'followup_loop',
+            message: 'no unread threads visible',
+            payload: { jobKey }
+          });
+          await this.#resetChatPageAfterCompletion({ runId, runner });
+          await this.agentService.completeRun({
+            runId,
+            payload: { ...stats, reason: 'no_unread_threads' }
+          });
+          return { ok: true, stats };
+        }
+        break;
+      }
+
+      if (!sawAnyThread) {
+        sawAnyThread = true;
+        await this.#recordEvent(runId, {
+          eventId: `followup-loop-threads:${runId}`,
+          eventType: 'followup_loop_threads_found',
+          stage: 'followup_loop',
+          message: `found ${threads.length} visible threads`,
+          payload: { threadCount: threads.length, threads: threads.map((t) => ({ name: t.name, dataId: t.dataId, index: t.index })) }
+        });
+      }
+
+      const thread = threads.find((item) => !processedThreadKeys.has(buildVisibleThreadKey(item)));
+      if (!thread) {
+        break;
+      }
+
       // Random delay between threads to avoid detection
-      if (i > 0) {
+      if (stats.processed > 0) {
         const delayMs = this.threadDelayMin + Math.random() * (this.threadDelayMax - this.threadDelayMin);
         await new Promise((resolve) => setTimeout(resolve, delayMs));
 
         // Random longer idle every 3-5 threads to mimic human browsing rhythm
-        if (this.threadDelayMin > 0 && i % (3 + Math.floor(Math.random() * 3)) === 0) {
+        if (this.threadDelayMin > 0 && stats.processed % (3 + Math.floor(Math.random() * 3)) === 0) {
           const idleMs = 8_000 + Math.random() * 15_000;
           await new Promise((resolve) => setTimeout(resolve, idleMs));
         }
@@ -210,6 +229,7 @@ class FollowupLoopService {
         runner
       });
 
+      processedThreadKeys.add(buildVisibleThreadKey(thread));
       stats.processed += 1;
 
       await this.#recordEvent(runId, {
@@ -890,6 +910,7 @@ class FollowupLoopService {
     });
 
     // Step 7: Close resume detail page after successful download
+    await this.#waitBeforeClosingResumePreview();
     await this.#closeResumeDetailSafe(runId, encryptUid, runner);
   }
 
@@ -1227,6 +1248,21 @@ class FollowupLoopService {
     }
   }
 
+  async #waitBeforeClosingResumePreview() {
+    if (this.resumePreviewCloseDelayMax <= 0) {
+      return;
+    }
+
+    const minDelay = Math.max(0, this.resumePreviewCloseDelayMin);
+    const maxDelay = Math.max(minDelay, this.resumePreviewCloseDelayMax);
+    const dwellMs = minDelay + Math.random() * (maxDelay - minDelay);
+    if (dwellMs <= 0) {
+      return;
+    }
+
+    await this.sleep(dwellMs);
+  }
+
   async #resetChatPageAfterCompletion({ runId, runner }) {
     try {
       await runner.navigateTo({
@@ -1274,6 +1310,19 @@ function buildThreadMessageOccurredAt({ syncedAt, index, total }) {
   const baseTime = syncedAt instanceof Date ? syncedAt.getTime() : Date.now();
   const remaining = Math.max(total - index, 1);
   return new Date(baseTime - remaining * 1000).toISOString();
+}
+
+function buildVisibleThreadKey(thread) {
+  if (!thread || typeof thread !== 'object') {
+    return '';
+  }
+  if (thread.dataId) {
+    return `data:${thread.dataId}`;
+  }
+  if (thread.name) {
+    return `name:${thread.name}:${thread.index ?? ''}`;
+  }
+  return `idx:${thread.index ?? ''}`;
 }
 
 function buildFilterProfileEvidence(resumePanel) {
