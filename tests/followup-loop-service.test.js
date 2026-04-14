@@ -10,6 +10,7 @@ function createMockBossCliRunner({
   resumeRequestStates = {},
   consentStateMap = {},
   messageResults = {},
+  resumePanels = {},
   previewMeta = {},
   downloadResults = {},
   bindResult = { ok: true, session: { targetId: 'tab-1' } },
@@ -68,6 +69,24 @@ function createMockBossCliRunner({
       calls.push({ command: 'readOpenThreadMessages', ...opts });
       return messageResults[lastClickedDataId] || { ok: true, messages: [] };
     },
+    async getResumePanel(opts) {
+      calls.push({ command: 'getResumePanel', ...opts });
+      return resumePanels[lastClickedDataId] || {
+        ok: true,
+        resume: {
+          name: '默认候选人',
+          gender: '',
+          age: '',
+          experience: '',
+          degree: '',
+          activeTime: '',
+          workHistory: [],
+          education: [],
+          jobChatting: '',
+          expect: ''
+        }
+      };
+    },
     async sendChatMessage(opts) {
       calls.push({ command: 'sendChatMessage', ...opts });
       return { ok: true, sent: true, verified: true };
@@ -124,6 +143,7 @@ function createMockAgentService() {
   return {
     events, messages, actions, attachments, completions, failures,
     candidateUpserts: [],
+    existingCandidatePersistence: null,
     async _getJobNanobotContext(jobKey) {
       return {
         jobName: '面点师傅（B0038011）',
@@ -131,7 +151,8 @@ function createMockAgentService() {
         city: '重庆',
         salary: '8-10K',
         jdText: '负责门店面点制作与出品。',
-        customRequirement: null
+        customRequirement: null,
+        recommendFilters: null
       };
     },
     async upsertCandidate(payload) {
@@ -159,6 +180,9 @@ function createMockAgentService() {
     },
     async findLatestCandidateByGeekId() {
       return { id: 100 };
+    },
+    async getCandidatePersistence() {
+      return this.existingCandidatePersistence;
     },
     async completeRun(payload) {
       completions.push(payload);
@@ -250,6 +274,15 @@ test('FollowupLoopService passes job city context to LLM and forbids placeholder
   });
 
   const agentService = createMockAgentService();
+  agentService._getJobNanobotContext = async () => ({
+    jobName: '面点师傅（B0038011）',
+    bossEncryptJobId: 'enc-job-1',
+    city: '重庆',
+    salary: '8-10K',
+    jdText: '负责门店面点制作与出品。',
+    customRequirement: '需要接受夜班',
+    recommendFilters: null
+  });
   const prompts = [];
   const llmEvaluator = {
     async chat(payload) {
@@ -269,7 +302,267 @@ test('FollowupLoopService passes job city context to LLM and forbids placeholder
   assert.match(prompts[0].userPrompt, /工作地点：重庆/);
   assert.match(prompts[0].userPrompt, /薪资范围：8-10K/);
   assert.match(prompts[0].userPrompt, /岗位说明：负责门店面点制作与出品。/);
+  assert.match(prompts[0].userPrompt, /岗位附加要求（内部参考）\n需要接受夜班/);
+  assert.match(prompts[0].userPrompt, /requirementEvidence/);
+  assert.match(prompts[0].userPrompt, /必须明确说明依据了哪些岗位要求、附加条件或候选人画像信号/);
+  assert.match(prompts[0].userPrompt, /BOSS直聘聊天口吻/);
+  assert.match(prompts[0].userPrompt, /避免“从您的表达来看”/);
+  assert.match(prompts[0].userPrompt, /“匹配度”/);
+  assert.match(prompts[0].userPrompt, /“沟通意愿较强”/);
   assert.match(prompts[0].userPrompt, /禁止输出`\[工作地点\]`、`\[薪资\]`这类占位符/);
+});
+
+test('FollowupLoopService skips reply when resume panel definitively mismatches recommend filters', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    visibleThreads: [
+      { name: '张三', dataId: '123-0', index: 0, hasUnread: true }
+    ],
+    messageResults: {
+      '123-0': {
+        ok: true,
+        messages: [
+          { from: '张三', type: 'text', text: '你好，我对这个岗位感兴趣', time: '10:00' }
+        ]
+      }
+    },
+    resumePanels: {
+      '123-0': {
+        ok: true,
+        resume: {
+          name: '张三',
+          gender: '男',
+          age: '39岁',
+          experience: '1-3年',
+          degree: '大专',
+          activeTime: '本周活跃',
+          workHistory: ['2020-2022 某公司 销售'],
+          education: ['2014-2017 某学院 大专'],
+          jobChatting: '面点师傅',
+          expect: '重庆 5-10K'
+        }
+      }
+    }
+  });
+
+  const agentService = createMockAgentService();
+  agentService._getJobNanobotContext = async () => ({
+    jobName: '面点师傅（B0038011）',
+    bossEncryptJobId: 'enc-job-1',
+    city: '重庆',
+    salary: '8-10K',
+    jdText: '负责门店面点制作与出品。',
+    customRequirement: '需要接受夜班',
+    recommendFilters: {
+      gender: '女',
+      ageMax: 35,
+      experience: ['3-5年']
+    }
+  });
+
+  const llmCalls = [];
+  const llmEvaluator = {
+    async chat(payload) {
+      llmCalls.push(payload);
+      return JSON.stringify({ action: 'reply', replyText: '您好', reason: 'should not happen' });
+    }
+  };
+
+  const service = new FollowupLoopService({
+    bossCliRunner, agentService, llmEvaluator,
+    threadDelayMin: 0, threadDelayMax: 0
+  });
+
+  const result = await service.run({ runId: 3003, jobKey: '面点师傅（B0038011）_8eca6cad' });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stats.skipped, 1);
+  assert.equal(result.stats.replied, 0);
+  assert.equal(result.stats.resumeRequested, 0);
+  assert.equal(llmCalls.length, 0);
+  assert.equal(bossCliRunner.calls.some((c) => c.command === 'sendChatMessage'), false);
+  assert.ok(agentService.events.some((event) => event.eventType === 'followup_filter_skipped'));
+  const evalEvent = agentService.events.find((event) => event.eventType === 'candidate_evaluated');
+  assert.ok(evalEvent);
+  assert.equal(evalEvent.payload.action, 'skip');
+  assert.equal(evalEvent.payload.source, 'recommend_filters');
+  assert.ok(agentService.candidateUpserts.some((item) =>
+    item.metadata?.resumePanel?.degree === '大专'
+    && item.metadata?.profile?.gender === '男'
+    && item.metadata?.profile?.activeTime === '本周活跃'
+    && item.metadata?.followupDecision?.action === 'skip'
+    && item.metadata?.followupDecision?.source === 'recommend_filters'
+  ));
+});
+
+test('FollowupLoopService stores resume detail, user portrait, and model decision on reply path', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    visibleThreads: [
+      { name: '李四', dataId: '456-0', index: 0, hasUnread: true }
+    ],
+    messageResults: {
+      '456-0': {
+        ok: true,
+        messages: [
+          { from: '李四', type: 'text', text: '可以聊聊这个岗位吗？', time: '10:00' }
+        ]
+      }
+    },
+    resumePanels: {
+      '456-0': {
+        ok: true,
+        resume: {
+          name: '李四',
+          gender: '女',
+          age: '28岁',
+          experience: '3-5年',
+          degree: '本科',
+          activeTime: '今日活跃',
+          workHistory: ['2021-至今 某公司 招聘顾问'],
+          education: ['2015-2019 重庆大学 人力资源管理 本科'],
+          jobChatting: '健康顾问',
+          expect: '重庆 10-20K'
+        }
+      }
+    }
+  });
+
+  const agentService = createMockAgentService();
+  const llmEvaluator = createMockLlmEvaluator([
+    {
+      action: 'reply',
+      replyText: '您好，可以详细聊聊。',
+      reason: '候选人与岗位画像匹配',
+      requirementEvidence: ['3-5年经验符合岗位要求', '今日活跃且明确表达兴趣', '接受夜班要求可继续沟通']
+    }
+  ]);
+
+  const service = new FollowupLoopService({
+    bossCliRunner, agentService, llmEvaluator,
+    threadDelayMin: 0, threadDelayMax: 0
+  });
+
+  const result = await service.run({ runId: 3004, jobKey: '面点师傅（B0038011）_8eca6cad', interactionTypes: [] });
+
+  assert.equal(result.ok, true);
+  const persisted = agentService.candidateUpserts.find((item) => item.metadata?.followupDecision?.action === 'reply');
+  assert.ok(persisted);
+  assert.equal(persisted.education, '本科');
+  assert.equal(persisted.experience, '3-5年');
+  assert.equal(persisted.school, '重庆大学');
+  assert.equal(persisted.metadata.profile.gender, '女');
+  assert.equal(persisted.metadata.profile.age, '28岁');
+  assert.equal(persisted.metadata.profile.activeTime, '今日活跃');
+  assert.equal(persisted.metadata.resumePanel.expect, '重庆 10-20K');
+  assert.equal(persisted.metadata.followupDecision.reason, '候选人与岗位画像匹配');
+  assert.deepEqual(persisted.metadata.followupDecision.requirementEvidence, [
+    '3-5年经验符合岗位要求',
+    '今日活跃且明确表达兴趣',
+    '接受夜班要求可继续沟通'
+  ]);
+
+  const evalEvent = agentService.events.find((event) => event.eventType === 'candidate_evaluated');
+  assert.ok(evalEvent);
+  assert.match(evalEvent.message, /LLM reply: 李四/);
+  assert.match(evalEvent.message, /依据: 3-5年经验符合岗位要求；今日活跃且明确表达兴趣；接受夜班要求可继续沟通/);
+  assert.equal(evalEvent.payload.action, 'reply');
+  assert.equal(evalEvent.payload.reason, '候选人与岗位画像匹配');
+  assert.deepEqual(evalEvent.payload.requirementEvidence, [
+    '3-5年经验符合岗位要求',
+    '今日活跃且明确表达兴趣',
+    '接受夜班要求可继续沟通'
+  ]);
+});
+
+test('FollowupLoopService merges existing metadata instead of overwriting it', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    visibleThreads: [
+      { name: '王五', dataId: '789-0', index: 0, hasUnread: true }
+    ],
+    messageResults: {
+      '789-0': {
+        ok: true,
+        messages: [
+          { from: '王五', type: 'text', text: '想了解岗位', time: '10:00' }
+        ]
+      }
+    },
+    resumePanels: {
+      '789-0': {
+        ok: true,
+        resume: {
+          name: '王五',
+          gender: '男',
+          age: '31岁',
+          experience: '5-10年',
+          degree: '本科',
+          activeTime: '今日活跃',
+          workHistory: ['2020-至今 某公司 销售主管'],
+          education: ['2012-2016 重庆大学 本科'],
+          jobChatting: '健康顾问',
+          expect: '重庆 10-20K'
+        }
+      }
+    }
+  });
+
+  const agentService = createMockAgentService();
+  agentService.existingCandidatePersistence = {
+    profileMetadata: { legacyProfile: true, sourceTier: 'A' },
+    workflowMetadata: { legacyWorkflow: true, previousDecision: 'greet' }
+  };
+  const llmEvaluator = createMockLlmEvaluator([
+    { action: 'skip', reason: 'not_now' }
+  ]);
+
+  const service = new FollowupLoopService({
+    bossCliRunner, agentService, llmEvaluator,
+    threadDelayMin: 0, threadDelayMax: 0
+  });
+
+  await service.run({ runId: 3005, jobKey: '面点师傅（B0038011）_8eca6cad', interactionTypes: [] });
+
+  const merged = agentService.candidateUpserts.find((item) => item.metadata?.followupDecision?.source === 'llm');
+  assert.ok(merged);
+  assert.equal(merged.metadata.legacyProfile, true);
+  assert.equal(merged.metadata.legacyWorkflow, true);
+  assert.equal(merged.metadata.previousDecision, 'greet');
+});
+
+test('FollowupLoopService does not write job city as candidate city when resume panel is unavailable', async () => {
+  const bossCliRunner = createMockBossCliRunner({
+    visibleThreads: [
+      { name: '赵六', dataId: '900-0', index: 0, hasUnread: true }
+    ],
+    messageResults: {
+      '900-0': {
+        ok: true,
+        messages: [
+          { from: '赵六', type: 'text', text: '你好', time: '10:00' }
+        ]
+      }
+    },
+    resumePanels: {}
+  });
+  bossCliRunner.getResumePanel = async (opts) => {
+    bossCliRunner.calls.push({ command: 'getResumePanel', ...opts });
+    throw new Error('panel_unavailable');
+  };
+
+  const agentService = createMockAgentService();
+  const llmEvaluator = createMockLlmEvaluator([
+    { action: 'skip', reason: 'no_panel' }
+  ]);
+
+  const service = new FollowupLoopService({
+    bossCliRunner, agentService, llmEvaluator,
+    threadDelayMin: 0, threadDelayMax: 0
+  });
+
+  await service.run({ runId: 3006, jobKey: '面点师傅（B0038011）_8eca6cad', interactionTypes: [] });
+
+  const followupPersist = agentService.candidateUpserts.find((item) => item.metadata?.followupDecision?.source === 'llm');
+  assert.ok(followupPersist);
+  assert.equal(followupPersist.city || null, null);
 });
 
 test('FollowupLoopService resets chat page again after finishing processed threads', async () => {
@@ -872,11 +1165,17 @@ test('FollowupLoopService calls upsertCandidate for each processed thread', asyn
 
   await service.run({ runId: 312, jobKey: '面点师傅（B0038011）_8eca6cad' });
 
-  assert.equal(agentService.candidateUpserts.length, 2);
-  assert.equal(agentService.candidateUpserts[0].name, '候选人X');
-  assert.equal(agentService.candidateUpserts[0].bossEncryptGeekId, 'x-0');
-  assert.equal(agentService.candidateUpserts[0].status, 'in_conversation');
-  assert.equal(agentService.candidateUpserts[1].name, '候选人Y');
+  assert.ok(agentService.candidateUpserts.length >= 2);
+  assert.ok(agentService.candidateUpserts.some((item) =>
+    item.name === '候选人X'
+    && item.bossEncryptGeekId === 'x-0'
+    && item.status === 'in_conversation'
+  ));
+  assert.ok(agentService.candidateUpserts.some((item) =>
+    item.name === '候选人Y'
+    && item.bossEncryptGeekId === 'y-0'
+    && item.status === 'in_conversation'
+  ));
 });
 
 test('FollowupLoopService falls back to findLatestCandidateByGeekId when upsert fails', async () => {

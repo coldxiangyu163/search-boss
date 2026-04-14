@@ -28,15 +28,35 @@ test('buildSchedulePrompt renders followup prompt with handoff and terminal rule
     mode: 'followup',
     runId: '91',
     jobKey: 'job-key-1',
-    jobContext: {},
+    jobContext: {
+      customRequirement: '必须接受倒班'
+    },
     deterministicContextPrompt: 'CTX'
   });
 
   assert.match(prompt, /boss-sourcing --job "job-key-1" --followup --run-id "91"/);
   assert.match(prompt, /CTX/);
+  assert.match(prompt, /岗位附加要求：必须接受倒班/);
   assert.match(prompt, /boss-resume-ingest --run-id "91"/);
   assert.match(prompt, /run-attachment/);
   assert.match(prompt, /run-complete 或 run-fail/);
+});
+
+test('buildSchedulePrompt renders chat prompt with custom requirement', () => {
+  const prompt = buildSchedulePrompt({
+    mode: 'chat',
+    runId: '92',
+    jobKey: 'job-key-2',
+    jobContext: {
+      customRequirement: '需要接受倒班'
+    },
+    deterministicContextPrompt: 'CTX2'
+  });
+
+  assert.match(prompt, /boss-sourcing --job "job-key-2" --chat --run-id "92"/);
+  assert.match(prompt, /CTX2/);
+  assert.match(prompt, /岗位附加要求：需要接受倒班/);
+  assert.match(prompt, /回写格式固定：消息用 run-message/);
 });
 
 test('buildSyncPrompt renders sync-only restrictions and write contract', () => {

@@ -1049,6 +1049,27 @@ class AgentService {
     return result.rows[0] || null;
   }
 
+  async getCandidatePersistence(candidateId) {
+    if (!candidateId) {
+      return null;
+    }
+
+    const result = await this.pool.query(
+      `
+        select
+          p.profile_metadata as "profileMetadata",
+          jc.workflow_metadata as "workflowMetadata"
+        from job_candidates jc
+        join people p on p.id = jc.person_id
+        where jc.id = $1
+        limit 1
+      `,
+      [candidateId]
+    );
+
+    return result.rows[0] || null;
+  }
+
   async resolveJobCandidateForWrite({ candidateId, bossEncryptGeekId, jobKey }) {
     if (candidateId) {
       const result = await this.pool.query(

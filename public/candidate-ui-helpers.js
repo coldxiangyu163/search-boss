@@ -166,6 +166,51 @@
     return `${firstEntry[0]}：${String(firstEntry[1])}`;
   }
 
+  function buildCandidateEvaluation(detail = {}) {
+    const profileMeta = detail.profile_metadata || {};
+    const workflowMeta = detail.workflow_metadata || {};
+    const followupDecision = workflowMeta.followupDecision || null;
+
+    if (followupDecision && followupDecision.action) {
+      return {
+        kind: 'followup',
+        action: followupDecision.action,
+        label: formatFollowupActionLabel(followupDecision.action),
+        reason: followupDecision.reason || '-',
+        requirementEvidence: Array.isArray(followupDecision.requirementEvidence)
+          ? followupDecision.requirementEvidence.filter(Boolean)
+          : [],
+        source: followupDecision.source || '',
+        unsupportedFilters: Array.isArray(workflowMeta.filterGate?.unsupportedFilters)
+          ? workflowMeta.filterGate.unsupportedFilters.filter(Boolean)
+          : []
+      };
+    }
+
+    if (!profileMeta.decision) {
+      return null;
+    }
+
+    return {
+      kind: 'source',
+      action: profileMeta.decision,
+      label: profileMeta.decision === 'greet' ? '打招呼' : '跳过',
+      reason: profileMeta.reasoning || '-',
+      priority: profileMeta.priority || '-',
+      facts: profileMeta.facts || {}
+    };
+  }
+
+  function formatFollowupActionLabel(action) {
+    const labels = {
+      reply: '继续回复',
+      request_resume: '索要简历',
+      skip: '跳过'
+    };
+
+    return labels[action] || action || '未知动作';
+  }
+
   const api = {
     formatLifecycleStatus,
     formatResumeState,
@@ -174,6 +219,7 @@
     getResumeBadgeClass,
     getGuardBadgeClass,
     buildCandidateTimeline,
+    buildCandidateEvaluation,
     buildResumePreviewUrl,
     isResumeDownloadable,
     buildCandidateDownloadQuery

@@ -217,6 +217,7 @@ const {
   getResumeBadgeClass,
   getGuardBadgeClass,
   buildCandidateTimeline,
+  buildCandidateEvaluation,
   buildResumePreviewUrl,
   isResumeDownloadable,
   buildCandidateDownloadQuery
@@ -3825,20 +3826,13 @@ function renderCandidateDetailDrawer() {
 }
 
 function renderLlmEvaluationSection(item) {
-  const meta = item.profile_metadata || {};
-  const decision = meta.decision;
-  if (!decision) return '';
+  const evaluation = buildCandidateEvaluation(item);
+  if (!evaluation) return '';
 
-  const priority = meta.priority || '-';
-  const reasoning = meta.reasoning || '-';
-  const facts = meta.facts || {};
-
-  const isGreet = decision === 'greet';
-  const decisionLabel = isGreet ? '打招呼' : '跳过';
-  const decisionColor = isGreet ? '#16a34a' : '#dc2626';
+  const decisionColor = evaluation.action === 'skip' ? '#dc2626' : '#16a34a';
   const tierColors = { A: '#16a34a', B: '#2563eb', C: '#d97706' };
-  const tierColor = tierColors[priority] || '#6b7280';
-
+  const tierColor = tierColors[evaluation.priority] || '#6b7280';
+  const facts = evaluation.facts || {};
   const factsHtml = Object.keys(facts).length > 0
     ? Object.entries(facts).map(([k, v]) =>
         `<div style="display:flex;gap:8px;padding:4px 0;border-bottom:1px solid #f1f5f9;">
@@ -3847,6 +3841,14 @@ function renderLlmEvaluationSection(item) {
         </div>`
       ).join('')
     : '<span style="color:#94a3b8;font-size:13px;">无</span>';
+  const evidenceHtml = Array.isArray(evaluation.requirementEvidence) && evaluation.requirementEvidence.length
+    ? `<ul style="margin:0;padding-left:18px;color:#334155;font-size:13px;line-height:1.8;">
+        ${evaluation.requirementEvidence.map((itemText) => `<li>${escapeHtml(itemText)}</li>`).join('')}
+      </ul>`
+    : '<span style="color:#94a3b8;font-size:13px;">无</span>';
+  const unsupportedFiltersHtml = Array.isArray(evaluation.unsupportedFilters) && evaluation.unsupportedFilters.length
+    ? `<p style="margin-top:8px;color:#b45309;font-size:12px;">未生效筛选：${escapeHtml(evaluation.unsupportedFilters.join('、'))}</p>`
+    : '';
 
   return `
     <section class="candidate-detail-section">
@@ -3857,19 +3859,29 @@ function renderLlmEvaluationSection(item) {
         </div>
       </div>
       <div style="display:flex;gap:12px;margin-bottom:12px;">
-        <span style="display:inline-flex;align-items:center;padding:4px 12px;border-radius:6px;font-size:13px;font-weight:600;color:#fff;background:${decisionColor};">${decisionLabel}</span>
-        <span style="display:inline-flex;align-items:center;padding:4px 12px;border-radius:6px;font-size:13px;font-weight:600;color:#fff;background:${tierColor};">优先级 ${escapeHtml(priority)}</span>
+        <span style="display:inline-flex;align-items:center;padding:4px 12px;border-radius:6px;font-size:13px;font-weight:600;color:#fff;background:${decisionColor};">${escapeHtml(evaluation.label)}</span>
+        ${evaluation.kind === 'source' ? `<span style="display:inline-flex;align-items:center;padding:4px 12px;border-radius:6px;font-size:13px;font-weight:600;color:#fff;background:${tierColor};">优先级 ${escapeHtml(evaluation.priority)}</span>` : ''}
+        ${evaluation.kind === 'followup' ? `<span class="badge badge-neutral">来源 ${escapeHtml(evaluation.source || 'llm')}</span>` : ''}
       </div>
       <div style="margin-bottom:12px;">
         <p style="font-size:12px;color:#64748b;margin-bottom:4px;">判断理由</p>
-        <p style="font-size:13px;line-height:1.6;color:#334155;background:#f8f9fa;padding:10px 12px;border-radius:8px;border:1px solid #e2e8f0;">${escapeHtml(reasoning)}</p>
+        <p style="font-size:13px;line-height:1.6;color:#334155;background:#f8f9fa;padding:10px 12px;border-radius:8px;border:1px solid #e2e8f0;">${escapeHtml(evaluation.reason)}</p>
       </div>
-      <div>
-        <p style="font-size:12px;color:#64748b;margin-bottom:4px;">关键信息</p>
+      <div style="margin-bottom:12px;">
+        <p style="font-size:12px;color:#64748b;margin-bottom:4px;">评估依据</p>
         <div style="background:#f8f9fa;padding:10px 12px;border-radius:8px;border:1px solid #e2e8f0;">
-          ${factsHtml}
+          ${evidenceHtml}
+          ${unsupportedFiltersHtml}
         </div>
       </div>
+      ${evaluation.kind === 'source' ? `
+        <div>
+          <p style="font-size:12px;color:#64748b;margin-bottom:4px;">关键信息</p>
+          <div style="background:#f8f9fa;padding:10px 12px;border-radius:8px;border:1px solid #e2e8f0;">
+            ${factsHtml}
+          </div>
+        </div>
+      ` : ''}
     </section>
   `;
 }
@@ -4992,7 +5004,7 @@ function renderJobDetailModal() {
                   ${state.jobDetailModal.saving ? '保存中...' : '保存要求'}
                 </button>
               </div>
-              <p class="card-subtitle job-detail-tip">该内容仅保存在本地，不会被 BOSS 职位同步覆盖，寻源调用 nanobot 时会一并带上。</p>
+              <p class="card-subtitle job-detail-tip">该内容仅保存在本地，不会被 BOSS 职位同步覆盖；寻源与 followup 沟通时都会作为内部参考带上。</p>
               ${state.jobDetailModal.savingError ? `<div class="inline-status inline-status-error">${escapeHtml(state.jobDetailModal.savingError)}</div>` : ''}
               ${state.jobDetailModal.savingSuccess ? `<div class="inline-status inline-status-success">${escapeHtml(state.jobDetailModal.savingSuccess)}</div>` : ''}
               <textarea

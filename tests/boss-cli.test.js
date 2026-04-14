@@ -1022,6 +1022,10 @@ test('resume-panel scrapes the currently opened right panel from the bound targe
   assert.equal(result.exitCode, 0);
   assert.equal(calls[0].targetId, 'boss-1');
   assert.match(calls[0].expression, /base-info-single-container|base-info-content/);
+  assert.match(calls[0].expression, /experience-content\.time-list/);
+  assert.match(calls[0].expression, /experience-content\.detail-list/);
+  assert.match(calls[0].expression, /base-info-edu/);
+  assert.match(calls[0].expression, /base-info-work/);
   assert.equal(payload.resume.name, '谢东林');
   assert.equal(payload.resume.jobChatting, '健康顾问');
   assert.equal(payload.resume.expect, '重庆 8-10K');

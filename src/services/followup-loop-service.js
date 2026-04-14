@@ -1,6 +1,18 @@
 const path = require('node:path');
 const crypto = require('node:crypto');
 
+const FOLLOWUP_UNSUPPORTED_FILTER_KEYS = ['notViewed', 'notExchanged', 'school', 'jobHopFrequency', 'jobIntent'];
+const ACTIVITY_RANKS = new Map([
+  ['刚刚活跃', 1],
+  ['今日活跃', 2],
+  ['3日内活跃', 3],
+  ['本周活跃', 4],
+  ['本月活跃', 5]
+]);
+const SALARY_RANGE_PATTERN = /(\d+)\s*-\s*(\d+)\s*K/;
+const SALARY_BELOW_PATTERN = /(\d+)\s*K以下/;
+const SALARY_ABOVE_PATTERN = /(\d+)\s*K以上/;
+
 class FollowupLoopService {
   constructor({
     bossCliRunner,
@@ -379,6 +391,86 @@ class FollowupLoopService {
       return;
     }
 
+    let resumePanel = null;
+    try {
+      const panelResult = await runner.getResumePanel({ runId, uid: encryptUid });
+      resumePanel = panelResult?.resume || panelResult || null;
+    } catch (error) {
+      resumePanel = null;
+    }
+
+    const resumeProfile = buildResumePanelProfile({ resumePanel, fallbackName: thread.name });
+    if (resumePanel || resumeProfile) {
+      candidateId = await this.#persistFollowupCandidateProfile({
+        runId,
+        jobKey,
+        encryptUid,
+        candidateName: thread.name,
+        candidateId,
+        status: 'in_conversation',
+        resumePanel,
+        resumeProfile
+      }) || candidateId;
+    }
+
+    const filterGate = evaluateRecommendFilters(jobContext.recommendFilters, resumePanel);
+    if (filterGate.definitiveMismatch) {
+      candidateId = await this.#persistFollowupCandidateProfile({
+        runId,
+        jobKey,
+        encryptUid,
+        candidateName: thread.name,
+        candidateId,
+        status: 'in_conversation',
+        resumePanel,
+        resumeProfile,
+        filterGate,
+      followupDecision: {
+        action: 'skip',
+        reason: filterGate.reasons.join(', '),
+        requirementEvidence: filterGate.reasons,
+        source: 'recommend_filters'
+      }
+    }) || candidateId;
+      stats.skipped += 1;
+      await this.#recordEvent(runId, {
+        eventId: `followup-loop-filter-skip:${runId}:${threadId}`,
+        eventType: 'followup_filter_skipped',
+        stage: 'followup_loop',
+        message: `filter mismatch skipped: ${filterGate.reasons.join(', ')}`,
+        payload: {
+          encryptUid,
+          candidateName: thread.name,
+          reasons: filterGate.reasons,
+          unsupportedFilters: filterGate.unsupportedFilters,
+          profile: buildFilterProfileEvidence(resumePanel)
+        }
+      });
+      await this.#recordEvent(runId, {
+        eventId: `followup-loop-filter-eval:${runId}:${threadId}`,
+        eventType: 'candidate_evaluated',
+        stage: 'followup_loop',
+        message: buildLlmEvaluationMessage({
+          action: 'skip',
+          candidateName: thread.name,
+          reason: filterGate.reasons.join(', '),
+          requirementEvidence: filterGate.reasons
+        }),
+        payload: {
+          encryptUid,
+          candidateName: thread.name,
+          action: 'skip',
+          reason: filterGate.reasons.join(', '),
+          replyText: '',
+          requirementEvidence: filterGate.reasons,
+          source: 'recommend_filters',
+          profile: resumeProfile,
+          unsupportedFilters: filterGate.unsupportedFilters
+        }
+      });
+      return;
+    }
+
     // Step 8: Check followup-decision from backend
     let followupDecision = null;
     if (candidateId) {
@@ -417,6 +509,47 @@ class FollowupLoopService {
       });
       return;
     }
+
+    candidateId = await this.#persistFollowupCandidateProfile({
+      runId,
+      jobKey,
+      encryptUid,
+      candidateName: thread.name,
+      candidateId,
+      status: 'in_conversation',
+      resumePanel,
+      resumeProfile,
+      filterGate,
+      followupDecision: {
+        action: decision.action,
+        reason: decision.reason,
+        replyText: decision.replyText,
+        requirementEvidence: decision.requirementEvidence,
+        source: 'llm'
+      }
+    }) || candidateId;
+
+    await this.#recordEvent(runId, {
+      eventId: `followup-loop-llm:${runId}:${threadId}`,
+      eventType: 'candidate_evaluated',
+      stage: 'followup_loop',
+      message: buildLlmEvaluationMessage({
+        action: decision.action,
+        candidateName: thread.name,
+        reason: decision.reason,
+        requirementEvidence: decision.requirementEvidence
+      }),
+      payload: {
+        encryptUid,
+        candidateName: thread.name,
+        action: decision.action,
+        reason: decision.reason,
+        replyText: decision.replyText || '',
+        requirementEvidence: decision.requirementEvidence,
+        profile: resumeProfile,
+        unsupportedFilters: filterGate.unsupportedFilters
+      }
+    });
 
     // Step 10: Execute decision
     if (decision.action === 'skip') {
@@ -521,6 +654,7 @@ class FollowupLoopService {
       jobContext.city ? `工作地点：${jobContext.city}` : '',
       jobContext.salary ? `薪资范围：${jobContext.salary}` : '',
       jobContext.jdText ? `岗位说明：${String(jobContext.jdText).slice(0, 200)}` : '',
+      jobContext.customRequirement ? `## 岗位附加要求（内部参考）\n${jobContext.customRequirement}` : '',
       jobContext.enterpriseKnowledge ? `## 企业知识库\n${jobContext.enterpriseKnowledge}` : '',
       `## 候选人：${candidateName}`,
       '',
@@ -532,14 +666,64 @@ class FollowupLoopService {
       '- reply：需要回复候选人（附带 replyText，简洁专业）',
       canRequestResume ? '- request_resume：候选人态度积极且已有实质沟通，可以索要简历；如果选择这个动作，replyText 也必须提供，先发一条自然回复再索要简历' : '',
       '- skip：不需要回复（对方只是已读、表情、或无实质内容）',
+      '- 回复必须使用 BOSS直聘聊天口吻，像真人招聘顾问即时沟通，不要写成正式邮件、分析报告或客服话术。',
+      '- 优先短句、口语化、自然推进沟通，避免过度包装和空泛赞美。',
+      '- 避免“从您的表达来看”“匹配度”“沟通意愿较强”“初步评估”“综合判断”等 AI/书面分析腔。',
+      '- 除非候选人明确追问，不要上来重复“岗位还在招聘中”“感谢关注”等模板化开场。',
       '- 只能使用上面明确提供的岗位信息；如果缺少地点、薪资、班次等信息，就不要写。',
+      '- 岗位附加要求仅用于内部判断回复策略，不要机械复述给候选人。',
+      '- 若附加要求属于内部筛选口径或不适合直接对外表达，回复时要转化为自然、合规的话术，或避免直接提及。',
+      '- 必须明确说明依据了哪些岗位要求、附加条件或候选人画像信号做出该决定。',
+      '- requirementEvidence 需要用 1-3 条短句列出关键依据，例如经验、活跃度、附加要求、沟通意愿等。',
       '- 禁止输出`[工作地点]`、`[薪资]`这类占位符，也不要自行脑补未提供的信息。',
       '',
-      '返回纯 JSON：{"action":"reply"|"request_resume"|"skip","replyText":"回复内容(reply 和 request_resume 时需要)","reason":"简要原因"}'
+      '返回纯 JSON：{"action":"reply"|"request_resume"|"skip","replyText":"回复内容(reply 和 request_resume 时需要)","reason":"简要原因","requirementEvidence":["依据1","依据2"]}'
     ].filter(Boolean).join('\n');
 
     const raw = await this.llmEvaluator.chat({ systemPrompt, userPrompt });
     return parseChatDecision(raw);
+  }
+
+  async #persistFollowupCandidateProfile({
+    runId,
+    jobKey,
+    encryptUid,
+    candidateName,
+    candidateId,
+    status,
+    resumePanel,
+    resumeProfile,
+    filterGate = null,
+    followupDecision = null
+  }) {
+    try {
+      const existing = candidateId && this.agentService.getCandidatePersistence
+        ? await this.agentService.getCandidatePersistence(candidateId)
+        : null;
+      const upsertResult = await this.agentService.upsertCandidate({
+        runId,
+        eventId: `followup-loop-candidate-profile:${runId}:${encryptUid}`,
+        occurredAt: new Date().toISOString(),
+        jobKey,
+        bossEncryptGeekId: encryptUid,
+        name: resumeProfile?.name || candidateName || null,
+        city: resumeProfile?.city || null,
+        education: resumeProfile?.degree || null,
+        experience: resumeProfile?.experience || null,
+        school: resumeProfile?.school || null,
+        status: status || 'in_conversation',
+        metadata: buildFollowupCandidateMetadata({
+          existing,
+          resumePanel,
+          resumeProfile,
+          filterGate,
+          followupDecision
+        })
+      });
+      return upsertResult?.candidateId || candidateId || null;
+    } catch (error) {
+      return candidateId || null;
+    }
   }
 
   async #handleResumeConsentIfNeeded({ runId, encryptUid, candidateName, stats, runner }) {
@@ -1092,6 +1276,274 @@ function buildThreadMessageOccurredAt({ syncedAt, index, total }) {
   return new Date(baseTime - remaining * 1000).toISOString();
 }
 
+function buildFilterProfileEvidence(resumePanel) {
+  if (!resumePanel || typeof resumePanel !== 'object') {
+    return null;
+  }
+
+  return {
+    name: normalizeString(resumePanel.name),
+    gender: normalizeString(resumePanel.gender),
+    city: extractExpectedCity(resumePanel.expect),
+    age: normalizeString(resumePanel.age),
+    experience: normalizeString(resumePanel.experience),
+    degree: normalizeString(resumePanel.degree),
+    activeTime: normalizeString(resumePanel.activeTime),
+    expect: normalizeString(resumePanel.expect),
+    school: extractSchoolName(resumePanel.education),
+    jobChatting: normalizeString(resumePanel.jobChatting)
+  };
+}
+
+function buildResumePanelProfile({ resumePanel, fallbackName, fallbackCity }) {
+  if (!resumePanel || typeof resumePanel !== 'object') {
+    return fallbackName || fallbackCity
+      ? {
+        name: normalizeString(fallbackName),
+        city: normalizeString(fallbackCity)
+      }
+      : null;
+  }
+
+  const profile = buildFilterProfileEvidence(resumePanel) || {};
+  return {
+    ...profile,
+    name: profile.name || normalizeString(fallbackName),
+    city: profile.city || normalizeString(fallbackCity)
+  };
+}
+
+function buildFollowupCandidateMetadata({ existing, resumePanel, resumeProfile, filterGate, followupDecision }) {
+  const metadata = deepMergeObjects(
+    {},
+    existing?.profileMetadata,
+    existing?.workflowMetadata,
+    { source: 'deterministic_followup_loop' }
+  );
+
+  if (resumeProfile) {
+    metadata.profile = resumeProfile;
+  }
+
+  if (resumePanel && typeof resumePanel === 'object') {
+    metadata.resumePanel = {
+      name: normalizeString(resumePanel.name),
+      gender: normalizeString(resumePanel.gender),
+      age: normalizeString(resumePanel.age),
+      experience: normalizeString(resumePanel.experience),
+      degree: normalizeString(resumePanel.degree),
+      activeTime: normalizeString(resumePanel.activeTime),
+      workHistory: Array.isArray(resumePanel.workHistory) ? resumePanel.workHistory.slice(0, 10) : [],
+      education: Array.isArray(resumePanel.education) ? resumePanel.education.slice(0, 10) : [],
+      jobChatting: normalizeString(resumePanel.jobChatting),
+      expect: normalizeString(resumePanel.expect),
+      resumeReadAt: new Date().toISOString()
+    };
+  }
+
+  if (filterGate) {
+    metadata.filterGate = {
+      definitiveMismatch: Boolean(filterGate.definitiveMismatch),
+      reasons: Array.isArray(filterGate.reasons) ? filterGate.reasons : [],
+      unsupportedFilters: Array.isArray(filterGate.unsupportedFilters) ? filterGate.unsupportedFilters : []
+    };
+  }
+
+  if (followupDecision) {
+    metadata.followupDecision = followupDecision;
+  }
+
+  return metadata;
+}
+
+function evaluateRecommendFilters(filters, resumePanel) {
+  if (!filters || typeof filters !== 'object') {
+    return { definitiveMismatch: false, reasons: [], unsupportedFilters: [] };
+  }
+
+  const reasons = [];
+  const unsupportedFilters = [];
+  const profile = buildFilterProfileEvidence(resumePanel);
+
+  if (!profile) {
+    return { definitiveMismatch: false, reasons, unsupportedFilters };
+  }
+
+  const genderFilter = normalizeString(filters.gender);
+  if (genderFilter && profile.gender && profile.gender !== genderFilter) {
+    reasons.push('gender_mismatch');
+  }
+
+  const age = parseAge(profile.age);
+  const ageMin = Number(filters.ageMin);
+  const ageMax = Number(filters.ageMax);
+  if (Number.isFinite(age) && Number.isFinite(ageMin) && ageMin > 16 && age < ageMin) {
+    reasons.push('age_min_mismatch');
+  }
+  if (Number.isFinite(age) && Number.isFinite(ageMax) && ageMax < 99 && age > ageMax) {
+    reasons.push('age_max_mismatch');
+  }
+
+  const degreeFilters = normalizeFilterArray(filters.degree);
+  if (degreeFilters.length > 0 && profile.degree && !degreeFilters.includes(profile.degree)) {
+    reasons.push('degree_mismatch');
+  }
+
+  const experienceFilters = normalizeFilterArray(filters.experience);
+  if (experienceFilters.length > 0 && profile.experience && !experienceFilters.includes(profile.experience)) {
+    reasons.push('experience_mismatch');
+  }
+
+  const activityFilter = normalizeString(filters.activity);
+  if (activityFilter && profile.activeTime && !matchesActivityFilter(profile.activeTime, activityFilter)) {
+    reasons.push('activity_mismatch');
+  }
+
+  const salaryFilter = normalizeString(filters.salary);
+  if (salaryFilter && profile.expect && !matchesSalaryFilter(profile.expect, salaryFilter)) {
+    reasons.push('salary_mismatch');
+  }
+
+  for (const key of FOLLOWUP_UNSUPPORTED_FILTER_KEYS) {
+    if (hasMeaningfulFilterValue(filters[key])) {
+      unsupportedFilters.push(key);
+    }
+  }
+
+  return {
+    definitiveMismatch: reasons.length > 0,
+    reasons,
+    unsupportedFilters
+  };
+}
+
+function normalizeFilterArray(value) {
+  return Array.isArray(value)
+    ? value.map(normalizeString).filter(Boolean).filter((item) => item !== '不限')
+    : [];
+}
+
+function hasMeaningfulFilterValue(value) {
+  if (Array.isArray(value)) {
+    return value.some((item) => normalizeString(item) && normalizeString(item) !== '不限');
+  }
+
+  return Boolean(normalizeString(value) && normalizeString(value) !== '不限');
+}
+
+function normalizeString(value) {
+  return String(value || '').trim();
+}
+
+function parseAge(text) {
+  const match = normalizeString(text).match(/(\d{2})岁/);
+  return match ? Number(match[1]) : Number.NaN;
+}
+
+function matchesActivityFilter(activeTime, filterValue) {
+  const actualRank = ACTIVITY_RANKS.get(normalizeString(activeTime));
+  const filterRank = ACTIVITY_RANKS.get(normalizeString(filterValue));
+  if (!actualRank || !filterRank) {
+    return true;
+  }
+  return actualRank <= filterRank;
+}
+
+function matchesSalaryFilter(expectText, filterValue) {
+  const actual = parseSalaryRange(expectText);
+  const filter = parseSalaryRange(filterValue);
+  if (!actual || !filter) {
+    return true;
+  }
+
+  return actual.min <= filter.max && actual.max >= filter.min;
+}
+
+function parseSalaryRange(text) {
+  const normalized = normalizeString(text).toUpperCase();
+  if (!normalized) {
+    return null;
+  }
+
+  const rangeMatch = normalized.match(SALARY_RANGE_PATTERN);
+  if (rangeMatch) {
+    const [, min, max] = rangeMatch;
+    return { min: Number(min), max: Number(max) };
+  }
+
+  const belowMatch = normalized.match(SALARY_BELOW_PATTERN);
+  if (belowMatch) {
+    const [, max] = belowMatch;
+    return { min: 0, max: Number(max) };
+  }
+
+  const aboveMatch = normalized.match(SALARY_ABOVE_PATTERN);
+  if (aboveMatch) {
+    const [, min] = aboveMatch;
+    return { min: Number(min), max: Number.MAX_SAFE_INTEGER };
+  }
+
+  return null;
+}
+
+function extractExpectedCity(expectText) {
+  const normalized = normalizeString(expectText);
+  if (!normalized) {
+    return '';
+  }
+
+  return normalized.split(/\s+/)[0] || '';
+}
+
+function extractSchoolName(educationItems) {
+  const items = Array.isArray(educationItems) ? educationItems : [];
+  for (const item of items) {
+    const normalized = normalizeString(item);
+    if (!normalized) {
+      continue;
+    }
+
+    const tokens = normalized.split(/\s+/).filter(Boolean);
+    for (const token of tokens) {
+      if (/\d{4}-\d{4}|\d{4}-至今|\d{4}/.test(token)) {
+        continue;
+      }
+      if (['博士', '硕士', '本科', '大专', '高中', '中专', '中技', '初中'].includes(token)) {
+        continue;
+      }
+      return token;
+    }
+  }
+
+  return '';
+}
+
+function deepMergeObjects(...values) {
+  const result = {};
+
+  for (const value of values) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      continue;
+    }
+
+    for (const [key, fieldValue] of Object.entries(value)) {
+      if (Array.isArray(fieldValue)) {
+        result[key] = fieldValue.slice();
+        continue;
+      }
+
+      if (fieldValue && typeof fieldValue === 'object') {
+        result[key] = deepMergeObjects(result[key], fieldValue);
+        continue;
+      }
+
+      result[key] = fieldValue;
+    }
+  }
+
+  return result;
+}
+
 function parseChatDecision(raw) {
   const cleaned = raw
     .replace(/^```json\s*/i, '')
@@ -1103,17 +1555,35 @@ function parseChatDecision(raw) {
     const action = String(decision.action || '').toLowerCase();
 
     if (!['reply', 'request_resume', 'skip'].includes(action)) {
-      return { action: 'skip', replyText: '', reason: 'invalid_action' };
+      return { action: 'skip', replyText: '', reason: 'invalid_action', requirementEvidence: [] };
     }
 
     return {
       action,
       replyText: String(decision.replyText || ''),
-      reason: String(decision.reason || '')
+      reason: String(decision.reason || ''),
+      requirementEvidence: normalizeRequirementEvidence(decision.requirementEvidence)
     };
   } catch (error) {
-    return { action: 'skip', replyText: '', reason: `parse_failed:${error.message}` };
+    return { action: 'skip', replyText: '', reason: `parse_failed:${error.message}`, requirementEvidence: [] };
   }
+}
+
+function normalizeRequirementEvidence(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => normalizeString(item))
+    .filter(Boolean)
+    .slice(0, 3);
+}
+
+function buildLlmEvaluationMessage({ action, candidateName, reason, requirementEvidence }) {
+  const evidence = Array.isArray(requirementEvidence) ? requirementEvidence.filter(Boolean) : [];
+  const basisText = evidence.length > 0 ? ` 依据: ${evidence.join('；')}` : '';
+  return `LLM ${action}: ${candidateName} ${reason}${basisText}`.trim();
 }
 
 module.exports = {

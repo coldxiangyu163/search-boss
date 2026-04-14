@@ -6,6 +6,7 @@ const {
   formatResumeState,
   formatGuardStatus,
   buildCandidateTimeline,
+  buildCandidateEvaluation,
   buildResumePreviewUrl,
   isResumeDownloadable,
   buildCandidateDownloadQuery
@@ -51,6 +52,41 @@ test('candidate UI helpers build a reverse chronological timeline', () => {
   assert.equal(timeline[0].title, '简历已下载');
   assert.equal(timeline[1].type, 'message');
   assert.equal(timeline[2].type, 'action');
+});
+
+test('candidate UI helpers normalize followup model evaluation from workflow metadata', () => {
+  const evaluation = buildCandidateEvaluation({
+    profile_metadata: {
+      decision: 'greet',
+      priority: 'A',
+      reasoning: 'source match',
+      facts: { city: '重庆' }
+    },
+    workflow_metadata: {
+      followupDecision: {
+        action: 'request_resume',
+        reason: '候选人与岗位画像匹配',
+        requirementEvidence: [
+          '3-5年经验符合岗位要求',
+          '今日活跃且明确表达兴趣'
+        ],
+        source: 'llm'
+      },
+      filterGate: {
+        unsupportedFilters: ['jobIntent']
+      }
+    }
+  });
+
+  assert.equal(evaluation.kind, 'followup');
+  assert.equal(evaluation.action, 'request_resume');
+  assert.equal(evaluation.label, '索要简历');
+  assert.equal(evaluation.reason, '候选人与岗位画像匹配');
+  assert.deepEqual(evaluation.requirementEvidence, [
+    '3-5年经验符合岗位要求',
+    '今日活跃且明确表达兴趣'
+  ]);
+  assert.deepEqual(evaluation.unsupportedFilters, ['jobIntent']);
 });
 
 test('candidate UI helpers build preview urls only for stored resumes paths', () => {

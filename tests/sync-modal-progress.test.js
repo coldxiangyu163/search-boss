@@ -163,7 +163,8 @@ test('sync modal helper and app scripts can load together in a browser context',
         getLifecycleBadgeClass: noop,
         getResumeBadgeClass: noop,
         getGuardBadgeClass: noop,
-        buildCandidateTimeline: noop
+        buildCandidateTimeline: noop,
+        buildCandidateEvaluation: noop
       },
       SyncLogScroll: {
         captureSyncLogScrollSnapshot: noop,
@@ -209,6 +210,7 @@ test('openHrLiveView binds current active run instead of standby view', () => {
         getResumeBadgeClass: noop,
         getGuardBadgeClass: noop,
         buildCandidateTimeline: noop,
+        buildCandidateEvaluation: noop,
         buildResumePreviewUrl: noop
       },
       SyncLogScroll: {
@@ -295,6 +297,7 @@ test('openHrLiveView refreshes dashboard summary to get latest active run when s
         getResumeBadgeClass: noop,
         getGuardBadgeClass: noop,
         buildCandidateTimeline: noop,
+        buildCandidateEvaluation: noop,
         buildResumePreviewUrl: noop
       },
       SyncLogScroll: {
@@ -389,6 +392,7 @@ test('openHrLiveView stays in standby when refreshed dashboard summary has no ac
         getResumeBadgeClass: noop,
         getGuardBadgeClass: noop,
         buildCandidateTimeline: noop,
+        buildCandidateEvaluation: noop,
         buildResumePreviewUrl: noop
       },
       SyncLogScroll: {
@@ -473,6 +477,7 @@ test('manageOverviewPolling starts realtime refresh on overview views only', () 
         getResumeBadgeClass: noop,
         getGuardBadgeClass: noop,
         buildCandidateTimeline: noop,
+        buildCandidateEvaluation: noop,
         buildResumePreviewUrl: noop
       },
       SyncLogScroll: {
@@ -555,6 +560,7 @@ test('manageOverviewPolling pauses realtime refresh while runtime console live o
         getResumeBadgeClass: noop,
         getGuardBadgeClass: noop,
         buildCandidateTimeline: noop,
+        buildCandidateEvaluation: noop,
         buildResumePreviewUrl: noop
       },
       SyncLogScroll: {
@@ -630,6 +636,7 @@ test('render mounts runtime console overlay inside app content instead of append
         getResumeBadgeClass: noop,
         getGuardBadgeClass: noop,
         buildCandidateTimeline: noop,
+        buildCandidateEvaluation: noop,
         buildResumePreviewUrl: noop
       },
       SyncLogScroll: {

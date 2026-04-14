@@ -1144,6 +1144,9 @@ function buildResumePanelExpression() {
       }
 
       for (const child of Array.from(detailDiv.children)) {
+        if (child.classList.contains('name-contet') || child.classList.contains('high-light-orange') ||
+            child.classList.contains('resume-btn-content') || child.classList.contains('label-remark-content') ||
+            child.classList.contains('base-info-item')) continue;
         const text = (child.textContent || '').trim();
         if (!text) continue;
         if (/\\d+岁/.test(text)) age = text;
@@ -1152,9 +1155,47 @@ function buildResumePanelExpression() {
       }
     }
 
-    const collectList = (selector) => Array.from(container.querySelectorAll(selector))
-      .map((item) => (item.textContent || '').replace(/\\s+/g, ' ').trim())
-      .filter(Boolean);
+    const workTimes = [];
+    const eduTimes = [];
+    const workDetails = [];
+    const eduDetails = [];
+
+    const timeList = container.querySelector('.experience-content.time-list');
+    if (timeList) {
+      for (const li of timeList.querySelectorAll('li')) {
+        const useEl = li.querySelector('use');
+        const href = useEl ? (useEl.getAttribute('xlink:href') || useEl.getAttribute('href') || '') : '';
+        const timeSpan = li.querySelector('.time');
+        const timeText = timeSpan ? (timeSpan.textContent || '').trim() : (li.textContent || '').trim();
+        if (!timeText) continue;
+        if (href.includes('base-info-edu')) eduTimes.push(timeText);
+        else if (href.includes('base-info-work') || !href) workTimes.push(timeText);
+      }
+    }
+
+    const detailList = container.querySelector('.experience-content.detail-list');
+    if (detailList) {
+      for (const li of detailList.querySelectorAll('li')) {
+        const useEl = li.querySelector('use');
+        const href = useEl ? (useEl.getAttribute('xlink:href') || useEl.getAttribute('href') || '') : '';
+        const valueSpan = li.querySelector('.value');
+        const valueText = valueSpan ? (valueSpan.textContent || '').trim() : (li.textContent || '').trim();
+        if (!valueText) continue;
+        if (href.includes('base-info-edu')) eduDetails.push(valueText);
+        else if (href.includes('base-info-work') || !href) workDetails.push(valueText);
+      }
+    }
+
+    const buildHistory = (times, details) => {
+      const rows = [];
+      for (let i = 0; i < Math.max(times.length, details.length); i += 1) {
+        const parts = [];
+        if (times[i]) parts.push(times[i]);
+        if (details[i]) parts.push(details[i]);
+        if (parts.length) rows.push(parts.join('  '));
+      }
+      return rows;
+    };
 
     const positionContent = container.querySelector('.position-content');
     return JSON.stringify({
@@ -1164,8 +1205,8 @@ function buildResumePanelExpression() {
       experience,
       degree,
       activeTime: pickText('.active-time'),
-      workHistory: collectList('.experience-content.detail-list li'),
-      education: collectList('.experience-content.detail-list li .value'),
+      workHistory: buildHistory(workTimes, workDetails),
+      education: buildHistory(eduTimes, eduDetails),
       jobChatting: positionContent ? ((positionContent.querySelector('.position-name')?.textContent || '').trim()) : '',
       expect: positionContent ? ((positionContent.querySelector('.position-item.expect .value')?.textContent || '').trim()) : ''
     });
