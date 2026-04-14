@@ -5,6 +5,7 @@ const express = require('express');
 const session = require('express-session');
 const PgStore = require('connect-pg-simple')(session);
 const { authMiddleware, requireRole, resolveHrScope, isSystemAdmin, isAdminRole } = require('./middleware/auth');
+const { assertSupportedUserRole } = require('./services/auth-service');
 const {
   LicenseService,
   getHrAccountLicenseStatus,
@@ -29,6 +30,10 @@ function canAccessRun(user, runScope) {
   }
 
   return String(user.hr_account_id) === String(runScope.hrAccountId);
+}
+
+function rejectLegacyRole(res, role) {
+  return res.status(400).json(invalidRolePayload(role));
 }
 
 function createApp({ services = {}, config = {}, pool = null } = {}) {
@@ -1086,7 +1091,13 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
       if (!req.user || !isAdminRole(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
-      const result = await pool?.query('select * from departments order by id') || { rows: [] };
+      let result;
+      if (isSystemAdmin(req.user)) {
+        result = await pool?.query('select * from departments order by id');
+      } else {
+        result = await pool?.query('select * from departments where id = $1 order by id', [req.user.department_id]);
+      }
+      result ||= { rows: [] };
       res.json({ items: result.rows });
     } catch (error) {
       next(error);
@@ -1186,6 +1197,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
       if (!req.user || !isAdminRole(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
+      assertSupportedUserRole(req.body.role);
       if (!isSystemAdmin(req.user)) {
         if (req.body.role === 'system_admin') {
           return res.status(403).json({ error: 'forbidden', message: '无权创建该角色的用户' });
@@ -1209,6 +1221,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
       if (!req.user || !isAdminRole(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
+      assertSupportedUserRole(req.body.role);
       if (!isSystemAdmin(req.user)) {
         const target = await pool?.query('select department_id, role from users where id = $1', [req.params.id]);
         if (!target?.rows[0] || String(target.rows[0].department_id) !== String(req.user.department_id)) {
@@ -1219,6 +1232,9 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
         }
       }
       const { name, email, phone, role, departmentId, status } = req.body;
+      if (role !== undefined && role !== null && !isValidUserRole(role)) {
+        return res.status(400).json({ error: 'invalid_role', message: '不支持的角色类型' });
+      }
       if (!isSystemAdmin(req.user) && role === 'system_admin') {
         return res.status(403).json({ error: 'forbidden', message: '无权设置该角色' });
       }
@@ -1507,12 +1523,18 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
       if (!req.user || !isAdminRole(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
-      const result = await pool?.query(`
+      const values = [];
+      let query = `
         select ba.*, ha.name as hr_account_name
         from boss_accounts ba
         left join hr_accounts ha on ha.id = ba.hr_account_id
-        order by ba.id
-      `) || { rows: [] };
+      `;
+      if (!isSystemAdmin(req.user)) {
+        values.push(req.user.department_id);
+        query += ' where ha.department_id = $1';
+      }
+      query += ' order by ba.id';
+      const result = await pool?.query(query, values) || { rows: [] };
       res.json({ items: result.rows });
     } catch (error) { next(error); }
   });
@@ -1570,14 +1592,20 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
       if (!req.user || !isAdminRole(req.user)) {
         return res.status(403).json({ error: 'forbidden' });
       }
-      const result = await pool?.query(`
+      const values = [];
+      let query = `
         select bi.*, ba.boss_login_name, ba.display_name as boss_display_name,
                ba.hr_account_id, ha.name as hr_account_name
         from browser_instances bi
         left join boss_accounts ba on ba.id = bi.boss_account_id
         left join hr_accounts ha on ha.id = ba.hr_account_id
-        order by bi.id
-      `) || { rows: [] };
+      `;
+      if (!isSystemAdmin(req.user)) {
+        values.push(req.user.department_id);
+        query += ' where ha.department_id = $1';
+      }
+      query += ' order by bi.id';
+      const result = await pool?.query(query, values) || { rows: [] };
       res.json({ items: result.rows });
     } catch (error) { next(error); }
   });
@@ -1833,10 +1861,26 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
       return;
     }
 
+    if (error.message === 'invalid_role') {
+      res.status(400).json({
+        error: 'invalid_role',
+        message: '不支持 legacy enterprise_admin 角色，请改用 dept_admin、system_admin 或 hr。'
+      });
+      return;
+    }
+
     if (error.message === 'schedule_not_found') {
       res.status(404).json({
         error: 'schedule_not_found',
         message: '未找到对应的自动化任务配置。'
+      });
+      return;
+    }
+
+    if (error.message === 'invalid_role') {
+      res.status(400).json({
+        error: 'invalid_role',
+        message: '不支持的角色类型'
       });
       return;
     }

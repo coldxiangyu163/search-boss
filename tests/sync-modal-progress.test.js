@@ -863,6 +863,108 @@ test('render mounts legacy admin modals from root content shell and preserves op
   assert.match(nodes.app.innerHTML, /id="hr-modal" class="modal-overlay" style="display:flex"/);
 });
 
+test('dept_admin copy uses department scope instead of global wording', () => {
+  const helperScript = fs.readFileSync(
+    path.join(__dirname, '../public/sync-modal-progress.js'),
+    'utf8'
+  );
+  const appScript = fs.readFileSync(
+    path.join(__dirname, '../public/app.js'),
+    'utf8'
+  );
+
+  const noop = () => {};
+  const nodes = {
+    'page-eyebrow': { textContent: '' },
+    'page-title': { textContent: '' },
+    'page-description': { textContent: '' },
+    app: { innerHTML: '' }
+  };
+  const context = vm.createContext({
+    window: {
+      JobUiHelpers: {
+        formatJobStatus: noop,
+        getJobStatusBadgeClass: noop,
+        isJobActionEnabled: noop
+      },
+      CandidateUiHelpers: {
+        formatLifecycleStatus: noop,
+        formatResumeState: noop,
+        formatGuardStatus: noop,
+        getLifecycleBadgeClass: noop,
+        getResumeBadgeClass: noop,
+        getGuardBadgeClass: noop,
+        buildCandidateTimeline: () => [],
+        buildResumePreviewUrl: noop
+      },
+      SyncLogScroll: {
+        captureSyncLogScrollSnapshot: () => null,
+        resolveSyncLogScrollTop: () => 0
+      },
+      location: { href: '' },
+      setInterval: noop,
+      clearInterval: noop
+    },
+    document: {
+      addEventListener: noop,
+      getElementById(id) {
+        return nodes[id] || null;
+      },
+      querySelector() {
+        return null;
+      },
+      body: { appendChild: noop }
+    },
+    fetch: noop,
+    module: undefined,
+    console
+  });
+
+  vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+  vm.runInContext(appScript, context, { filename: 'app.js' });
+  vm.runInContext(`
+    state.currentUser = { role: 'dept_admin' };
+    state.summary = { kpis: { jobs: 2, candidates: 5 }, health: { api: 'ok', database: 'ok' }, activeRun: null };
+    state.hrOverview = [{ hr_name: '赵强', job_count: 2, candidate_count: 5, greeted_today: 1, resumes_today: 1 }];
+    state.jobs = [];
+    state.taskRuns = [];
+    state.taskRunsPagination = { page: 1, totalPages: 0, total: 0 };
+    state.taskRunsFilter = { status: '', mode: '' };
+    manageOverviewPolling = () => {};
+
+    state.view = 'admin-overview';
+    render();
+    globalThis.adminOverviewPage = {
+      title: document.getElementById('page-title').textContent,
+      description: document.getElementById('page-description').textContent,
+      html: document.getElementById('app').innerHTML
+    };
+
+    state.view = 'jobs';
+    render();
+    globalThis.jobsPage = {
+      description: document.getElementById('page-description').textContent,
+      html: document.getElementById('app').innerHTML
+    };
+
+    state.view = 'task-runs';
+    render();
+    globalThis.taskRunsPage = {
+      description: document.getElementById('page-description').textContent,
+      html: document.getElementById('app').innerHTML
+    };
+  `, context);
+
+  assert.match(context.adminOverviewPage.title, /部门招聘运营看板/);
+  assert.match(context.adminOverviewPage.description, /本部门 HR/);
+  assert.match(context.adminOverviewPage.html, /部门指标/);
+  assert.doesNotMatch(context.adminOverviewPage.html, /全局指标/);
+  assert.doesNotMatch(context.jobsPage.description, /全局/);
+  assert.match(context.jobsPage.description, /本部门/);
+  assert.doesNotMatch(context.taskRunsPage.description, /查看所有/);
+  assert.match(context.taskRunsPage.description, /本部门/);
+});
+
 test('showModal initializes admin modal state without depending on existing form DOM values', () => {
   const helperScript = fs.readFileSync(
     path.join(__dirname, '../public/sync-modal-progress.js'),
@@ -1050,6 +1152,119 @@ test('admin modal form values are rebuilt from state on rerender', () => {
   assert.doesNotMatch(html, /enterprise_admin/);
   assert.match(html, /<option value="11" selected>/);
   assert.match(html, /<option value="inactive" selected>/);
+});
+
+test('dept_admin views render department-scoped copy instead of global wording', () => {
+  const helperScript = fs.readFileSync(
+    path.join(__dirname, '../public/sync-modal-progress.js'),
+    'utf8'
+  );
+  const appScript = fs.readFileSync(
+    path.join(__dirname, '../public/app.js'),
+    'utf8'
+  );
+
+  const noop = () => {};
+  const nodes = {
+    'page-eyebrow': { textContent: '' },
+    'page-title': { textContent: '' },
+    'page-description': { textContent: '' },
+    app: { innerHTML: '' }
+  };
+  const context = vm.createContext({
+    window: {
+      JobUiHelpers: {
+        formatJobStatus: noop,
+        getJobStatusBadgeClass: noop,
+        isJobActionEnabled: noop
+      },
+      CandidateUiHelpers: {
+        formatLifecycleStatus: noop,
+        formatResumeState: noop,
+        formatGuardStatus: noop,
+        getLifecycleBadgeClass: noop,
+        getResumeBadgeClass: noop,
+        getGuardBadgeClass: noop,
+        buildCandidateTimeline: () => [],
+        buildResumePreviewUrl: noop
+      },
+      SyncLogScroll: {
+        captureSyncLogScrollSnapshot: () => null,
+        resolveSyncLogScrollTop: () => 0
+      },
+      location: { href: '' },
+      setInterval: noop,
+      clearInterval: noop
+    },
+    document: {
+      addEventListener: noop,
+      getElementById(id) {
+        return nodes[id] || null;
+      },
+      querySelector() {
+        return null;
+      },
+      body: { appendChild: noop }
+    },
+    fetch: noop,
+    module: undefined,
+    console
+  });
+
+  vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+  vm.runInContext(appScript, context, { filename: 'app.js' });
+
+  vm.runInContext(`
+    state.summary = {
+      kpis: { jobs: 6, candidates: 18 },
+      health: { api: 'ok', database: 'ok' }
+    };
+    state.hrOverview = [{
+      hr_name: '张三',
+      boss_account_name: 'boss-1',
+      browser_status: 'idle',
+      job_count: 6,
+      candidate_count: 18,
+      greeted_today: 5,
+      followup_today: 2,
+      resumes_today: 1,
+      last_run_status: 'completed',
+      last_run_mode: 'source'
+    }];
+    state.currentUser = { role: 'dept_admin' };
+    state.jobs = [];
+    state.taskRuns = [];
+    state.taskRunsLoading = false;
+    state.taskRunsFilter = { status: '', mode: '' };
+    state.taskRunsPagination = { page: 1, totalPages: 0, total: 0 };
+    manageOverviewPolling = () => {};
+
+    state.view = 'admin-overview';
+    render();
+  `, context);
+
+  assert.equal(nodes['page-title'].textContent, '部门招聘运营看板');
+  assert.match(nodes['page-description'].textContent, /查看本部门 HR 的业务数据与执行状态/);
+  assert.match(nodes.app.innerHTML, /部门指标/);
+  assert.match(nodes.app.innerHTML, /本部门 HR 职位合计/);
+  assert.doesNotMatch(nodes.app.innerHTML, /全局指标/);
+
+  vm.runInContext(`
+    state.view = 'jobs';
+    render();
+  `, context);
+
+  assert.match(nodes.app.innerHTML, /部门职位概览，按 HR 查看候选人规模与转化数据/);
+  assert.doesNotMatch(nodes.app.innerHTML, /全局职位概览/);
+
+  vm.runInContext(`
+    state.view = 'task-runs';
+    render();
+  `, context);
+
+  assert.match(nodes['page-description'].textContent, /查看本部门定时任务与手动任务的执行详情与状态/);
+  assert.match(nodes.app.innerHTML, /查看本部门定时任务与手动任务的执行记录、状态与结果/);
+  assert.doesNotMatch(nodes.app.innerHTML, /查看所有定时任务与手动任务的执行记录、状态与结果/);
 });
 
 test('runtime console logs render as single terminal stream without summary chips or split sections', () => {

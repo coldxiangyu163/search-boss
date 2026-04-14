@@ -141,6 +141,33 @@ test('POST /api/auth/logout returns ok', async () => {
   assert.equal(res.body.ok, true);
 });
 
+test('AuthService.createUser rejects legacy enterprise_admin role', async () => {
+  const { AuthService } = require('../src/services/auth-service');
+  let called = false;
+  const pool = {
+    async query() {
+      called = true;
+      return { rows: [] };
+    }
+  };
+  const service = new AuthService({ pool });
+
+  await assert.rejects(
+    () => service.createUser({
+      name: 'Legacy Admin',
+      email: 'legacy@test.com',
+      password: 'test123',
+      role: 'enterprise_admin',
+      departmentId: 1
+    }),
+    (error) => {
+      assert.equal(error.message, 'invalid_role');
+      return true;
+    }
+  );
+  assert.equal(called, false);
+});
+
 test('GET /api/auth/me returns 401 when not logged in', async () => {
   const { AuthService } = require('../src/services/auth-service');
   const pool = createMockPool([]);
@@ -440,4 +467,33 @@ test('resolveHrScope returns correct scope per role', () => {
     resolveHrScope({ user: { role: 'hr', hr_account_id: 10 } }),
     { scope: 'self', hrAccountId: 10 }
   );
+});
+
+test('AuthService.createUser rejects legacy enterprise_admin role before writing', async () => {
+  const { AuthService } = require('../src/services/auth-service');
+  let queryCalled = false;
+  const svc = new AuthService({
+    pool: {
+      query() {
+        queryCalled = true;
+        return { rows: [] };
+      }
+    }
+  });
+
+  await assert.rejects(
+    () => svc.createUser({
+      name: 'Legacy Admin',
+      email: 'legacy@test.com',
+      phone: '',
+      password: 'secret123',
+      role: 'enterprise_admin',
+      departmentId: 1
+    }),
+    (error) => {
+      assert.equal(error.message, 'invalid_role');
+      return true;
+    }
+  );
+  assert.equal(queryCalled, false);
 });

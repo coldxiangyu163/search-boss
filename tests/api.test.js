@@ -4836,6 +4836,131 @@ test('GET /api/runs supports status and mode filters', async () => {
   assert.equal(capturedParams.mode, 'source');
 });
 
+test('GET /api/admin/departments scopes dept_admin to current department', async () => {
+  let capturedSql = '';
+  let capturedParams = [];
+  const pool = {
+    query(sql, params) {
+      capturedSql = sql;
+      capturedParams = params || [];
+      return { rows: [{ id: 12, name: '销售一部', status: 'active' }] };
+    }
+  };
+
+  const app = createAuthedApp({
+    user: { id: 7, role: 'dept_admin', department_id: 12 },
+    pool
+  });
+
+  const response = await request(app).get('/api/admin/departments');
+
+  assert.equal(response.status, 200);
+  assert.match(capturedSql, /select \* from departments/i);
+  assert.match(capturedSql, /where id = \$1/i);
+  assert.deepEqual(capturedParams, [12]);
+  assert.deepEqual(response.body.items, [{ id: 12, name: '销售一部', status: 'active' }]);
+});
+
+test('GET /api/admin/boss-accounts scopes dept_admin to current department', async () => {
+  let capturedSql = '';
+  let capturedParams = [];
+  const pool = {
+    query(sql, params) {
+      capturedSql = sql;
+      capturedParams = params || [];
+      return { rows: [{ id: 22, hr_account_name: '李四', hr_account_id: 9 }] };
+    }
+  };
+
+  const app = createAuthedApp({
+    user: { id: 7, role: 'dept_admin', department_id: 12 },
+    pool
+  });
+
+  const response = await request(app).get('/api/admin/boss-accounts');
+
+  assert.equal(response.status, 200);
+  assert.match(capturedSql, /from boss_accounts ba/i);
+  assert.match(capturedSql, /where ha\.department_id = \$1/i);
+  assert.deepEqual(capturedParams, [12]);
+  assert.equal(response.body.items[0].id, 22);
+});
+
+test('GET /api/admin/browser-instances scopes dept_admin to current department', async () => {
+  let capturedSql = '';
+  let capturedParams = [];
+  const pool = {
+    query(sql, params) {
+      capturedSql = sql;
+      capturedParams = params || [];
+      return { rows: [{ id: 31, instance_name: '部门浏览器', hr_account_id: 9 }] };
+    }
+  };
+
+  const app = createAuthedApp({
+    user: { id: 7, role: 'dept_admin', department_id: 12 },
+    pool
+  });
+
+  const response = await request(app).get('/api/admin/browser-instances');
+
+  assert.equal(response.status, 200);
+  assert.match(capturedSql, /from browser_instances bi/i);
+  assert.match(capturedSql, /where ha\.department_id = \$1/i);
+  assert.deepEqual(capturedParams, [12]);
+  assert.equal(response.body.items[0].id, 31);
+});
+
+test('POST /api/admin/users rejects legacy enterprise_admin role', async () => {
+  let createUserCalled = false;
+  const app = createAuthedApp({
+    user: { id: 1, role: 'system_admin' },
+    services: {
+      auth: {
+        async createUser() {
+          createUserCalled = true;
+          return { id: 1 };
+        }
+      }
+    }
+  });
+
+  const response = await request(app)
+    .post('/api/admin/users')
+    .send({
+      name: '旧角色管理员',
+      email: 'legacy@test.com',
+      password: 'secret123',
+      role: 'enterprise_admin',
+      departmentId: 3
+    });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'invalid_role');
+  assert.equal(createUserCalled, false);
+});
+
+test('PATCH /api/admin/users/:id rejects legacy enterprise_admin role', async () => {
+  let queryCalled = false;
+  const app = createAuthedApp({
+    user: { id: 1, role: 'system_admin' },
+    pool: {
+      query() {
+        queryCalled = true;
+        return { rows: [] };
+      }
+    }
+  });
+
+  const response = await request(app)
+    .patch('/api/admin/users/8')
+    .send({ role: 'enterprise_admin' });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'invalid_role');
+  assert.equal(queryCalled, false);
+});
+
 test('GET /api/runs scopes dept_admin to current department', async () => {
   let capturedParams = null;
 
@@ -5036,4 +5161,132 @@ test('GET /api/runs/:runId/events rejects access to other HR run', async () => {
 
   assert.equal(response.status, 403);
   assert.equal(response.body.error, 'forbidden');
+});
+
+test('GET /api/admin/departments scopes dept_admin to current department', async () => {
+  let capturedParams = null;
+  let capturedSql = '';
+  const app = createAuthedApp({
+    user: { id: 3, role: 'dept_admin', department_id: 10 },
+    pool: {
+      query(sql, params) {
+        capturedSql = sql;
+        capturedParams = params;
+        return { rows: [{ id: 10, name: '销售市场部', status: 'active' }] };
+      }
+    },
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } }
+    }
+  });
+
+  const response = await request(app).get('/api/admin/departments');
+
+  assert.equal(response.status, 200);
+  assert.match(capturedSql, /where id = \$1/i);
+  assert.deepEqual(capturedParams, [10]);
+  assert.deepEqual(response.body.items, [{ id: 10, name: '销售市场部', status: 'active' }]);
+});
+
+test('GET /api/admin/boss-accounts scopes dept_admin to current department', async () => {
+  let capturedParams = null;
+  let capturedSql = '';
+  const app = createAuthedApp({
+    user: { id: 3, role: 'dept_admin', department_id: 10 },
+    pool: {
+      query(sql, params) {
+        capturedSql = sql;
+        capturedParams = params;
+        return { rows: [{ id: 7, hr_account_name: '赵强HR' }] };
+      }
+    },
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } }
+    }
+  });
+
+  const response = await request(app).get('/api/admin/boss-accounts');
+
+  assert.equal(response.status, 200);
+  assert.match(capturedSql, /where ha\.department_id = \$1/i);
+  assert.deepEqual(capturedParams, [10]);
+  assert.equal(response.body.items.length, 1);
+  assert.equal(response.body.items[0].id, 7);
+});
+
+test('GET /api/admin/browser-instances scopes dept_admin to current department', async () => {
+  let capturedParams = null;
+  let capturedSql = '';
+  const app = createAuthedApp({
+    user: { id: 3, role: 'dept_admin', department_id: 10 },
+    pool: {
+      query(sql, params) {
+        capturedSql = sql;
+        capturedParams = params;
+        return { rows: [{ id: 11, hr_account_name: '赵强HR' }] };
+      }
+    },
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } }
+    }
+  });
+
+  const response = await request(app).get('/api/admin/browser-instances');
+
+  assert.equal(response.status, 200);
+  assert.match(capturedSql, /where ha\.department_id = \$1/i);
+  assert.deepEqual(capturedParams, [10]);
+  assert.equal(response.body.items.length, 1);
+  assert.equal(response.body.items[0].id, 11);
+});
+
+test('POST /api/admin/users rejects legacy enterprise_admin role with invalid_role', async () => {
+  let called = false;
+  const app = createAuthedApp({
+    user: { id: 1, role: 'system_admin', department_id: 1 },
+    services: {
+      auth: {
+        async createUser() {
+          called = true;
+          return {};
+        }
+      },
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } }
+    }
+  });
+
+  const response = await request(app)
+    .post('/api/admin/users')
+    .send({
+      name: 'Legacy',
+      email: 'legacy@test.com',
+      password: 'test123',
+      role: 'enterprise_admin',
+      departmentId: 1
+    });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'invalid_role');
+  assert.equal(called, false);
+});
+
+test('PATCH /api/admin/users/:id rejects legacy enterprise_admin role with invalid_role', async () => {
+  const app = createAuthedApp({
+    user: { id: 1, role: 'system_admin', department_id: 1 },
+    pool: {
+      query() {
+        throw new Error('unexpected query');
+      }
+    },
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } }
+    }
+  });
+
+  const response = await request(app)
+    .patch('/api/admin/users/9')
+    .send({ role: 'enterprise_admin' });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'invalid_role');
 });
