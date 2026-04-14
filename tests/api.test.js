@@ -4654,6 +4654,36 @@ test('AgentService createRun allows sync_jobs mode without a job key', async () 
   assert.equal(queryCalls[1].params[1], null);
 });
 
+test('AgentService pauseSourceSchedulesForDay also updates disabled source schedules', async () => {
+  let capturedSql = '';
+  let capturedParams = null;
+  const { AgentService } = require('../src/services/agent-service');
+  const service = new AgentService({
+    pool: {
+      async query(sql, params = []) {
+        capturedSql = sql;
+        capturedParams = params;
+        return { rowCount: 1, rows: [] };
+      }
+    }
+  });
+
+  const result = await service.pauseSourceSchedulesForDay({
+    hrAccountId: 6,
+    reason: 'boss_chat_quota_exhausted',
+    blockedUntil: '2026-04-15T00:00:00.000Z',
+    details: { runId: 200 }
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.updatedCount, 1);
+  assert.match(capturedSql, /where task_type = 'source'/i);
+  assert.doesNotMatch(capturedSql, /enabled = true/i);
+  assert.equal(capturedParams[0], 6);
+  assert.equal(capturedParams[1], 'boss_chat_quota_exhausted');
+  assert.equal(capturedParams[2], '2026-04-15T00:00:00.000Z');
+});
+
 test('AgentService completeRun generates terminal event when eventId is omitted', async () => {
   const queryCalls = [];
   let recordedPayload = null;

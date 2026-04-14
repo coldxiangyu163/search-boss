@@ -470,7 +470,6 @@ class AgentService {
             ),
             updated_at = now()
         where task_type = 'source'
-          and enabled = true
           and hr_account_id is not distinct from $1
       `,
       [hrAccountId || null, reason, effectiveBlockedUntil, updatedAt, details || {}]
