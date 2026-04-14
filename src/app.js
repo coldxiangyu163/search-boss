@@ -1877,14 +1877,6 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
       return;
     }
 
-    if (error.message === 'invalid_role') {
-      res.status(400).json({
-        error: 'invalid_role',
-        message: '不支持的角色类型'
-      });
-      return;
-    }
-
     res.status(500).json({
       error: error.message
     });

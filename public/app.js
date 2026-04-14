@@ -324,10 +324,6 @@ function isSysAdmin() {
   return state.currentUser && state.currentUser.role === 'system_admin';
 }
 
-function isDeptAdmin() {
-  return state.currentUser && state.currentUser.role === 'dept_admin';
-}
-
 function getViewTitleEntry(view) {
   if (!isDeptAdmin()) {
     return titles[view] || titles.command;
@@ -1900,7 +1896,6 @@ function renderAdminOverview() {
   const deptAdmin = isDeptAdmin();
   const hrs = state.hrOverview || [];
   const { kpis, health } = state.summary;
-  const deptAdmin = isDeptAdmin();
 
   const totalJobs = hrs.reduce((s, h) => s + (h.job_count || 0), 0);
   const totalCandidates = hrs.reduce((s, h) => s + (h.candidate_count || 0), 0);
@@ -4714,7 +4709,6 @@ function renderTaskRuns() {
   const deptAdmin = isDeptAdmin();
   const runs = state.taskRuns || [];
   const { page, totalPages, total } = state.taskRunsPagination;
-  const deptAdmin = isDeptAdmin();
 
   const statusOptions = [
     { value: '', label: '全部状态' },
