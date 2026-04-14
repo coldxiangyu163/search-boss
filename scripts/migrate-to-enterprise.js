@@ -29,11 +29,19 @@ async function main() {
     }
     console.log(`[migrate] department id: ${deptId}`);
 
+    const legacyAdminResult = await client.query(`
+      update users
+      set role = 'dept_admin',
+          updated_at = now()
+      where role = 'enterprise_admin'
+    `);
+    console.log(`[migrate] migrated legacy enterprise_admin users: ${legacyAdminResult.rowCount}`);
+
     // Create default admin
     const adminHash = await bcrypt.hash('admin123', 10);
     const adminResult = await client.query(`
       insert into users (department_id, name, email, password_hash, role)
-      values ($1, '默认管理员', 'admin@company.com', $2, 'enterprise_admin')
+      values ($1, '默认管理员', 'admin@company.com', $2, 'system_admin')
       on conflict (email) do nothing
       returning id
     `, [deptId, adminHash]);

@@ -19,7 +19,7 @@ create table if not exists users (
   email text unique,
   phone text unique,
   password_hash text not null,
-  role text not null check (role in ('system_admin', 'enterprise_admin', 'dept_admin', 'hr')),
+  role text not null check (role in ('system_admin', 'dept_admin', 'hr')),
   status text not null default 'active',
   expires_at timestamptz,
   max_hr_accounts integer not null default 0,
@@ -108,7 +108,7 @@ drop index if exists scheduled_jobs_job_key_task_type_key;
 create unique index if not exists scheduled_jobs_job_key_task_type_hr_unique
   on scheduled_jobs (job_key, task_type, coalesce(hr_account_id, 0));
 
--- Phase 3: system_admin role & enterprise admin limits
+-- Phase 3: system_admin role & dept admin limits
 alter table users
   add column if not exists expires_at timestamptz;
 
@@ -116,11 +116,16 @@ alter table users
   add column if not exists max_hr_accounts integer not null default 0;
 
 -- Update role constraint to include system_admin
+update users
+set role = 'dept_admin',
+    updated_at = now()
+where role = 'enterprise_admin';
+
 do $$
 begin
   alter table users drop constraint if exists users_role_check;
   alter table users add constraint users_role_check
-    check (role in ('system_admin', 'enterprise_admin', 'dept_admin', 'hr'));
+    check (role in ('system_admin', 'dept_admin', 'hr'));
 exception when others then null;
 end $$;
 

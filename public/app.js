@@ -313,7 +313,7 @@ const titles = {
 };
 
 function isAdmin() {
-  return state.currentUser && ['system_admin', 'enterprise_admin', 'dept_admin'].includes(state.currentUser.role);
+  return state.currentUser && ['system_admin', 'dept_admin'].includes(state.currentUser.role);
 }
 
 function isSysAdmin() {
@@ -411,7 +411,6 @@ function renderUserInfo() {
 
   const roleNames = {
     system_admin: '系统管理员',
-    enterprise_admin: '企业管理员',
     dept_admin: '部门管理员',
     hr: 'HR'
   };
@@ -2012,7 +2011,7 @@ function renderAdminOrg() {
   const depts = state.adminDepartments || [];
   const users = state.adminUsers || [];
   const hrAccounts = state.adminHrAccounts || [];
-  const roleNames = { system_admin: '系统管理员', enterprise_admin: '企业管理员', dept_admin: '部门管理员', hr: 'HR' };
+  const roleNames = { system_admin: '系统管理员', dept_admin: '部门管理员', hr: 'HR' };
   const deptOptions = depts.filter((d) => d.status === 'active').map((d) => `<option value="${d.id}">${d.name}</option>`).join('');
   const sys = isSysAdmin();
 
@@ -2054,7 +2053,7 @@ function renderAdminOrg() {
           <div>
             <p class="eyebrow">人员管理</p>
             <h3 class="card-title">系统用户</h3>
-            ${sys ? '<p class="card-subtitle">企业管理员可直接在此设置配额与有效期。</p>' : ''}
+            ${sys ? '<p class="card-subtitle">部门管理员可直接在此设置配额与有效期。</p>' : ''}
           </div>
           ${sys ? '<button class="button-primary" onclick="showModal(\'user-modal\')">新增用户</button>' : ''}
         </div>
@@ -2063,12 +2062,12 @@ function renderAdminOrg() {
           <tbody>
             ${users.length === 0 ? `<tr><td colspan="${sys ? 9 : 6}" style="text-align:center;color:var(--text-muted,#999)">暂无用户</td></tr>` : ''}
             ${users.map((u) => {
-              const isEA = u.role === 'enterprise_admin';
-              const hrCount = isEA ? hrAccounts.filter((h) => String(h.department_id) === String(u.department_id)).length : 0;
-              const expired = isEA && u.expires_at && new Date(u.expires_at) < new Date();
-              const expiryText = isEA ? (u.expires_at ? new Date(u.expires_at).toLocaleDateString() : '永久') : '-';
-              const expiryClass = isEA ? (expired ? 'badge-danger' : 'badge-success') : '';
-              const quotaText = isEA ? `${hrCount}/${u.max_hr_accounts || '不限'}` : '-';
+              const isDeptAdmin = u.role === 'dept_admin';
+              const hrCount = isDeptAdmin ? hrAccounts.filter((h) => String(h.department_id) === String(u.department_id)).length : 0;
+              const expired = isDeptAdmin && u.expires_at && new Date(u.expires_at) < new Date();
+              const expiryText = isDeptAdmin ? (u.expires_at ? new Date(u.expires_at).toLocaleDateString() : '永久') : '-';
+              const expiryClass = isDeptAdmin ? (expired ? 'badge-danger' : 'badge-success') : '';
+              const quotaText = isDeptAdmin ? `${hrCount}/${u.max_hr_accounts || '不限'}` : '-';
               return `<tr>
               <td>${u.id}</td><td>${u.name}</td><td>${u.email || '-'}</td>
               <td>${roleNames[u.role] || u.role}</td><td>${u.department_name || '-'}</td>
@@ -2077,7 +2076,7 @@ function renderAdminOrg() {
               <td>${quotaText}</td>
               <td>
                 <button class="btn-sm" onclick='editUser(${JSON.stringify(u).replace(/'/g, "&#39;")})'>编辑</button>
-                ${isEA ? `<button class="btn-sm" onclick='showLimitsModal(${JSON.stringify({ id: u.id, name: u.name, expires_at: u.expires_at, max_hr_accounts: u.max_hr_accounts }).replace(/'/g, "&#39;")})'>配额</button>` : ''}
+                ${isDeptAdmin ? `<button class="btn-sm" onclick='showLimitsModal(${JSON.stringify({ id: u.id, name: u.name, expires_at: u.expires_at, max_hr_accounts: u.max_hr_accounts }).replace(/'/g, "&#39;")})'>配额</button>` : ''}
                 <button class="btn-sm" onclick="resetPassword(${u.id}, '${u.name.replace(/'/g, "\\'")}')">重置密码</button>
                 <button class="btn-sm btn-danger" onclick="deleteUser(${u.id}, '${u.name.replace(/'/g, "\\'")}')">删除</button>
               </td>` : ''}
@@ -2338,7 +2337,7 @@ function renderAdminOrgModals() {
           value: userForm.role,
           modalKey: 'user',
           field: 'role',
-          optionsHtml: `<option value="hr" ${userForm.role === 'hr' ? 'selected' : ''}>HR</option><option value="dept_admin" ${userForm.role === 'dept_admin' ? 'selected' : ''}>部门管理员</option><option value="enterprise_admin" ${userForm.role === 'enterprise_admin' ? 'selected' : ''}>企业管理员</option>`
+          optionsHtml: `<option value="hr" ${userForm.role === 'hr' ? 'selected' : ''}>HR</option><option value="dept_admin" ${userForm.role === 'dept_admin' ? 'selected' : ''}>部门管理员</option>`
         })}
         ${renderAdminSelect({
           label: '所属部门',

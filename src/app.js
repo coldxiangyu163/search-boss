@@ -117,7 +117,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
     if (!pool) return true;
     if (_setupComplete === true) return true;
     try {
-      const result = await pool.query("select count(*) from users where role in ('system_admin', 'enterprise_admin')");
+      const result = await pool.query("select count(*) from users where role in ('system_admin', 'dept_admin')");
       _setupComplete = Number(result.rows[0].count) > 0;
       return _setupComplete;
     } catch {
@@ -1187,7 +1187,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
         return res.status(403).json({ error: 'forbidden' });
       }
       if (!isSystemAdmin(req.user)) {
-        if (['system_admin', 'enterprise_admin'].includes(req.body.role)) {
+        if (req.body.role === 'system_admin') {
           return res.status(403).json({ error: 'forbidden', message: '无权创建该角色的用户' });
         }
         if (req.body.departmentId && String(req.body.departmentId) !== String(req.user.department_id)) {
@@ -1214,12 +1214,12 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
         if (!target?.rows[0] || String(target.rows[0].department_id) !== String(req.user.department_id)) {
           return res.status(403).json({ error: 'forbidden', message: '只能编辑自己部门的用户' });
         }
-        if (['system_admin', 'enterprise_admin'].includes(target.rows[0].role)) {
+        if (target.rows[0].role === 'system_admin') {
           return res.status(403).json({ error: 'forbidden', message: '无权编辑该角色的用户' });
         }
       }
       const { name, email, phone, role, departmentId, status } = req.body;
-      if (!isSystemAdmin(req.user) && role && ['system_admin', 'enterprise_admin'].includes(role)) {
+      if (!isSystemAdmin(req.user) && role === 'system_admin') {
         return res.status(403).json({ error: 'forbidden', message: '无权设置该角色' });
       }
       const fields = ['name', 'email', 'phone', 'role', 'department_id', 'status'];

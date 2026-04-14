@@ -48,10 +48,6 @@ function resolveHrScope(req) {
     return { scope: 'all' };
   }
 
-  if (user.role === 'enterprise_admin') {
-    return { scope: 'department', departmentId: user.department_id };
-  }
-
   if (user.role === 'dept_admin') {
     return { scope: 'department', departmentId: user.department_id };
   }
@@ -68,7 +64,7 @@ function isSystemAdmin(user) {
 }
 
 function isAdminRole(user) {
-  return user && ['system_admin', 'enterprise_admin', 'dept_admin'].includes(user.role);
+  return user && ['system_admin', 'dept_admin'].includes(user.role);
 }
 
 module.exports = { authMiddleware, requireRole, resolveHrScope, isSystemAdmin, isAdminRole };
