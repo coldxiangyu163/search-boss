@@ -845,7 +845,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.post('/api/schedules/:id/trigger', async (req, res, next) => {
     try {
-      const result = await services.scheduler.triggerSchedule(req.params.id);
+      const result = await services.scheduler.triggerSchedule(req.params.id, { manualTrigger: true });
       res.json(result);
     } catch (error) {
       next(error);

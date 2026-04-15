@@ -349,12 +349,13 @@ class SchedulerService {
     return { ok: true, runId, message: '已发送停止信号，任务将在当前步骤完成后停止' };
   }
 
-  async triggerSchedule(id) {
+  async triggerSchedule(id, { manualTrigger = false } = {}) {
     const schedule = await this.#findScheduleById(id);
     return this.#startJobTask({
       jobKey: schedule.job_key,
       taskType: schedule.task_type,
-      schedule
+      schedule,
+      manualTrigger
     });
   }
 
@@ -374,7 +375,8 @@ class SchedulerService {
       jobKey,
       taskType,
       schedule,
-      hrAccountId
+      hrAccountId,
+      manualTrigger: true
     });
   }
 
@@ -417,8 +419,8 @@ class SchedulerService {
     return schedule;
   }
 
-  async #startJobTask({ jobKey, taskType, schedule = null, hrAccountId }) {
-    const scheduledJobId = schedule?.id || null;
+  async #startJobTask({ jobKey, taskType, schedule = null, hrAccountId, manualTrigger = false }) {
+    const scheduledJobId = manualTrigger ? null : (schedule?.id || null);
     const resolvedHrAccountId = hrAccountId || schedule?.hr_account_id || null;
     if (taskType === 'source' && isSourceScheduleBlocked(schedule)) {
       const error = new Error('source_schedule_blocked');
@@ -466,7 +468,7 @@ class SchedulerService {
       }
     });
 
-    const scheduledRunId = schedule
+    const scheduledRunId = (schedule && !manualTrigger)
       ? (await this.pool.query(
         `
           insert into scheduled_job_runs (
