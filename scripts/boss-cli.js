@@ -471,6 +471,49 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
     };
   }
 
+  if (options.command === 'chat-scroll-list') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.scrollChatList({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
+  if (options.command === 'chat-full-datasources') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.inspectFullChatDataSources({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
+  if (options.command === 'chat-scroll-to-uid') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.scrollChatListToUid({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix,
+      encryptUid: options.uid
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
   if (options.command === 'bring-to-front') {
     const session = await sessionStore.loadSession(options.runId);
     await browserCommands.bringToFront({

@@ -191,6 +191,32 @@ class BossCliRunner {
     ]);
   }
 
+  async scrollChatList({ runId }) {
+    return this.#run([
+      'chat-scroll-list',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
+  async inspectFullChatDataSources({ runId }) {
+    return this.#run([
+      'chat-full-datasources',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
+  async scrollChatListToUid({ runId, encryptUid }) {
+    return this.#run([
+      'chat-scroll-to-uid',
+      '--run-id',
+      String(runId),
+      '--uid',
+      String(encryptUid)
+    ]);
+  }
+
   async bringToFront({ runId }) {
     return this.#run(['bring-to-front', '--run-id', String(runId)]);
   }

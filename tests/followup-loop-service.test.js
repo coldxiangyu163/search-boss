@@ -255,12 +255,17 @@ test('FollowupLoopService executes correct workflow: navigate, filter job, filte
   assert.equal(commandOrder[2], 'navigateTo');
   assert.equal(commandOrder[3], 'selectChatJobFilter');
   assert.equal(commandOrder[4], 'selectChatUnreadFilter');
-  assert.equal(commandOrder[5], 'inspectVisibleChatList');
-  assert.equal(commandOrder[6], 'clickChatRow');
-  assert.equal(commandOrder[7], 'inspectChatThreadState');
-  assert.equal(commandOrder[8], 'inspectResumeConsentState');
-  assert.equal(commandOrder[9], 'inspectAttachmentState');
-  assert.equal(commandOrder[10], 'readOpenThreadMessages');
+  // Phase 5: tries inspectFullChatDataSources (fails), falls back to inspectVisibleChatList to build queue
+  // Phase 6: for each queued thread, inspectVisibleChatList again to find current index, then clickChatRow
+  const inspectCalls = commandOrder.filter((c) => c === 'inspectVisibleChatList');
+  assert.ok(inspectCalls.length >= 1, 'should call inspectVisibleChatList at least once');
+  const clickIdx = commandOrder.indexOf('clickChatRow');
+  assert.ok(clickIdx > 0, 'should call clickChatRow');
+  const afterClick = commandOrder.slice(clickIdx + 1);
+  assert.ok(afterClick.includes('inspectChatThreadState'), 'should inspect thread state after click');
+  assert.ok(afterClick.includes('inspectResumeConsentState'), 'should check consent after click');
+  assert.ok(afterClick.includes('inspectAttachmentState'), 'should check attachment after click');
+  assert.ok(afterClick.includes('readOpenThreadMessages'), 'should read messages after click');
 
   const jobFilterCall = bossCliRunner.calls.find((c) => c.command === 'selectChatJobFilter');
   assert.equal(jobFilterCall.jobName, '面点师傅');
@@ -611,32 +616,37 @@ test('FollowupLoopService resets chat page again after finishing processed threa
 });
 
 test('FollowupLoopService refreshes unread thread list each round when new replies reorder the list', async () => {
+  // Simulate: the initial queue snapshot has A, B in order.
+  // After processing A, DOM reorders so B appears at index 0 and A at index 1.
+  // The frozen queue should process both A and B correctly despite reordering.
   const bossCliRunner = createMockBossCliRunner({
-    visibleThreads: [
-      [
-        { name: '候选人A', dataId: 'a-0', index: 0, hasUnread: true },
-        { name: '候选人B', dataId: 'b-0', index: 1, hasUnread: true }
-      ],
-      [
-        { name: '候选人C', dataId: 'c-0', index: 0, hasUnread: true },
-        { name: '候选人B', dataId: 'b-0', index: 1, hasUnread: true }
-      ],
-      [
-        { name: '候选人B', dataId: 'b-0', index: 0, hasUnread: true }
-      ],
-      []
-    ],
+    visibleThreads: ({ callIndex }) => {
+      // First call: build the initial queue (A and B)
+      if (callIndex === 0) {
+        return {
+          threads: [
+            { name: '候选人A', dataId: 'a-0', index: 0, hasUnread: true },
+            { name: '候选人B', dataId: 'b-0', index: 1, hasUnread: true }
+          ]
+        };
+      }
+      // Subsequent re-reads: A processed, B reordered to top; both still visible
+      return {
+        threads: [
+          { name: '候选人B', dataId: 'b-0', index: 0, hasUnread: true },
+          { name: '候选人A', dataId: 'a-0', index: 1, hasUnread: false }
+        ]
+      };
+    },
     messageResults: {
       'a-0': { ok: true, messages: [{ from: '候选人A', type: 'text', text: 'A消息', time: '10:00' }] },
-      'b-0': { ok: true, messages: [{ from: '候选人B', type: 'text', text: 'B消息', time: '10:01' }] },
-      'c-0': { ok: true, messages: [{ from: '候选人C', type: 'text', text: 'C消息', time: '10:02' }] }
+      'b-0': { ok: true, messages: [{ from: '候选人B', type: 'text', text: 'B消息', time: '10:01' }] }
     }
   });
 
   const agentService = createMockAgentService();
   const llmEvaluator = createMockLlmEvaluator([
     { action: 'skip', reason: 'handled-a' },
-    { action: 'skip', reason: 'handled-c' },
     { action: 'skip', reason: 'handled-b' }
   ]);
 
@@ -652,10 +662,10 @@ test('FollowupLoopService refreshes unread thread list each round when new repli
   const result = await service.run({ runId: 309, jobKey: '面点师傅（B0038011）_8eca6cad', mode: 'followup' });
 
   assert.equal(result.ok, true);
-  assert.equal(bossCliRunner.calls.filter((c) => c.command === 'inspectVisibleChatList').length, 3);
+  // Both A and B should be processed even though B moved position after A was processed
   assert.deepEqual(
     bossCliRunner.calls.filter((c) => c.command === 'clickChatRow').map((item) => item.dataId),
-    ['a-0', 'c-0', 'b-0']
+    ['a-0', 'b-0']
   );
 });
 

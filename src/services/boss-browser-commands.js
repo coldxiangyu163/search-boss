@@ -3540,4 +3540,183 @@ module.exports = {
   scrollAndReadResumeDetail,
   applyRecommendFilters,
   humanMouseMove,
+  scrollChatList,
+  inspectFullChatDataSources,
+  scrollChatListToUid,
 };
+
+async function scrollChatList({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildScrollChatListExpression()
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_chat_list_scroll_failed');
+  }
+
+  return result;
+}
+
+function buildScrollChatListExpression() {
+  return `(() => {
+    try {
+      const container = document.querySelector('.user-list.b-scroll-stable')
+        || document.querySelector('.user-list')
+        || document.querySelector('.geek-list');
+      if (!container) {
+        return JSON.stringify({ ok: false, reason: 'boss_chat_list_container_not_found' });
+      }
+
+      // BOSS uses a Vue virtual list with overflow:hidden — need to dispatch
+      // wheel events so the virtual list component processes the scroll internally
+      const scrollAmount = 500;
+      const evt = new WheelEvent('wheel', {
+        deltaY: scrollAmount,
+        bubbles: true,
+        cancelable: true
+      });
+      container.dispatchEvent(evt);
+
+      return JSON.stringify({
+        ok: true,
+        scrolled: true,
+        method: 'wheel_event',
+        scrollAmount
+      });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_chat_list_scroll_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
+async function inspectFullChatDataSources({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildInspectFullChatDataSourcesExpression()
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_chat_datasources_unavailable');
+  }
+
+  return result;
+}
+
+function buildInspectFullChatDataSourcesExpression() {
+  return `(() => {
+    try {
+      const userList = document.querySelector('.user-list');
+      const vl = userList?.__vue__;
+      const sources = vl?.$props?.dataSources;
+
+      if (!Array.isArray(sources) || sources.length === 0) {
+        return JSON.stringify({ ok: false, reason: 'boss_chat_datasources_empty' });
+      }
+
+      const threads = sources.map((s, i) => ({
+        index: i,
+        encryptUid: s.encryptUid || '',
+        uniqueId: s.uniqueId || '',
+        name: s.friendName || s.name || '',
+        jobName: s.jobName || '',
+        lastTs: s.lastTS || s.lastTs || s.updateTime || 0,
+        unreadCount: s.newMsgCount || s.unreadCount || 0
+      }));
+
+      const range = vl?.$data?.range || {};
+
+      return JSON.stringify({
+        ok: true,
+        total: sources.length,
+        renderedRange: { start: range.start || 0, end: range.end || 0 },
+        threads
+      });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_chat_datasources_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
+async function scrollChatListToUid({
+  cdpClient,
+  targetId,
+  urlPrefix,
+  encryptUid
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildScrollChatListToUidExpression({ encryptUid })
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_chat_scroll_to_uid_failed');
+  }
+
+  return result;
+}
+
+function buildScrollChatListToUidExpression({ encryptUid }) {
+  return `(() => {
+    try {
+      const userList = document.querySelector('.user-list');
+      const vl = userList?.__vue__;
+      const sources = vl?.$props?.dataSources;
+
+      if (!Array.isArray(sources) || !vl) {
+        return JSON.stringify({ ok: false, reason: 'boss_chat_virtual_list_not_found' });
+      }
+
+      const targetUid = ${JSON.stringify(encryptUid || '')};
+      const idx = sources.findIndex(s => s.encryptUid === targetUid);
+      if (idx < 0) {
+        return JSON.stringify({ ok: false, reason: 'boss_chat_uid_not_in_datasources' });
+      }
+
+      // Use the virtual list's scrollToIndex if available
+      if (typeof vl.scrollToIndex === 'function') {
+        vl.scrollToIndex(idx);
+        return JSON.stringify({ ok: true, method: 'scrollToIndex', index: idx });
+      }
+
+      // Fallback: compute the scroll offset and set it
+      const estimateSize = vl.$props?.estimateSize || 78;
+      const offset = idx * estimateSize;
+      if (typeof vl.scrollToOffset === 'function') {
+        vl.scrollToOffset(offset);
+        return JSON.stringify({ ok: true, method: 'scrollToOffset', index: idx, offset });
+      }
+
+      // Last resort: dispatch wheel events to scroll to the right position
+      const container = userList;
+      const currentStart = vl.$data?.range?.start || 0;
+      const delta = (idx - currentStart) * estimateSize;
+      if (Math.abs(delta) > 10) {
+        const evt = new WheelEvent('wheel', {
+          deltaY: delta,
+          bubbles: true,
+          cancelable: true
+        });
+        container.dispatchEvent(evt);
+      }
+
+      return JSON.stringify({ ok: true, method: 'wheel_fallback', index: idx, delta });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_chat_scroll_to_uid_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}

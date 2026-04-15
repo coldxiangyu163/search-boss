@@ -148,63 +148,80 @@ class FollowupLoopService {
       });
     }
 
-    // Phase 5: Refresh visible unread list each round so reordering/new unread does not desync the traversal snapshot
-    const processedThreadKeys = new Set();
+    // Phase 5: Build stable processing queue from Vue dataSources (full list, not just visible DOM)
+    // This avoids desync caused by the virtual scroll list reordering after each interaction.
+    const processedUids = new Set();
     let sawAnyThread = false;
 
-    // Phase 6: Process threads with anti-risk delays
-    while (true) {
-      if (signal?.aborted) break;
-      if (stats.processed >= effectiveMaxThreads) {
-        break;
+    // Phase 5a: Snapshot the full thread list from Vue dataSources for stable traversal order.
+    // The list is sorted by lastTs desc at the time of snapshot. We freeze this order so that
+    // thread reordering during processing does not cause us to revisit the same candidate.
+    let fullThreadQueue = [];
+    try {
+      const dsResult = await runner.inspectFullChatDataSources({ runId });
+      if (dsResult?.ok && Array.isArray(dsResult.threads)) {
+        fullThreadQueue = dsResult.threads.filter((t) => t.encryptUid);
       }
+    } catch (_) {
+      // Non-fatal: fall back to DOM-only visible list below
+    }
 
-      let threads;
+    // Phase 5b: If dataSources unavailable, fall back to visible list
+    if (fullThreadQueue.length === 0) {
       try {
         const listResult = await runner.inspectVisibleChatList({
           runId,
           limit: effectiveMaxThreads
         });
-        threads = Array.isArray(listResult?.threads) ? listResult.threads : [];
+        const threads = Array.isArray(listResult?.threads) ? listResult.threads : [];
+        fullThreadQueue = threads.map((t) => ({
+          index: t.index,
+          encryptUid: t.encryptUid || '',
+          name: t.name || '',
+          dataId: t.dataId || '',
+          unreadCount: t.hasUnread ? 1 : 0
+        }));
       } catch (error) {
         await this.#failRun(runId, `visible_list_failed:${error.message}`, stats);
         return { ok: false, stats, reason: 'visible_list_unavailable' };
       }
+    }
 
-      if (threads.length === 0) {
-        if (!sawAnyThread) {
-          await this.#recordEvent(runId, {
-            eventId: `followup-loop-empty:${runId}`,
-            eventType: 'followup_loop_empty',
-            stage: 'followup_loop',
-            message: 'no unread threads visible',
-            payload: { jobKey }
-          });
-          await this.#resetChatPageAfterCompletion({ runId, runner });
-          await this.agentService.completeRun({
-            runId,
-            payload: { ...stats, reason: 'no_unread_threads' }
-          });
-          return { ok: true, stats };
-        }
-        break;
-      }
+    if (fullThreadQueue.length === 0) {
+      await this.#recordEvent(runId, {
+        eventId: `followup-loop-empty:${runId}`,
+        eventType: 'followup_loop_empty',
+        stage: 'followup_loop',
+        message: 'no unread threads visible',
+        payload: { jobKey }
+      });
+      await this.#resetChatPageAfterCompletion({ runId, runner });
+      await this.agentService.completeRun({
+        runId,
+        payload: { ...stats, reason: 'no_unread_threads' }
+      });
+      return { ok: true, stats };
+    }
 
-      if (!sawAnyThread) {
-        sawAnyThread = true;
-        await this.#recordEvent(runId, {
-          eventId: `followup-loop-threads:${runId}`,
-          eventType: 'followup_loop_threads_found',
-          stage: 'followup_loop',
-          message: `found ${threads.length} visible threads`,
-          payload: { threadCount: threads.length, threads: threads.map((t) => ({ name: t.name, dataId: t.dataId, index: t.index })) }
-        });
+    sawAnyThread = true;
+    await this.#recordEvent(runId, {
+      eventId: `followup-loop-threads:${runId}`,
+      eventType: 'followup_loop_threads_found',
+      stage: 'followup_loop',
+      message: `found ${fullThreadQueue.length} threads in queue`,
+      payload: {
+        threadCount: fullThreadQueue.length,
+        threads: fullThreadQueue.slice(0, 30).map((t) => ({ name: t.name, encryptUid: t.encryptUid, index: t.index }))
       }
+    });
 
-      const thread = threads.find((item) => !processedThreadKeys.has(buildVisibleThreadKey(item)));
-      if (!thread) {
-        break;
-      }
+    // Phase 6: Process threads sequentially from the frozen queue
+    for (const queuedThread of fullThreadQueue) {
+      if (signal?.aborted) break;
+      if (stats.processed >= effectiveMaxThreads) break;
+
+      const threadUid = queuedThread.encryptUid || buildVisibleThreadKey(queuedThread);
+      if (!threadUid || processedUids.has(threadUid)) continue;
 
       // Random delay between threads to avoid detection
       if (stats.processed > 0) {
@@ -218,6 +235,44 @@ class FollowupLoopService {
         }
       }
 
+      // Scroll the virtual list to bring this thread into the rendered range before clicking.
+      // After each interaction the list reorders, so we must re-locate the thread by UID.
+      if (queuedThread.encryptUid && typeof runner.scrollChatListToUid === 'function') {
+        try {
+          await runner.scrollChatListToUid({ runId, encryptUid: queuedThread.encryptUid });
+          await this.sleep(800);
+        } catch (_) {
+          // scroll failed — the row may already be visible, continue to click attempt
+        }
+      }
+
+      // Re-read the visible DOM list to find the row's current index (it may have moved)
+      let thread;
+      try {
+        const listResult = await runner.inspectVisibleChatList({
+          runId,
+          limit: 50
+        });
+        const visibleThreads = Array.isArray(listResult?.threads) ? listResult.threads : [];
+        thread = queuedThread.encryptUid
+          ? visibleThreads.find((t) => t.encryptUid === queuedThread.encryptUid)
+          : visibleThreads.find((t) => buildVisibleThreadKey(t) === threadUid);
+      } catch (_) {
+        // visible list read failed
+      }
+
+      if (!thread) {
+        // Thread not in rendered DOM — it may have been removed from list after filter change
+        stats.skipped += 1;
+        processedUids.add(threadUid);
+        continue;
+      }
+
+      // Merge name from queue if DOM didn't have it
+      if (!thread.name && queuedThread.name) {
+        thread.name = queuedThread.name;
+      }
+
       await this.#processOneThread({
         runId,
         jobKey,
@@ -229,7 +284,7 @@ class FollowupLoopService {
         runner
       });
 
-      processedThreadKeys.add(buildVisibleThreadKey(thread));
+      processedUids.add(threadUid);
       stats.processed += 1;
 
       await this.#recordEvent(runId, {
@@ -284,6 +339,7 @@ class FollowupLoopService {
 
   async #processOneThread({ runId, jobKey, jobContext, thread, mode, interactionTypes, stats, runner }) {
     const threadId = thread.dataId || `idx-${thread.index}`;
+    const expectedUid = thread.encryptUid || '';
 
     // Step 1: Click the row in the left-side chat list
     try {
@@ -305,20 +361,47 @@ class FollowupLoopService {
     }
 
     // Step 2: Read the encryptUid from the active thread state (right panel)
+    // Retry up to 3 times to ensure the right panel has switched to the correct thread
     let threadState;
-    try {
-      threadState = await runner.inspectChatThreadState({ runId });
-    } catch (error) {
-      stats.errors += 1;
-      return;
-    }
+    const maxRetries = expectedUid ? 3 : 1;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        threadState = await runner.inspectChatThreadState({ runId });
+      } catch (error) {
+        stats.errors += 1;
+        return;
+      }
 
-    if (!threadState.threadOpen) {
-      stats.errors += 1;
-      return;
+      if (!threadState.threadOpen) {
+        stats.errors += 1;
+        return;
+      }
+
+      const currentUid = threadState.encryptUid || threadState.activeUid || '';
+      if (!expectedUid || currentUid === expectedUid) {
+        break;
+      }
+
+      // Right panel hasn't switched yet — wait and retry
+      if (attempt < maxRetries - 1) {
+        await this.sleep(1500);
+      }
     }
 
     const encryptUid = threadState.encryptUid || threadState.activeUid || threadId;
+
+    // Verify the right panel matches the expected candidate
+    if (expectedUid && encryptUid !== expectedUid) {
+      stats.errors += 1;
+      await this.#recordEvent(runId, {
+        eventId: `followup-loop-uid-mismatch:${runId}:${threadId}`,
+        eventType: 'followup_loop_warning',
+        stage: 'followup_loop',
+        message: `thread switch mismatch: expected ${expectedUid} but got ${encryptUid}, skipping to avoid data cross-contamination`,
+        payload: { expectedUid, actualUid: encryptUid, candidateName: thread.name }
+      });
+      return;
+    }
 
     // Step 2b: Upsert candidate record
     let candidateId = null;
@@ -1300,7 +1383,9 @@ function buildThreadMessageStableId({ encryptUid, direction, msg, duplicateCount
     return `thread:${encryptUid}:${direction}:dom:${contentHash(domKey)}`;
   }
 
-  const signature = `${direction}:${msg?.time || ''}:${contentHash(msg?.text || '')}`;
+  // Do NOT include msg.time — it is a relative display string ("刚刚", "1分钟前")
+  // that changes between reads, causing duplicate DB entries.
+  const signature = `${direction}:${contentHash(msg?.text || '')}`;
   const nextCount = (duplicateCounters.get(signature) || 0) + 1;
   duplicateCounters.set(signature, nextCount);
   return `thread:${encryptUid}:${signature}:${nextCount}`;
@@ -1316,11 +1401,14 @@ function buildVisibleThreadKey(thread) {
   if (!thread || typeof thread !== 'object') {
     return '';
   }
+  if (thread.encryptUid) {
+    return `uid:${thread.encryptUid}`;
+  }
   if (thread.dataId) {
     return `data:${thread.dataId}`;
   }
   if (thread.name) {
-    return `name:${thread.name}:${thread.index ?? ''}`;
+    return `name:${thread.name}`;
   }
   return `idx:${thread.index ?? ''}`;
 }
