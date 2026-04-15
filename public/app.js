@@ -476,6 +476,9 @@ function renderSidebarNav() {
       if (shouldPollOverviewView(state.view)) {
         loadData().catch(() => {});
       }
+      if (state.view === 'command') {
+        syncRecruitData();
+      }
     });
   });
 }
@@ -500,7 +503,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   renderSidebarNav();
   bindEvents();
-  loadData();
+  await loadData();
+  if (state.view === 'command') {
+    syncRecruitData();
+  }
 });
 
 function renderUserInfo() {
@@ -1842,7 +1848,7 @@ function renderCommandCenter() {
     <section class="card-grid">
       ${metricCard('我看过', boss.viewed?.value ?? '-', boss.viewed ? `较昨日 ${formatDelta(boss.viewed.delta)}` : 'BOSS 数据未同步')}
       ${metricCard('看过我', boss.viewedMe?.value ?? '-', boss.viewedMe ? `较昨日 ${formatDelta(boss.viewedMe.delta)}` : 'BOSS 数据未同步')}
-      ${metricCard('我打招呼', boss.greeted?.value ?? '-', boss.greeted ? `较昨日 ${formatDelta(boss.greeted.delta)}` : 'BOSS 数据未同步')}
+      ${metricCard('我打招呼', boss.greeted?.value ?? '-', boss.greeted ? `较昨日 ${formatDelta(boss.greeted.delta)}` : 'BOSS 数据未同步', "navigateToCandidates({status:'greeted'})")}
       ${metricCard('牛人新招呼', boss.newGreetings?.value ?? '-', boss.newGreetings ? `较昨日 ${formatDelta(boss.newGreetings.delta)}` : 'BOSS 数据未同步')}
     </section>
     <section class="overview-grid">
@@ -1860,12 +1866,12 @@ function renderCommandCenter() {
             </button>
           </div>
           <div class="status-grid">
-            <div class="status-box">
+            <div class="status-box clickable" onclick="navigateToCandidates({status:'responded'})">
               <span class="muted">我沟通</span>
               <strong>${boss.chatted?.value ?? '-'}</strong>
               ${boss.chatted ? `<span class="muted">${formatDelta(boss.chatted.delta)}</span>` : ''}
             </div>
-            <div class="status-box">
+            <div class="status-box clickable" onclick="navigateToCandidates({resumeState:'downloaded'})">
               <span class="muted">收获简历</span>
               <strong>${boss.resumesReceived?.value ?? '-'}</strong>
               ${boss.resumesReceived ? `<span class="muted">${formatDelta(boss.resumesReceived.delta)}</span>` : ''}
@@ -1891,15 +1897,15 @@ function renderCommandCenter() {
             <span class="badge">实时</span>
           </div>
           <div class="status-grid">
-            <div class="status-box">
+            <div class="status-box clickable" onclick="navigateToView('jobs')">
               <span class="muted">在招职位数</span>
               <strong>${kpis.jobs}</strong>
             </div>
-            <div class="status-box">
+            <div class="status-box clickable" onclick="navigateToCandidates({})">
               <span class="muted">人才池规模</span>
               <strong>${kpis.candidates}</strong>
             </div>
-            <div class="status-box">
+            <div class="status-box clickable" onclick="navigateToCandidates({resumeState:'requested'})">
               <span class="muted">待处理队列</span>
               <strong>${queues.resumePipeline}</strong>
             </div>
@@ -1920,14 +1926,14 @@ function renderCommandCenter() {
             <span class="badge badge-warning">需跟进</span>
           </div>
           <div class="list">
-            <div class="list-item">
+            <div class="list-item clickable" onclick="navigateToCandidates({status:'resume_requested'})">
               <div>
                 <p class="list-title">优先处理简历流转中的候选人</p>
                 <p class="list-desc">当前有 ${queues.resumePipeline} 位候选人处于简历推进阶段，建议优先跟进。</p>
               </div>
               <span class="badge">重点</span>
             </div>
-            <div class="list-item">
+            <div class="list-item clickable" onclick="navigateToCandidates({status:'greeted'})">
               <div>
                 <p class="list-title">关注今日招呼与沟通转化</p>
                 <p class="list-desc">今日打招呼 ${boss.greeted?.value ?? '-'} 次，沟通 ${boss.chatted?.value ?? '-'} 人，收获简历 ${boss.resumesReceived?.value ?? '-'} 份。</p>
@@ -3355,6 +3361,30 @@ function handleCandidateKeywordKeydown(event) {
 function applyCandidateFilters() {
   state.candidateQuery.page = 1;
   loadCandidates();
+}
+
+function navigateToCandidates(filters) {
+  state.candidateQuery = {
+    ...state.candidateQuery,
+    jobKey: '',
+    status: '',
+    resumeState: '',
+    keyword: '',
+    page: 1,
+    ...filters
+  };
+  state.view = 'candidates';
+  renderSidebarNav();
+  loadCandidates();
+}
+
+function navigateToView(view) {
+  state.view = view;
+  renderSidebarNav();
+  render();
+  if (shouldPollOverviewView(view)) {
+    loadData().catch(() => {});
+  }
 }
 
 function resetCandidateFilters() {
@@ -5170,9 +5200,10 @@ function renderHealth() {
   `;
 }
 
-function metricCard(label, value, footnote) {
+function metricCard(label, value, footnote, onclick) {
+  const clickable = onclick ? ` clickable" onclick="${onclick}` : '';
   return `
-    <article class="card metric-card">
+    <article class="card metric-card${clickable}">
       <p class="metric-label">${label}</p>
       <div class="metric">${value ?? 0}</div>
       <div class="metric-footnote">${footnote || ''}</div>

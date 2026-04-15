@@ -498,6 +498,25 @@ tbody tr:hover {
   font-size: 16px;
 }
 
+.clickable {
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s, border-color 0.15s;
+}
+
+.clickable:hover {
+  background: rgba(31, 94, 255, 0.04);
+  border-color: rgba(31, 94, 255, 0.25);
+  box-shadow: 0 2px 8px rgba(31, 94, 255, 0.08);
+}
+
+.list-item.clickable:hover {
+  background: rgba(31, 94, 255, 0.03);
+  border-radius: 10px;
+  margin: 0 -8px;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
 .candidate-filter-bar {
   display: flex;
   justify-content: space-between;
