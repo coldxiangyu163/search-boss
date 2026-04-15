@@ -1843,12 +1843,84 @@ function renderCommandCenter() {
   const boss = bossRecruitData || {};
   const hasRecruitData = Boolean(bossRecruitData);
 
+  function renderDashboardAffordance(state, label) {
+    const text = label || {
+      interactive: '查看明细',
+      disabled: '暂不支持查看明细',
+      static: '仅展示'
+    }[state] || '仅展示';
+
+    const stateClass = {
+      interactive: 'dashboard-affordance--interactive',
+      disabled: 'dashboard-affordance--disabled',
+      static: 'dashboard-affordance--static'
+    }[state] || 'dashboard-affordance--static';
+
+    return `<span class="dashboard-affordance ${stateClass}">${escapeHtml(text)}</span>`;
+  }
+
+  function renderStatusBox(label, value, deltaHtml, options = {}) {
+    const interactionState = options.interactionState || 'static';
+    const onClick = options.onclick || '';
+    const affordance = renderDashboardAffordance(interactionState, options.affordanceLabel || options.hint);
+
+    const stateClass = {
+      interactive: 'is-interactive',
+      disabled: 'is-disabled',
+      static: 'is-static'
+    }[interactionState] || 'is-static';
+
+    const attrs = onClick
+      ? ` onclick="${onClick}" role="button" tabindex="0" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); this.click(); }" aria-label="${escapeHtml(`${label}，${interactionState === 'interactive' ? '查看明细' : interactionState === 'disabled' ? (options.hint || '暂不支持查看明细') : '仅展示'}`)}"`
+      : '';
+    const deltaPart = deltaHtml ? `<span class="muted">${deltaHtml}</span>` : '';
+
+    return `
+      <div class="status-box ${stateClass}"${attrs}>
+        <span class="muted">${escapeHtml(label)}</span>
+        <strong>${value ?? '-'}</strong>
+        ${deltaPart}
+        ${affordance}
+      </div>
+    `;
+  }
+
+  function renderFocusItem(title, desc, badge, options = {}) {
+    const interactionState = options.interactionState || 'static';
+    const onClick = options.onclick || '';
+    const affordance = renderDashboardAffordance(interactionState, options.affordanceLabel || options.hint);
+    const stateClass = {
+      interactive: 'is-interactive',
+      disabled: 'is-disabled',
+      static: 'is-static'
+    }[interactionState] || 'is-static';
+
+    const attrs = onClick
+      ? ` onclick="${onClick}" role="button" tabindex="0" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); this.click(); }" aria-label="${escapeHtml(`${title}，${interactionState === 'interactive' ? '查看明细' : interactionState === 'disabled' ? (options.hint || '暂不支持查看明细') : '仅展示'}`)}"`
+      : '';
+
+    return `
+      <div class="list-item ${stateClass}"${attrs}>
+        <div>
+          <p class="list-title">${escapeHtml(title)}</p>
+          <p class="list-desc">${desc}</p>
+          ${affordance}
+        </div>
+        ${badge ? `<span class="badge">${badge}</span>` : ''}
+      </div>
+    `;
+  }
+
   return `
     ${renderBossLoginCard()}
     <section class="card-grid">
       ${metricCard('我看过', boss.viewed?.value ?? '-', boss.viewed ? `较昨日 ${formatDelta(boss.viewed.delta)}` : 'BOSS 数据未同步')}
       ${metricCard('看过我', boss.viewedMe?.value ?? '-', boss.viewedMe ? `较昨日 ${formatDelta(boss.viewedMe.delta)}` : 'BOSS 数据未同步')}
-      ${metricCard('我打招呼', boss.greeted?.value ?? '-', boss.greeted ? `较昨日 ${formatDelta(boss.greeted.delta)}` : 'BOSS 数据未同步', "navigateToCandidates({status:'greeted'})")}
+      ${metricCard('我打招呼', boss.greeted?.value ?? '-', boss.greeted ? `较昨日 ${formatDelta(boss.greeted.delta)}` : 'BOSS 数据未同步', {
+        onclick: `navigateToCandidates({status:'greeted'})`,
+        state: 'interactive',
+        cta: '查看明细'
+      })}
       ${metricCard('牛人新招呼', boss.newGreetings?.value ?? '-', boss.newGreetings ? `较昨日 ${formatDelta(boss.newGreetings.delta)}` : 'BOSS 数据未同步')}
     </section>
     <section class="overview-grid">
@@ -1866,26 +1938,22 @@ function renderCommandCenter() {
             </button>
           </div>
           <div class="status-grid">
-            <div class="status-box clickable" onclick="navigateToCandidates({status:'responded'})">
-              <span class="muted">我沟通</span>
-              <strong>${boss.chatted?.value ?? '-'}</strong>
-              ${boss.chatted ? `<span class="muted">${formatDelta(boss.chatted.delta)}</span>` : ''}
-            </div>
-            <div class="status-box clickable" onclick="navigateToCandidates({resumeState:'downloaded'})">
-              <span class="muted">收获简历</span>
-              <strong>${boss.resumesReceived?.value ?? '-'}</strong>
-              ${boss.resumesReceived ? `<span class="muted">${formatDelta(boss.resumesReceived.delta)}</span>` : ''}
-            </div>
-            <div class="status-box">
-              <span class="muted">交换电话微信</span>
-              <strong>${boss.contactExchanged?.value ?? '-'}</strong>
-              ${boss.contactExchanged ? `<span class="muted">${formatDelta(boss.contactExchanged.delta)}</span>` : ''}
-            </div>
-            <div class="status-box">
-              <span class="muted">接受面试</span>
-              <strong>${boss.interviewAccepted?.value ?? '-'}</strong>
-              ${boss.interviewAccepted ? `<span class="muted">${formatDelta(boss.interviewAccepted.delta)}</span>` : ''}
-            </div>
+            ${renderStatusBox('我沟通', boss.chatted?.value ?? '-', boss.chatted ? formatDelta(boss.chatted.delta) : '', {
+              interactionState: 'interactive',
+              onclick: `navigateToCandidates({status:'responded'})`
+            })}
+            ${renderStatusBox('收获简历', boss.resumesReceived?.value ?? '-', boss.resumesReceived ? formatDelta(boss.resumesReceived.delta) : '', {
+              interactionState: 'interactive',
+              onclick: `navigateToCandidates({resumeState:'downloaded'})`
+            })}
+            ${renderStatusBox('交换电话微信', boss.contactExchanged?.value ?? '-', boss.contactExchanged ? formatDelta(boss.contactExchanged.delta) : '', {
+              interactionState: 'disabled',
+              hint: '暂不支持查看明细'
+            })}
+            ${renderStatusBox('接受面试', boss.interviewAccepted?.value ?? '-', boss.interviewAccepted ? formatDelta(boss.interviewAccepted.delta) : '', {
+              interactionState: 'disabled',
+              hint: '暂不支持查看明细'
+            })}
           </div>
         </div>
         <div class="card highlight-panel">
@@ -1897,22 +1965,22 @@ function renderCommandCenter() {
             <span class="badge">实时</span>
           </div>
           <div class="status-grid">
-            <div class="status-box clickable" onclick="navigateToView('jobs')">
-              <span class="muted">在招职位数</span>
-              <strong>${kpis.jobs}</strong>
-            </div>
-            <div class="status-box clickable" onclick="navigateToCandidates({})">
-              <span class="muted">人才池规模</span>
-              <strong>${kpis.candidates}</strong>
-            </div>
-            <div class="status-box clickable" onclick="navigateToCandidates({resumeState:'requested'})">
-              <span class="muted">待处理队列</span>
-              <strong>${queues.resumePipeline}</strong>
-            </div>
-            <div class="status-box">
-              <span class="muted">权益余量</span>
-              <strong>${boss.quotas?.chat ? `${boss.quotas.chat.used}/${boss.quotas.chat.total}` : '-'}</strong>
-            </div>
+            ${renderStatusBox('在招职位数', kpis.jobs, '', {
+              interactionState: 'interactive',
+              onclick: `navigateToView('jobs')`
+            })}
+            ${renderStatusBox('人才池规模', kpis.candidates, '', {
+              interactionState: 'interactive',
+              onclick: `navigateToCandidates({})`
+            })}
+            ${renderStatusBox('待处理队列', queues.resumePipeline, '', {
+              interactionState: 'interactive',
+              onclick: `navigateToCandidates({resumeState:'requested'})`
+            })}
+            ${renderStatusBox('权益余量', boss.quotas?.chat ? `${boss.quotas.chat.used}/${boss.quotas.chat.total}` : '-', '', {
+              interactionState: 'disabled',
+              hint: '暂无明细'
+            })}
           </div>
         </div>
       </div>
@@ -1926,27 +1994,17 @@ function renderCommandCenter() {
             <span class="badge badge-warning">需跟进</span>
           </div>
           <div class="list">
-            <div class="list-item clickable" onclick="navigateToCandidates({status:'resume_requested'})">
-              <div>
-                <p class="list-title">优先处理简历流转中的候选人</p>
-                <p class="list-desc">当前有 ${queues.resumePipeline} 位候选人处于简历推进阶段，建议优先跟进。</p>
-              </div>
-              <span class="badge">重点</span>
-            </div>
-            <div class="list-item clickable" onclick="navigateToCandidates({status:'greeted'})">
-              <div>
-                <p class="list-title">关注今日招呼与沟通转化</p>
-                <p class="list-desc">今日打招呼 ${boss.greeted?.value ?? '-'} 次，沟通 ${boss.chatted?.value ?? '-'} 人，收获简历 ${boss.resumesReceived?.value ?? '-'} 份。</p>
-              </div>
-              <span class="badge">分析</span>
-            </div>
-            <div class="list-item">
-              <div>
-                <p class="list-title">权益使用情况</p>
-                <p class="list-desc">${boss.quotas?.view ? `查看权益 ${boss.quotas.view.used}/${boss.quotas.view.total}，沟通权益 ${boss.quotas.chat.used}/${boss.quotas.chat.total}` : '权益数据未同步。'}</p>
-              </div>
-              <span class="badge">资源</span>
-            </div>
+            ${renderFocusItem('优先处理简历流转中的候选人', `当前有 ${queues.resumePipeline} 位候选人处于简历推进阶段，建议优先跟进。`, '重点', {
+              interactionState: 'interactive',
+              onclick: `navigateToCandidates({status:'resume_requested'})`
+            })}
+            ${renderFocusItem('关注今日招呼与沟通转化', `今日打招呼 ${boss.greeted?.value ?? '-'} 次，沟通 ${boss.chatted?.value ?? '-'} 人，收获简历 ${boss.resumesReceived?.value ?? '-'} 份。`, '分析', {
+              interactionState: 'interactive',
+              onclick: `navigateToCandidates({status:'greeted'})`
+            })}
+            ${renderFocusItem('权益使用情况', boss.quotas?.view ? `查看权益 ${boss.quotas.view.used}/${boss.quotas.view.total}，沟通权益 ${boss.quotas.chat.used}/${boss.quotas.chat.total}` : '权益数据未同步。', '资源', {
+              interactionState: 'disabled'
+            })}
           </div>
         </div>
         <div class="table-card">
@@ -5201,12 +5259,46 @@ function renderHealth() {
 }
 
 function metricCard(label, value, footnote, onclick) {
-  const clickable = onclick ? ` clickable" onclick="${onclick}` : '';
+  const interaction = {};
+
+  if (typeof onclick === 'string') {
+    interaction.onclick = onclick;
+    interaction.state = onclick ? 'interactive' : 'static';
+  } else if (onclick && typeof onclick === 'object') {
+    interaction.onclick = onclick.onclick || '';
+    interaction.state = onclick.state || (interaction.onclick ? 'interactive' : 'static');
+    interaction.cta = onclick.cta || '';
+  }
+
+  const stateClass = interaction.state === 'interactive'
+    ? ' is-interactive'
+    : interaction.state === 'disabled'
+      ? ' is-disabled'
+      : interaction.state === 'static' || !interaction.state
+        ? ' is-static'
+        : '';
+  const defaultAffordance = {
+    interactive: '查看明细',
+    disabled: '暂不支持查看明细',
+    static: '仅展示'
+  }[interaction.state] || '仅展示';
+  const attrs = interaction.onclick
+    ? ` onclick="${interaction.onclick}" role="button" tabindex="0" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); this.click(); }" aria-label="${escapeHtml(`${label}，${interaction.state === 'interactive' ? '查看明细' : interaction.state === 'disabled' ? (interaction.cta || defaultAffordance) : '仅展示'}`)}"`
+    : '';
+  const cta = `<div class="dashboard-affordance ${
+    interaction.state === 'interactive'
+      ? 'dashboard-affordance--interactive'
+      : interaction.state === 'disabled'
+        ? 'dashboard-affordance--disabled'
+        : 'dashboard-affordance--static'
+  }">${escapeHtml(interaction.cta || defaultAffordance)}</div>`;
+
   return `
-    <article class="card metric-card${clickable}">
+    <article class="card metric-card${stateClass}"${attrs}>
       <p class="metric-label">${label}</p>
       <div class="metric">${value ?? 0}</div>
       <div class="metric-footnote">${footnote || ''}</div>
+      ${cta}
     </article>
   `;
 }

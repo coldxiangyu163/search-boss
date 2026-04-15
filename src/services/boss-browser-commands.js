@@ -1434,16 +1434,26 @@ async function selectChatJobFilter({
   cdpClient,
   targetId,
   urlPrefix,
-  jobName
+  jobName,
+  maxRetries = 5,
+  retryInterval = 1_500
 } = {}) {
-  const result = await evaluateJson({
-    cdpClient,
-    targetId,
-    urlPrefix,
-    expression: buildSelectChatJobFilterExpression({ jobName })
-  });
+  let result;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    result = await evaluateJson({
+      cdpClient,
+      targetId,
+      urlPrefix,
+      expression: buildSelectChatJobFilterExpression({ jobName })
+    });
 
-  if (!result?.ok) {
+    if (result?.ok) break;
+
+    if (result?.reason === 'boss_chat_job_dropdown_not_found' && attempt < maxRetries) {
+      await new Promise((r) => setTimeout(r, retryInterval));
+      continue;
+    }
+
     throw new Error(result?.reason || 'boss_chat_job_filter_failed');
   }
 
