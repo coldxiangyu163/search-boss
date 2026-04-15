@@ -5432,6 +5432,213 @@ test('POST /api/admin/users rejects legacy enterprise_admin role with invalid_ro
   assert.equal(called, false);
 });
 
+test('GET /api/candidates scopes dept_admin to current department', async () => {
+  let capturedParams = null;
+
+  const app = createAuthedApp({
+    user: { id: 7, role: 'dept_admin', department_id: 12 },
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: {
+        async listCandidates(params) {
+          capturedParams = params;
+          return { items: [], pagination: { page: 1, pageSize: 20, total: 0, totalPages: 0 } };
+        }
+      },
+      scheduler: { async listSchedules() { return []; } },
+      agent: {
+        async listRuns() { return { items: [], pagination: {} }; },
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return {}; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; }
+      }
+    }
+  });
+
+  const response = await request(app).get('/api/candidates');
+
+  assert.equal(response.status, 200);
+  assert.equal(capturedParams.hrAccountId, undefined);
+  assert.equal(capturedParams.departmentId, 12);
+  assert.equal(capturedParams.includeHrName, true);
+});
+
+test('GET /api/candidates/:candidateId rejects access outside department scope', async () => {
+  const app = createAuthedApp({
+    user: { id: 7, role: 'dept_admin', department_id: 12 },
+    pool: {
+      query(sql, params) {
+        if (sql.includes('from hr_accounts where id')) {
+          return { rows: [{ department_id: 99 }] };
+        }
+        return { rows: [] };
+      }
+    },
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: {
+        async listCandidates() { return { items: [], pagination: {} }; },
+        async getCandidateDetail() {
+          return { id: 55, name: '李四', hr_account_id: 8, messages: [], attachments: [] };
+        }
+      },
+      scheduler: { async listSchedules() { return []; } },
+      agent: {
+        async listRuns() { return { items: [], pagination: {} }; },
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return {}; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; }
+      }
+    }
+  });
+
+  const response = await request(app).get('/api/candidates/55');
+
+  assert.equal(response.status, 403);
+  assert.equal(response.body.error, 'forbidden');
+});
+
+test('GET /api/candidates/:candidateId allows access within same department', async () => {
+  const app = createAuthedApp({
+    user: { id: 7, role: 'dept_admin', department_id: 12 },
+    pool: {
+      query(sql, params) {
+        if (sql.includes('from hr_accounts where id')) {
+          return { rows: [{ department_id: 12 }] };
+        }
+        return { rows: [] };
+      }
+    },
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: {
+        async listCandidates() { return { items: [], pagination: {} }; },
+        async getCandidateDetail() {
+          return { id: 55, name: '李四', hr_account_id: 8, messages: [], attachments: [] };
+        }
+      },
+      scheduler: { async listSchedules() { return []; } },
+      agent: {
+        async listRuns() { return { items: [], pagination: {} }; },
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return {}; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; }
+      }
+    }
+  });
+
+  const response = await request(app).get('/api/candidates/55');
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.item.id, 55);
+});
+
+test('GET /api/jobs scopes dept_admin to current department', async () => {
+  let capturedParams = null;
+
+  const app = createAuthedApp({
+    user: { id: 7, role: 'dept_admin', department_id: 12 },
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: {
+        async listJobs(params) {
+          capturedParams = params;
+          return [];
+        }
+      },
+      candidates: { async listCandidates() { return { items: [], pagination: {} }; } },
+      scheduler: { async listSchedules() { return []; } },
+      agent: {
+        async listRuns() { return { items: [], pagination: {} }; },
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return {}; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; }
+      }
+    }
+  });
+
+  const response = await request(app).get('/api/jobs');
+
+  assert.equal(response.status, 200);
+  assert.equal(capturedParams.hrAccountId, undefined);
+  assert.equal(capturedParams.departmentId, 12);
+  assert.equal(capturedParams.includeHrName, true);
+});
+
+test('GET /api/dashboard/summary scopes dept_admin to current department', async () => {
+  let capturedParams = null;
+
+  const app = createAuthedApp({
+    user: { id: 7, role: 'dept_admin', department_id: 12 },
+    services: {
+      dashboard: {
+        async getSummary(params) {
+          capturedParams = params;
+          return { kpis: {}, queues: {}, health: {} };
+        }
+      },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return { items: [], pagination: {} }; } },
+      scheduler: { async listSchedules() { return []; } },
+      agent: {
+        async listRuns() { return { items: [], pagination: {} }; },
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return {}; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; }
+      }
+    }
+  });
+
+  const response = await request(app).get('/api/dashboard/summary');
+
+  assert.equal(response.status, 200);
+  assert.equal(capturedParams.hrAccountId, undefined);
+  assert.equal(capturedParams.departmentId, 12);
+});
+
+test('POST /api/candidates/bulk-resume-download scopes dept_admin to current department', async () => {
+  let capturedParams = null;
+
+  const app = createAuthedApp({
+    user: { id: 7, role: 'dept_admin', department_id: 12 },
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: {
+        async listCandidates() { return { items: [], pagination: {} }; },
+        async listResumeBundleCandidates(params) {
+          capturedParams = params;
+          return [];
+        }
+      },
+      scheduler: { async listSchedules() { return []; } },
+      agent: {
+        async listRuns() { return { items: [], pagination: {} }; },
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return {}; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; }
+      }
+    }
+  });
+
+  const response = await request(app)
+    .post('/api/candidates/bulk-resume-download')
+    .send({ candidateIds: [1, 2] });
+
+  assert.equal(response.status, 400);
+  assert.equal(capturedParams.hrAccountId, undefined);
+  assert.equal(capturedParams.departmentId, 12);
+});
+
 test('PATCH /api/admin/users/:id rejects legacy enterprise_admin role with invalid_role', async () => {
   const app = createAuthedApp({
     user: { id: 1, role: 'system_admin', department_id: 1 },

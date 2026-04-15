@@ -4,12 +4,15 @@ class JobService {
     this.agentService = agentService;
   }
 
-  async listJobs({ hrAccountId, includeHrName } = {}) {
+  async listJobs({ hrAccountId, departmentId, includeHrName } = {}) {
     const values = [];
     let whereClause = '';
     if (hrAccountId) {
       values.push(hrAccountId);
       whereClause = `where j.hr_account_id = $${values.length}`;
+    } else if (departmentId) {
+      values.push(departmentId);
+      whereClause = `where j.hr_account_id in (select id from hr_accounts where department_id = $${values.length})`;
     }
 
     const hrJoin = includeHrName ? 'left join hr_accounts ha on ha.id = j.hr_account_id' : '';

@@ -6,13 +6,24 @@ class DashboardService {
     this.browserInstanceManager = browserInstanceManager;
   }
 
-  async getSummary({ hrAccountId } = {}) {
-    const jobFilter = hrAccountId ? `where hr_account_id = ${Number(hrAccountId)}` : '';
-    const candidateFilter = hrAccountId ? `where jc.hr_account_id = ${Number(hrAccountId)}` : '';
-    const resumeFilter = hrAccountId
-      ? `where resume_state in ('requested', 'received') and hr_account_id = ${Number(hrAccountId)}`
-      : `where resume_state in ('requested', 'received')`;
-    const activeRunFilter = hrAccountId ? `and ba.hr_account_id = ${Number(hrAccountId)}` : '';
+  async getSummary({ hrAccountId, departmentId } = {}) {
+    let jobFilter = '';
+    let candidateFilter = '';
+    let resumeFilter = `where resume_state in ('requested', 'received')`;
+    let activeRunFilter = '';
+
+    if (hrAccountId) {
+      jobFilter = `where hr_account_id = ${Number(hrAccountId)}`;
+      candidateFilter = `where jc.hr_account_id = ${Number(hrAccountId)}`;
+      resumeFilter += ` and hr_account_id = ${Number(hrAccountId)}`;
+      activeRunFilter = `and ba.hr_account_id = ${Number(hrAccountId)}`;
+    } else if (departmentId) {
+      const deptSubquery = `(select id from hr_accounts where department_id = ${Number(departmentId)})`;
+      jobFilter = `where hr_account_id in ${deptSubquery}`;
+      candidateFilter = `where jc.hr_account_id in ${deptSubquery}`;
+      resumeFilter += ` and hr_account_id in ${deptSubquery}`;
+      activeRunFilter = `and ba.hr_account_id in ${deptSubquery}`;
+    }
 
     const [jobsResult, candidatesResult, resumeQueueResult, recruitResult, activeRunResult] = await Promise.all([
       this.pool.query(`select count(*)::int as count from jobs ${jobFilter}`),

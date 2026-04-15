@@ -358,8 +358,8 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.get('/api/dashboard/summary', async (req, res, next) => {
     try {
-      const hrAccountId = req.user?.role === 'hr' ? req.user.hr_account_id : undefined;
-      const summary = await services.dashboard.getSummary({ hrAccountId });
+      const scope = resolveHrScope(req) || {};
+      const summary = await services.dashboard.getSummary({ hrAccountId: scope.hrAccountId, departmentId: scope.departmentId });
       res.json(summary);
     } catch (error) {
       next(error);
@@ -473,8 +473,8 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
   app.get('/api/jobs', async (req, res, next) => {
     try {
       const admin = req.user && isAdminRole(req.user);
-      const hrAccountId = req.user?.role === 'hr' ? req.user.hr_account_id : undefined;
-      const items = await services.jobs.listJobs({ hrAccountId, includeHrName: admin });
+      const scope = resolveHrScope(req) || {};
+      const items = await services.jobs.listJobs({ hrAccountId: scope.hrAccountId, departmentId: scope.departmentId, includeHrName: admin });
       res.json({ items });
     } catch (error) {
       next(error);
@@ -646,7 +646,7 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
   app.get('/api/candidates', async (req, res, next) => {
     try {
       const admin = req.user && isAdminRole(req.user);
-      const hrAccountId = req.user?.role === 'hr' ? req.user.hr_account_id : undefined;
+      const scope = resolveHrScope(req) || {};
       const result = await services.candidates.listCandidates({
         jobKey: req.query.jobKey,
         status: req.query.status,
@@ -654,7 +654,8 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
         keyword: req.query.keyword,
         page: req.query.page ? Number(req.query.page) : undefined,
         pageSize: req.query.pageSize ? Number(req.query.pageSize) : undefined,
-        hrAccountId,
+        hrAccountId: scope.hrAccountId,
+        departmentId: scope.departmentId,
         includeHrName: admin
       });
 
@@ -688,6 +689,20 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
         return;
       }
 
+      if (req.user && !isSystemAdmin(req.user)) {
+        const candidateHrId = item.hr_account_id;
+        if (req.user.role === 'hr') {
+          if (String(candidateHrId) !== String(req.user.hr_account_id)) {
+            return res.status(403).json({ error: 'forbidden', message: '无权查看该候选人。' });
+          }
+        } else if (req.user.role === 'dept_admin' && candidateHrId) {
+          const hrDept = await pool?.query('select department_id from hr_accounts where id = $1', [candidateHrId]);
+          if (hrDept?.rows[0] && String(hrDept.rows[0].department_id) !== String(req.user.department_id)) {
+            return res.status(403).json({ error: 'forbidden', message: '无权查看该候选人。' });
+          }
+        }
+      }
+
       if (services.agent?.getFollowupDecision) {
         item.followupDecision = await services.agent.getFollowupDecision(req.params.candidateId);
       }
@@ -718,10 +733,11 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
         return;
       }
 
-      const hrAccountId = req.user?.role === 'hr' ? req.user.hr_account_id : undefined;
+      const scope = resolveHrScope(req) || {};
       const bundleCandidates = await services.candidates.listResumeBundleCandidates({
         candidateIds,
-        hrAccountId
+        hrAccountId: scope.hrAccountId,
+        departmentId: scope.departmentId
       });
 
       const bundleFiles = [];

@@ -3,7 +3,7 @@ class CandidateService {
     this.pool = pool;
   }
 
-  async listCandidates({ jobKey, status, resumeState, keyword, page = 1, pageSize = 20, hrAccountId, includeHrName } = {}) {
+  async listCandidates({ jobKey, status, resumeState, keyword, page = 1, pageSize = 20, hrAccountId, departmentId, includeHrName } = {}) {
     const normalizedPage = Math.max(Number(page) || 1, 1);
     const normalizedPageSize = Math.min(Math.max(Number(pageSize) || 20, 1), 100);
     const offset = (normalizedPage - 1) * normalizedPageSize;
@@ -37,6 +37,9 @@ class CandidateService {
     if (hrAccountId) {
       values.push(hrAccountId);
       conditions.push(`jc.hr_account_id = $${values.length}`);
+    } else if (departmentId) {
+      values.push(departmentId);
+      conditions.push(`jc.hr_account_id in (select id from hr_accounts where department_id = $${values.length})`);
     }
 
     const whereClause = conditions.length ? `where ${conditions.join(' and ')}` : '';
@@ -130,7 +133,8 @@ class CandidateService {
           jc.resume_path,
           jc.next_followup_after,
           jc.notes,
-          jc.workflow_metadata
+          jc.workflow_metadata,
+          jc.hr_account_id
         from job_candidates jc
         join jobs j on j.id = jc.job_id
         join people p on p.id = jc.person_id
@@ -219,7 +223,7 @@ class CandidateService {
     };
   }
 
-  async listResumeBundleCandidates({ candidateIds, hrAccountId } = {}) {
+  async listResumeBundleCandidates({ candidateIds, hrAccountId, departmentId } = {}) {
     const normalizedCandidateIds = [...new Set(
       (Array.isArray(candidateIds) ? candidateIds : [])
         .map((candidateId) => Number(candidateId))
@@ -236,6 +240,9 @@ class CandidateService {
     if (hrAccountId) {
       values.push(hrAccountId);
       conditions.push(`jc.hr_account_id = $${values.length}`);
+    } else if (departmentId) {
+      values.push(departmentId);
+      conditions.push(`jc.hr_account_id in (select id from hr_accounts where department_id = $${values.length})`);
     }
 
     const result = await this.pool.query(
