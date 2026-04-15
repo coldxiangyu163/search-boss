@@ -1978,8 +1978,7 @@ function renderCommandCenter() {
               onclick: `navigateToCandidates({resumeState:'requested'})`
             })}
             ${renderStatusBox('权益余量', boss.quotas?.chat ? `${boss.quotas.chat.used}/${boss.quotas.chat.total}` : '-', '', {
-              interactionState: 'disabled',
-              hint: '暂无明细'
+              interactionState: 'static'
             })}
           </div>
         </div>
@@ -2003,7 +2002,7 @@ function renderCommandCenter() {
               onclick: `navigateToCandidates({status:'greeted'})`
             })}
             ${renderFocusItem('权益使用情况', boss.quotas?.view ? `查看权益 ${boss.quotas.view.used}/${boss.quotas.view.total}，沟通权益 ${boss.quotas.chat.used}/${boss.quotas.chat.total}` : '权益数据未同步。', '资源', {
-              interactionState: 'disabled'
+              interactionState: 'static'
             })}
           </div>
         </div>
@@ -2055,12 +2054,77 @@ function renderAdminOverview() {
   const totalGreeted = hrs.reduce((s, h) => s + (h.greeted_today || 0), 0);
   const totalResumes = hrs.reduce((s, h) => s + (h.resumes_today || 0), 0);
 
+  function renderAdminAffordance(state, label) {
+    const text = label || {
+      interactive: '查看明细',
+      disabled: '暂不支持查看明细',
+      static: '仅展示'
+    }[state] || '仅展示';
+
+    const stateClass = {
+      interactive: 'dashboard-affordance--interactive',
+      disabled: 'dashboard-affordance--disabled',
+      static: 'dashboard-affordance--static'
+    }[state] || 'dashboard-affordance--static';
+
+    return `<span class="dashboard-affordance ${stateClass}">${escapeHtml(text)}</span>`;
+  }
+
+  function renderAdminStatusBox(label, value, options = {}) {
+    const interactionState = options.interactionState || 'static';
+    const onClick = options.onclick || '';
+    const affordance = renderAdminAffordance(interactionState, options.affordanceLabel || options.hint);
+    const stateClass = {
+      interactive: 'is-interactive',
+      disabled: 'is-disabled',
+      static: 'is-static'
+    }[interactionState] || 'is-static';
+
+    const attrs = onClick
+      ? ` onclick="${onClick}" role="button" tabindex="0" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); this.click(); }" aria-label="${escapeHtml(`${label}，${interactionState === 'interactive' ? '查看明细' : interactionState === 'disabled' ? (options.hint || '暂不支持查看明细') : '仅展示'}`)}"`
+      : '';
+
+    return `
+      <div class="status-box ${stateClass}"${attrs}>
+        <span class="muted">${escapeHtml(label)}</span>
+        <strong>${value ?? '-'}</strong>
+        ${affordance}
+      </div>
+    `;
+  }
+
+  function renderAdminListItem(title, desc, badge, options = {}) {
+    const interactionState = options.interactionState || 'static';
+    const onClick = options.onclick || '';
+    const affordance = renderAdminAffordance(interactionState, options.affordanceLabel || options.hint);
+    const stateClass = {
+      interactive: 'is-interactive',
+      disabled: 'is-disabled',
+      static: 'is-static'
+    }[interactionState] || 'is-static';
+
+    const attrs = onClick
+      ? ` onclick="${onClick}" role="button" tabindex="0" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); this.click(); }" aria-label="${escapeHtml(`${title}，${interactionState === 'interactive' ? '查看明细' : interactionState === 'disabled' ? (options.hint || '暂不支持查看明细') : '仅展示'}`)}"`
+      : '';
+
+    return `
+      <div class="list-item ${stateClass}"${attrs}>
+        <div>
+          <p class="list-title">${escapeHtml(title)}</p>
+          <p class="list-desc">${desc}</p>
+          ${affordance}
+        </div>
+        ${badge ? `<span class="badge badge-success">${badge}</span>` : ''}
+      </div>
+    `;
+  }
+
   return `
     <section class="card-grid">
-      ${metricCard('HR 人数', hrs.length, '当前活跃 HR 数')}
-      ${metricCard('在招职位', totalJobs, deptAdmin ? '本部门 HR 职位合计' : '全部 HR 职位合计')}
-      ${metricCard('今日打招呼', totalGreeted, deptAdmin ? '本部门 HR 合计' : '全部 HR 合计')}
-      ${metricCard('今日简历', totalResumes, deptAdmin ? '本部门 HR 合计' : '全部 HR 合计')}
+      ${metricCard('HR 人数', hrs.length, '当前活跃 HR 数', { state: 'static' })}
+      ${metricCard('在招职位', totalJobs, deptAdmin ? '本部门 HR 职位合计' : '全部 HR 职位合计', { state: 'static' })}
+      ${metricCard('今日打招呼', totalGreeted, deptAdmin ? '本部门 HR 合计' : '全部 HR 合计', { state: 'static' })}
+      ${metricCard('今日简历', totalResumes, deptAdmin ? '本部门 HR 合计' : '全部 HR 合计', { state: 'static' })}
     </section>
     <section>
       <div class="table-card">
@@ -2113,14 +2177,14 @@ function renderAdminOverview() {
           </div>
         </div>
         <div class="status-grid">
-          <div class="status-box">
-            <span class="muted">${deptAdmin ? '部门职位数' : '总职位数'}</span>
-            <strong>${kpis.jobs}</strong>
-          </div>
-          <div class="status-box">
-            <span class="muted">${deptAdmin ? '部门候选人数' : '总候选人数'}</span>
-            <strong>${kpis.candidates}</strong>
-          </div>
+          ${renderAdminStatusBox(deptAdmin ? '部门职位数' : '总职位数', kpis.jobs, {
+            interactionState: 'interactive',
+            onclick: `navigateToView('jobs')`
+          })}
+          ${renderAdminStatusBox(deptAdmin ? '部门候选人数' : '总候选人数', kpis.candidates, {
+            interactionState: 'interactive',
+            onclick: `navigateToCandidates({})`
+          })}
         </div>
       </div>
       <div class="table-card">
@@ -2132,20 +2196,8 @@ function renderAdminOverview() {
           <span class="badge badge-success">稳定</span>
         </div>
         <div class="list">
-          <div class="list-item">
-            <div>
-              <p class="list-title">接口服务</p>
-              <p class="list-desc">当前接口链路状态正常。</p>
-            </div>
-            <span class="badge badge-success">${health.api}</span>
-          </div>
-          <div class="list-item">
-            <div>
-              <p class="list-title">数据库连接</p>
-              <p class="list-desc">核心数据读写服务可用。</p>
-            </div>
-            <span class="badge badge-success">${health.database}</span>
-          </div>
+          ${renderAdminListItem('接口服务', '当前接口链路状态正常。', health.api, { interactionState: 'static' })}
+          ${renderAdminListItem('数据库连接', '核心数据读写服务可用。', health.database, { interactionState: 'static' })}
         </div>
       </div>
     </section>

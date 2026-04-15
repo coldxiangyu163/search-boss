@@ -56,6 +56,22 @@ function createAppVmContext({ nodes, fetch = () => {}, consoleOverride = console
   });
 }
 
+function loadBrowserAppContext({ nodes } = {}) {
+  const helperScript = fs.readFileSync(
+    path.join(__dirname, '../public/sync-modal-progress.js'),
+    'utf8'
+  );
+  const appScript = fs.readFileSync(
+    path.join(__dirname, '../public/app.js'),
+    'utf8'
+  );
+
+  const context = createAppVmContext({ nodes });
+  vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+  vm.runInContext(appScript, context, { filename: 'app.js' });
+  return context;
+}
+
 test('buildSyncStages keeps request stage done after bootstrap event scrolls out of the visible log window', () => {
   let progress = createSyncModalProgress();
   progress = updateSyncModalProgress(progress, { eventType: 'schedule_triggered' });
@@ -852,6 +868,46 @@ test('renderAutomation shows simplified source fields and hides scheduling jargo
   assert.doesNotMatch(html, /每日执行次数上限/);
 });
 
+test('renderCommandCenter surfaces click affordances and display-only labels', () => {
+  const helperScript = fs.readFileSync(
+    path.join(__dirname, '../public/sync-modal-progress.js'),
+    'utf8'
+  );
+  const appScript = fs.readFileSync(
+    path.join(__dirname, '../public/app.js'),
+    'utf8'
+  );
+
+  const context = createAppVmContext({
+    nodes: {
+      app: { innerHTML: '' },
+      'page-eyebrow': { textContent: '' },
+      'page-title': { textContent: '' },
+      'page-description': { textContent: '' }
+    }
+  });
+
+  vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+  vm.runInContext(appScript, context, { filename: 'app.js' });
+
+  const html = vm.runInContext(`
+    state.currentUser = { hrAccountId: 1 };
+    state.summary = {
+      kpis: { jobs: 12, candidates: 34 },
+      queues: { resumePipeline: 5 },
+      health: { api: 'ok', database: 'ok' },
+      bossRecruitData: null
+    };
+    renderCommandCenter();
+  `, context);
+
+  assert.match(html, /查看明细/);
+  assert.match(html, /仅展示/);
+  assert.match(html, /暂不支持查看明细/);
+  assert.match(html, /role="button"/);
+  assert.match(html, /tabindex="0"/);
+});
+
 test('renderScheduleModal keeps advanced scheduling fields hidden in view mode by default', () => {
   const helperScript = fs.readFileSync(
     path.join(__dirname, '../public/sync-modal-progress.js'),
@@ -1131,6 +1187,170 @@ test('dept_admin copy uses department scope instead of global wording', () => {
   assert.match(context.jobsPage.description, /本部门/);
   assert.doesNotMatch(context.taskRunsPage.description, /查看所有/);
   assert.match(context.taskRunsPage.description, /本部门/);
+});
+
+test('command dashboard renders interactive and non-interactive affordances for drill-down items', () => {
+  const nodes = {
+    'page-eyebrow': { textContent: '' },
+    'page-title': { textContent: '' },
+    'page-description': { textContent: '' },
+    app: { innerHTML: '' }
+  };
+  const context = loadBrowserAppContext({ nodes });
+
+  vm.runInContext(`
+    manageOverviewPolling = () => {};
+    state.currentUser = { role: 'hr' };
+    state.view = 'command';
+    state.summary = {
+      kpis: { jobs: 3, candidates: 12 },
+      queues: { resumePipeline: 4 },
+      health: { api: '正常', database: '正常' },
+      activeRun: null,
+      bossRecruitData: {
+        scrapedAt: '2026-04-15T08:00:00Z',
+        viewed: { value: 18, delta: 2 },
+        viewedMe: { value: 6, delta: 1 },
+        greeted: { value: 9, delta: 3 },
+        newGreetings: { value: 5, delta: 1 },
+        chatted: { value: 7, delta: 2 },
+        resumesReceived: { value: 3, delta: 1 },
+        contactExchanged: { value: 2, delta: 1 },
+        interviewAccepted: { value: 1, delta: 0 },
+        quotas: {
+          chat: { used: 6, total: 20 },
+          view: { used: 10, total: 30 }
+        }
+      }
+    };
+    render();
+    globalThis.commandDashboardHtml = document.getElementById('app').innerHTML;
+  `, context);
+
+  const html = context.commandDashboardHtml;
+
+  assert.match(html, /metric-card is-interactive/);
+  assert.match(html, /onclick="navigateToCandidates\(\{status:'greeted'\}\)"/);
+  assert.match(html, /dashboard-affordance dashboard-affordance--interactive">查看明细/);
+
+  assert.match(html, /status-box is-interactive/);
+  assert.match(html, /onclick="navigateToCandidates\(\{status:'responded'\}\)"/);
+  assert.match(html, /onclick="navigateToCandidates\(\{resumeState:'downloaded'\}\)"/);
+  assert.match(html, /role="button"/);
+  assert.match(html, /tabindex="0"/);
+
+  assert.match(html, /status-box is-disabled/);
+  assert.match(html, /dashboard-affordance dashboard-affordance--disabled">暂不支持查看明细/);
+  assert.match(html, /权益余量/);
+  assert.match(html, /权益余量[\s\S]*dashboard-affordance dashboard-affordance--static">仅展示/);
+
+  assert.match(html, /list-item is-interactive/);
+  assert.match(html, /onclick="navigateToCandidates\(\{status:'resume_requested'\}\)"/);
+  assert.match(html, /onclick="navigateToCandidates\(\{status:'greeted'\}\)"/);
+  assert.match(html, /权益使用情况[\s\S]*dashboard-affordance dashboard-affordance--static">仅展示/);
+});
+
+test('navigateToCandidates switches to candidates view and resets filter context', () => {
+  const nodes = {
+    'page-eyebrow': { textContent: '' },
+    'page-title': { textContent: '' },
+    'page-description': { textContent: '' },
+    app: { innerHTML: '' }
+  };
+  const context = loadBrowserAppContext({ nodes });
+
+  vm.runInContext(`
+    renderSidebarNav = () => {};
+    loadCandidates = () => { globalThis.loadCandidatesInvoked = true; };
+    state.candidateQuery = {
+      jobKey: 'job-1',
+      status: 'responded',
+      resumeState: 'requested',
+      keyword: 'java',
+      page: 3,
+      pageSize: 20
+    };
+    state.view = 'command';
+    navigateToCandidates({ resumeState: 'downloaded' });
+    globalThis.navigateState = {
+      view: state.view,
+      query: { ...state.candidateQuery }
+    };
+  `, context);
+
+  assert.equal(context.navigateState.view, 'candidates');
+  assert.equal(context.navigateState.query.page, 1);
+  assert.equal(context.navigateState.query.jobKey, '');
+  assert.equal(context.navigateState.query.keyword, '');
+  assert.equal(context.navigateState.query.status, '');
+  assert.equal(context.navigateState.query.resumeState, 'downloaded');
+  assert.equal(context.loadCandidatesInvoked, true);
+});
+
+test('styles define interaction-state affordance rules for dashboard items', () => {
+  const styles = fs.readFileSync(
+    path.join(__dirname, '../public/styles.css'),
+    'utf8'
+  );
+
+  assert.match(styles, /\.status-box\.is-interactive/);
+  assert.match(styles, /\.list-item\.is-interactive/);
+  assert.match(styles, /\.metric-card\.is-interactive/);
+  assert.match(styles, /\.dashboard-affordance--interactive/);
+  assert.match(styles, /\.dashboard-affordance--static/);
+  assert.match(styles, /\.dashboard-affordance--disabled/);
+  assert.match(styles, /cursor:\s*pointer;/);
+  assert.match(styles, /\.list-item\.is-interactive:hover/);
+});
+
+test('admin overview reuses three-state affordances for summary and health cards', () => {
+  const nodes = {
+    'page-eyebrow': { textContent: '' },
+    'page-title': { textContent: '' },
+    'page-description': { textContent: '' },
+    app: { innerHTML: '' }
+  };
+  const context = loadBrowserAppContext({ nodes });
+
+  vm.runInContext(`
+    manageOverviewPolling = () => {};
+    state.currentUser = { role: 'dept_admin' };
+    state.view = 'admin-overview';
+    state.summary = {
+      kpis: { jobs: 8, candidates: 21 },
+      health: { api: '正常', database: '正常' },
+      activeRun: null
+    };
+    state.hrOverview = [
+      {
+        hr_name: '李华',
+        boss_account_name: 'boss-1',
+        browser_status: 'running',
+        job_count: 4,
+        candidate_count: 10,
+        greeted_today: 2,
+        followup_today: 1,
+        resumes_today: 1,
+        last_run_status: 'running',
+        last_run_mode: 'source'
+      }
+    ];
+    render();
+    globalThis.adminOverviewHtml = document.getElementById('app').innerHTML;
+  `, context);
+
+  const html = context.adminOverviewHtml;
+
+  assert.match(html, /metric-card is-static/);
+  assert.match(html, /dashboard-affordance dashboard-affordance--static">仅展示/);
+  assert.match(html, /status-box is-interactive/);
+  assert.match(html, /onclick="navigateToView\('jobs'\)"/);
+  assert.match(html, /onclick="navigateToCandidates\(\{\}\)"/);
+  assert.match(html, /role="button"/);
+  assert.match(html, /tabindex="0"/);
+  assert.match(html, /list-item is-static/);
+  assert.match(html, /接口服务/);
+  assert.match(html, /数据库连接/);
 });
 
 test('showModal initializes admin modal state without depending on existing form DOM values', () => {
