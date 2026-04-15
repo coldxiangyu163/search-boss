@@ -122,14 +122,19 @@ const state = {
     form: {
       jobKey: '',
       taskType: 'source',
-      timeRanges: [{ startHour: 9, startMinute: 0, endHour: 18, endMinute: 0 }],
-      intervalMinutes: 60,
+      pace: 'standard',
       targetCount: 5,
       maxThreads: 20,
       recommendTab: 'default',
+      interactionTypes: ['request_resume'],
       priority: 5,
       cooldownMinutes: 60,
-      dailyMaxRuns: 0
+      dailyMaxRuns: 0,
+      enabled: true,
+      showAdvanced: false,
+      advancedTouched: false,
+      originalRaw: null,
+      originalSimpleSnapshot: ''
     }
   },
   syncModal: {
@@ -235,6 +240,90 @@ const {
   resolveSyncTerminalStatusFromRun: resolveSyncTerminalStatusFromRunSnapshot,
   buildSyncStages: buildSyncTimelineStages
 } = window.SyncModalProgress;
+
+const automationScheduleUx = window.AutomationScheduleUx || {
+  PACE_OPTIONS: [
+    { value: 'conservative', label: '保守' },
+    { value: 'standard', label: '标准' },
+    { value: 'aggressive', label: '激进' },
+    { value: 'custom', label: '已自定义' }
+  ],
+  presetToRaw({ taskType }) {
+    if (taskType === 'followup') {
+      return {
+        priority: 5,
+        cooldownMinutes: 60,
+        dailyMaxRuns: 0,
+        payload: {
+          maxThreads: 20,
+          interactionTypes: ['request_resume']
+        }
+      };
+    }
+
+    return {
+      priority: 5,
+      cooldownMinutes: 60,
+      dailyMaxRuns: 0,
+      payload: {
+        targetCount: 5,
+        recommendTab: 'default'
+      }
+    };
+  },
+  rawToPace() {
+    return 'standard';
+  },
+  formatPaceLabel(value) {
+    return { conservative: '保守', standard: '标准', aggressive: '激进', custom: '已自定义' }[value] || '标准';
+  },
+  sanitizePayloadByTaskType(taskType, payload = {}) {
+    if (taskType === 'followup') {
+      return {
+        ...payload,
+        maxThreads: payload.maxThreads ?? 20,
+        interactionTypes: Array.isArray(payload.interactionTypes) && payload.interactionTypes.length ? payload.interactionTypes : ['request_resume']
+      };
+    }
+
+    return {
+      ...payload,
+      targetCount: payload.targetCount ?? 5,
+      recommendTab: payload.recommendTab || 'default'
+    };
+  },
+  buildSummaryLabel({ taskType, pace, payload = {} }) {
+    const paceLabel = { conservative: '保守', standard: '标准', aggressive: '激进', custom: '已自定义' }[pace] || '标准';
+    if (taskType === 'followup') {
+      return `${paceLabel} · 处理 ${payload.maxThreads || 20} 人`;
+    }
+    return `${paceLabel} · 打招呼 ${payload.targetCount || 5} 人`;
+  },
+  formatInteractionTypes(types) {
+    const labelMap = { request_resume: '求简历', exchange_phone: '换电话', exchange_wechat: '换微信' };
+    const list = Array.isArray(types) && types.length ? types : ['request_resume'];
+    return list.map((item) => labelMap[item] || item).join('、');
+  },
+  pickNonTaskPayload(payload = {}) {
+    const nextPayload = { ...payload };
+    delete nextPayload.targetCount;
+    delete nextPayload.recommendTab;
+    delete nextPayload.maxThreads;
+    delete nextPayload.interactionTypes;
+    return nextPayload;
+  }
+};
+
+const {
+  PACE_OPTIONS,
+  presetToRaw,
+  rawToPace,
+  formatPaceLabel,
+  sanitizePayloadByTaskType,
+  buildSummaryLabel,
+  formatInteractionTypes: formatAutomationInteractionTypes,
+  pickNonTaskPayload
+} = automationScheduleUx;
 
 const liveViewCoordinatesApi = window.LiveViewCoordinates || {
   resolveContainedImageClick({
@@ -4032,19 +4121,85 @@ function renderWorkConfigPanel() {
   `;
 }
 
+function buildScheduleRawSnapshot({ taskType, priority, cooldownMinutes, dailyMaxRuns, payload = {} }) {
+  return {
+    priority: Number(priority) || 5,
+    cooldownMinutes: Number(cooldownMinutes) || 60,
+    dailyMaxRuns: Number.isFinite(Number(dailyMaxRuns)) ? Number(dailyMaxRuns) : 0,
+    payload: sanitizePayloadByTaskType(taskType, payload)
+  };
+}
+
+function buildScheduleModalSimpleSnapshot(form = {}) {
+  return JSON.stringify({
+    jobKey: form.jobKey || '',
+    taskType: form.taskType || 'source',
+    pace: form.pace || 'standard',
+    targetCount: form.targetCount ?? 5,
+    maxThreads: form.maxThreads ?? 20,
+    recommendTab: form.recommendTab || 'default',
+    interactionTypes: Array.isArray(form.interactionTypes) ? form.interactionTypes : ['request_resume']
+  });
+}
+
+function createScheduleModalForm(taskType = 'source') {
+  const preset = presetToRaw({ taskType, pace: 'standard' });
+  const payload = preset.payload || {};
+  return {
+    jobKey: '',
+    taskType,
+    pace: 'standard',
+    targetCount: payload.targetCount ?? 5,
+    maxThreads: payload.maxThreads ?? 20,
+    recommendTab: payload.recommendTab || 'default',
+    interactionTypes: Array.isArray(payload.interactionTypes) && payload.interactionTypes.length
+      ? payload.interactionTypes
+      : ['request_resume'],
+    priority: preset.priority ?? 5,
+    cooldownMinutes: preset.cooldownMinutes ?? 60,
+    dailyMaxRuns: preset.dailyMaxRuns ?? 0,
+    enabled: true,
+    showAdvanced: false,
+    advancedTouched: false,
+    originalRaw: null,
+    originalSimpleSnapshot: ''
+  };
+}
+
+function buildScheduleSummary(schedule) {
+  const raw = buildScheduleRawSnapshot({
+    taskType: schedule.task_type,
+    priority: schedule.priority,
+    cooldownMinutes: schedule.cooldown_minutes,
+    dailyMaxRuns: schedule.daily_max_runs,
+    payload: schedule.payload || {}
+  });
+  const pace = rawToPace({
+    taskType: schedule.task_type,
+    priority: raw.priority,
+    cooldownMinutes: raw.cooldownMinutes,
+    dailyMaxRuns: raw.dailyMaxRuns
+  });
+  return buildSummaryLabel({
+    taskType: schedule.task_type,
+    pace,
+    payload: raw.payload
+  });
+}
+
 function renderAutomation() {
   return `
     ${renderWorkConfigPanel()}
     <section class="table-card">
       <div class="card-header">
         <div>
-          <p class="eyebrow">任务花名册</p>
-          <h3 class="card-title">任务队列（按优先级自动编排）</h3>
-          <p class="card-subtitle">添加需要执行的任务，系统在工作窗口内按优先级和冷却时间自动轮转执行。</p>
+          <p class="eyebrow">自动化助手</p>
+          <h3 class="card-title">按岗位开启自动化</h3>
+          <p class="card-subtitle">只需要设置节奏、数量和交互方式，系统会自动安排执行。</p>
         </div>
         <div class="jobs-header-actions">
-          <span class="badge">${state.schedules.length} 个调度任务</span>
-          <button class="button-secondary" onclick="openScheduleModal('create')">添加任务</button>
+          <span class="badge">${state.schedules.length} 个自动化</span>
+          <button class="button-secondary" onclick="openScheduleModal('create')">开启自动化</button>
         </div>
       </div>
       ${state.schedules.length ? `
@@ -4053,8 +4208,7 @@ function renderAutomation() {
             <tr>
               <th>职位</th>
               <th>任务类型</th>
-              <th>优先级</th><th>冷却时间</th><th>每日执行次数上限</th>
-              <th>执行参数</th>
+              <th>当前设置</th>
               <th>状态</th>
               <th>最近执行</th>
               <th>操作</th>
@@ -4062,24 +4216,14 @@ function renderAutomation() {
           </thead>
           <tbody>
             ${state.schedules.map((schedule) => {
-              const payload = schedule.payload || {};
               const jobName = getJobNameByKey(schedule.job_key);
-              const recommendLabel = (payload.recommendTab || 'default') === 'default' ? '默认推荐' : '最新推荐';
-              const interactionLabel = schedule.task_type === 'followup' && Array.isArray(payload.interactionTypes) && payload.interactionTypes.length > 0
-                ? ` · ${formatInteractionTypes(payload.interactionTypes)}`
-                : '';
-              const paramDisplay = schedule.task_type === 'source'
-                ? `打招呼 ${payload.targetCount || '-'} 人 · ${recommendLabel}`
-                : `回复 ${payload.maxThreads || '-'} 人${interactionLabel}`;
-
-              const timingCols = `<td>P${schedule.priority || 5}</td><td>${schedule.cooldown_minutes || 60} 分钟</td><td>${schedule.daily_max_runs || '不限'}</td>`;
+              const summary = buildScheduleSummary(schedule);
 
               return `
                 <tr>
                   <td>${escapeHtml(jobName)}<div class="muted">${escapeHtml(schedule.job_key)}</div></td>
                   <td>${escapeHtml(formatTaskType(schedule.task_type))}</td>
-                  ${timingCols}
-                  <td>${escapeHtml(paramDisplay)}</td>
+                  <td>${escapeHtml(summary)}</td>
                   <td>
                     <button
                       class="badge ${schedule.enabled ? 'badge-success' : 'badge-warning'}"
@@ -4129,7 +4273,7 @@ function renderAutomation() {
             }).join('')}
           </tbody>
         </table>
-      ` : '<div class="empty-state">当前暂无调度任务，点击「添加任务」创建。</div>'}
+      ` : '<div class="empty-state">当前暂无自动化，点击「开启自动化」创建。</div>'}
     </section>
   `;
 }
@@ -4142,9 +4286,8 @@ function renderScheduleModal() {
   const isCreate = mode === 'create';
   const openJobs = state.jobs.filter((job) => job.status === 'open');
   const isSource = form.taskType === 'source';
-  const titleMap = { create: '添加任务', edit: '编辑任务', view: '任务详情' };
+  const titleMap = { create: '开启自动化', edit: '编辑自动化', view: '自动化详情' };
 
-  // --- Section: basic info ---
   const basicSection = `
     <div class="sm-section">
       <div class="sm-section-title">基本信息</div>
@@ -4175,48 +4318,30 @@ function renderScheduleModal() {
     </div>
   `;
 
-  // --- Section: scheduling ---
-  const schedulingSection = `
+  const paceSection = `
     <div class="sm-section">
-      <div class="sm-section-title">调度策略</div>
-      <div class="sm-row sm-row-3">
-        <label class="sm-field">
-          <span class="sm-label">优先级</span>
-          ${isView ? `<div class="sm-value">P${form.priority ?? 5}</div>` : `
-            <input class="sm-input" type="number" min="1" max="99" value="${form.priority ?? 5}"
-              onchange="updateScheduleModalForm('priority', Number(this.value))" />
-            <span class="sm-hint">数字越小越优先</span>
-          `}
-        </label>
-        <label class="sm-field">
-          <span class="sm-label">冷却时间</span>
-          ${isView ? `<div class="sm-value">${form.cooldownMinutes ?? 60} 分钟</div>` : `
-            <div class="sm-input-group">
-              <input class="sm-input" type="number" min="5" max="1440" value="${form.cooldownMinutes ?? 60}"
-                onchange="updateScheduleModalForm('cooldownMinutes', Number(this.value))" />
-              <span class="sm-input-suffix">分钟</span>
-            </div>
-            <span class="sm-hint">执行完成后的最短等待间隔</span>
-          `}
-        </label>
-        <label class="sm-field">
-          <span class="sm-label">每日执行次数上限</span>
-          ${isView ? `<div class="sm-value">${form.dailyMaxRuns || '不限'}</div>` : `
-            <input class="sm-input" type="number" min="0" max="100" value="${form.dailyMaxRuns ?? 0}"
-              onchange="updateScheduleModalForm('dailyMaxRuns', Number(this.value))" />
-            <span class="sm-hint">0 = 不限制</span>
-          `}
-        </label>
-      </div>
+      <div class="sm-section-title">执行节奏</div>
+      ${isView ? `
+        <div class="sm-value">${escapeHtml(formatPaceLabel(form.pace || 'standard'))}</div>
+      ` : `
+        <div class="segment-control">
+          ${PACE_OPTIONS.filter((option) => option.value !== 'custom').map((option) => `
+            <input type="radio" name="schedulePace" id="pace-${option.value}" value="${option.value}"
+              ${form.pace === option.value ? 'checked' : ''}
+              onchange="applySchedulePacePreset('${option.value}')"
+            /><label for="pace-${option.value}">${escapeHtml(option.label)}</label>
+          `).join('')}
+        </div>
+        ${form.pace === 'custom' ? '<span class="sm-hint">当前高级设置已自定义。</span>' : '<span class="sm-hint">系统将根据节奏自动安排内部执行频率。</span>'}
+      `}
     </div>
   `;
 
-  // --- Section: execution params ---
   let paramsSection = '';
   if (isSource) {
     paramsSection = `
       <div class="sm-section">
-        <div class="sm-section-title">执行参数</div>
+        <div class="sm-section-title">执行设置</div>
         <div class="sm-row">
           <label class="sm-field">
             <span class="sm-label">单次打招呼人数</span>
@@ -4249,10 +4374,10 @@ function renderScheduleModal() {
   } else {
     paramsSection = `
       <div class="sm-section">
-        <div class="sm-section-title">执行参数</div>
+        <div class="sm-section-title">执行设置</div>
         <div class="sm-row">
           <label class="sm-field">
-            <span class="sm-label">单次回复人数</span>
+            <span class="sm-label">单次处理人数</span>
             ${isView ? `<div class="sm-value">${form.maxThreads || '-'} 个</div>` : `
               <div class="sm-input-group">
                 <input class="sm-input" type="number" min="1" max="100" value="${form.maxThreads}"
@@ -4265,7 +4390,7 @@ function renderScheduleModal() {
         ${form.taskType === 'followup' ? `
         <div class="sm-field" style="margin-top:10px">
           <span class="sm-label">交互方式</span>
-          ${isView ? `<div class="sm-value">${formatInteractionTypes(form.interactionTypes)}</div>` : `
+          ${isView ? `<div class="sm-value">${formatAutomationInteractionTypes(form.interactionTypes)}</div>` : `
             <div class="checkbox-group" style="margin-top:6px">
               <label class="checkbox-label"><input type="checkbox" ${(form.interactionTypes || []).includes('request_resume') ? 'checked' : ''} onchange="toggleInteractionType('request_resume', this.checked)" /> 求简历</label>
               <label class="checkbox-label"><input type="checkbox" ${(form.interactionTypes || []).includes('exchange_phone') ? 'checked' : ''} onchange="toggleInteractionType('exchange_phone', this.checked)" /> 换电话</label>
@@ -4277,6 +4402,38 @@ function renderScheduleModal() {
       </div>
     `;
   }
+
+  const advancedSection = form.showAdvanced ? `
+    <div class="sm-section">
+      <div class="sm-section-title">高级设置</div>
+      <div class="sm-row sm-row-3">
+        <label class="sm-field">
+          <span class="sm-label">优先级</span>
+          ${isView ? `<div class="sm-value">P${form.priority ?? 5}</div>` : `
+            <input class="sm-input" type="number" min="1" max="99" value="${form.priority ?? 5}"
+              onchange="updateScheduleAdvancedField('priority', Number(this.value))" />
+          `}
+        </label>
+        <label class="sm-field">
+          <span class="sm-label">冷却时间</span>
+          ${isView ? `<div class="sm-value">${form.cooldownMinutes ?? 60} 分钟</div>` : `
+            <div class="sm-input-group">
+              <input class="sm-input" type="number" min="5" max="1440" value="${form.cooldownMinutes ?? 60}"
+                onchange="updateScheduleAdvancedField('cooldownMinutes', Number(this.value))" />
+              <span class="sm-input-suffix">分钟</span>
+            </div>
+          `}
+        </label>
+        <label class="sm-field">
+          <span class="sm-label">每日执行次数上限</span>
+          ${isView ? `<div class="sm-value">${form.dailyMaxRuns || '不限'}</div>` : `
+            <input class="sm-input" type="number" min="0" max="100" value="${form.dailyMaxRuns ?? 0}"
+              onchange="updateScheduleAdvancedField('dailyMaxRuns', Number(this.value))" />
+          `}
+        </label>
+      </div>
+    </div>
+  ` : '';
 
   return `
     <div class="modal-backdrop" onclick="closeScheduleModal()">
@@ -4291,8 +4448,12 @@ function renderScheduleModal() {
         ${error ? `<div class="inline-status inline-status-error">${escapeHtml(error)}</div>` : ''}
         <div class="sm-body">
           ${basicSection}
-          ${schedulingSection}
+          ${paceSection}
           ${paramsSection}
+          ${advancedSection}
+          <button class="button-secondary button-compact" onclick="toggleScheduleAdvancedSettings()">
+            ${form.showAdvanced ? '收起高级设置' : '查看高级设置'}
+          </button>
         </div>
         ${!isView ? `
           <div class="sm-footer">
@@ -4340,48 +4501,52 @@ function openScheduleModal(mode, scheduleId) {
       scheduleId: null,
       saving: false,
       error: '',
-      form: {
-        jobKey: '',
-        taskType: 'source',
-        timeRanges: [{ startHour: 9, startMinute: 0, endHour: 18, endMinute: 0 }],
-        intervalMinutes: 60,
-        targetCount: 5,
-        maxThreads: 20,
-        recommendTab: 'default',
-        interactionTypes: ['request_resume'],
-        priority: 5,
-        cooldownMinutes: 60,
-        dailyMaxRuns: 0
-      }
+      form: createScheduleModalForm('source')
     };
   } else {
     const schedule = state.schedules.find((s) => String(s.id) === String(scheduleId));
     if (!schedule) return;
-    const payload = schedule.payload || {};
-    const timeRanges = payload.timeRanges && payload.timeRanges.length
-      ? payload.timeRanges
-      : [{ startHour: payload.startHour ?? 0, startMinute: payload.startMinute ?? 0, endHour: 18, endMinute: 0 }];
+    const raw = buildScheduleRawSnapshot({
+      taskType: schedule.task_type,
+      priority: schedule.priority,
+      cooldownMinutes: schedule.cooldown_minutes,
+      dailyMaxRuns: schedule.daily_max_runs,
+      payload: schedule.payload || {}
+    });
+    const pace = rawToPace({
+      taskType: schedule.task_type,
+      priority: raw.priority,
+      cooldownMinutes: raw.cooldownMinutes,
+      dailyMaxRuns: raw.dailyMaxRuns
+    });
+    const payload = raw.payload || {};
+    const form = createScheduleModalForm(schedule.task_type);
+    form.jobKey = schedule.job_key;
+    form.pace = pace;
+    form.targetCount = payload.targetCount ?? form.targetCount;
+    form.maxThreads = payload.maxThreads ?? form.maxThreads;
+    form.recommendTab = payload.recommendTab || form.recommendTab;
+    form.interactionTypes = Array.isArray(payload.interactionTypes) && payload.interactionTypes.length
+      ? payload.interactionTypes
+      : form.interactionTypes;
+    form.priority = raw.priority;
+    form.cooldownMinutes = raw.cooldownMinutes;
+    form.dailyMaxRuns = raw.dailyMaxRuns;
+    form.enabled = schedule.enabled !== false;
+    form.originalRaw = {
+      priority: raw.priority,
+      cooldownMinutes: raw.cooldownMinutes,
+      dailyMaxRuns: raw.dailyMaxRuns,
+      payload: { ...(schedule.payload || {}) }
+    };
+    form.originalSimpleSnapshot = buildScheduleModalSimpleSnapshot(form);
     state.scheduleModal = {
       open: true,
       mode,
       scheduleId,
       saving: false,
       error: '',
-      form: {
-        jobKey: schedule.job_key,
-        taskType: schedule.task_type,
-        timeRanges,
-        intervalMinutes: payload.intervalMinutes ?? 60,
-        targetCount: payload.targetCount ?? 5,
-        maxThreads: payload.maxThreads ?? 20,
-        recommendTab: payload.recommendTab || 'default',
-        interactionTypes: Array.isArray(payload.interactionTypes) && payload.interactionTypes.length > 0
-          ? payload.interactionTypes
-          : ['request_resume'],
-        priority: schedule.priority ?? 5,
-        cooldownMinutes: schedule.cooldown_minutes ?? 60,
-        dailyMaxRuns: schedule.daily_max_runs ?? 0
-      }
+      form
     };
   }
   render();
@@ -4394,19 +4559,7 @@ function closeScheduleModal() {
     scheduleId: null,
     saving: false,
     error: '',
-    form: {
-      jobKey: '',
-      taskType: 'source',
-      timeRanges: [{ startHour: 9, startMinute: 0, endHour: 18, endMinute: 0 }],
-      intervalMinutes: 60,
-      targetCount: 5,
-      maxThreads: 20,
-      recommendTab: 'default',
-      interactionTypes: ['request_resume'],
-      priority: 5,
-      cooldownMinutes: 60,
-      dailyMaxRuns: 0
-    }
+    form: createScheduleModalForm('source')
   };
   render();
 }
@@ -4418,10 +4571,54 @@ function switchScheduleModalToEdit() {
 
 function updateScheduleModalForm(field, value) {
   state.scheduleModal.form[field] = value;
+  render();
+}
+
+function updateScheduleAdvancedField(field, value) {
+  state.scheduleModal.form[field] = value;
+  state.scheduleModal.form.advancedTouched = true;
+  state.scheduleModal.form.pace = rawToPace({
+    taskType: state.scheduleModal.form.taskType,
+    priority: state.scheduleModal.form.priority,
+    cooldownMinutes: state.scheduleModal.form.cooldownMinutes,
+    dailyMaxRuns: state.scheduleModal.form.dailyMaxRuns
+  });
+  render();
+}
+
+function applySchedulePacePreset(pace) {
+  const preset = presetToRaw({ taskType: state.scheduleModal.form.taskType, pace });
+  const payload = preset.payload || {};
+  state.scheduleModal.form.pace = pace;
+  state.scheduleModal.form.priority = preset.priority ?? 5;
+  state.scheduleModal.form.cooldownMinutes = preset.cooldownMinutes ?? 60;
+  state.scheduleModal.form.dailyMaxRuns = preset.dailyMaxRuns ?? 0;
+  if (state.scheduleModal.form.taskType === 'source') {
+    state.scheduleModal.form.targetCount = payload.targetCount ?? state.scheduleModal.form.targetCount;
+    state.scheduleModal.form.recommendTab = payload.recommendTab || state.scheduleModal.form.recommendTab;
+  } else {
+    state.scheduleModal.form.maxThreads = payload.maxThreads ?? state.scheduleModal.form.maxThreads;
+    state.scheduleModal.form.interactionTypes = Array.isArray(payload.interactionTypes) && payload.interactionTypes.length
+      ? [...payload.interactionTypes]
+      : state.scheduleModal.form.interactionTypes;
+  }
+  state.scheduleModal.form.advancedTouched = false;
+  render();
+}
+
+function toggleScheduleAdvancedSettings() {
+  state.scheduleModal.form.showAdvanced = !state.scheduleModal.form.showAdvanced;
+  render();
 }
 
 function handleTaskTypeChange(value) {
-  state.scheduleModal.form.taskType = value;
+  const nextForm = createScheduleModalForm(value);
+  nextForm.jobKey = state.scheduleModal.form.jobKey;
+  nextForm.enabled = state.scheduleModal.form.enabled !== false;
+  state.scheduleModal.form = {
+    ...nextForm,
+    showAdvanced: state.scheduleModal.form.showAdvanced
+  };
   render();
 }
 
@@ -4438,9 +4635,7 @@ function toggleInteractionType(type, checked) {
 }
 
 function formatInteractionTypes(types) {
-  const labelMap = { request_resume: '求简历', exchange_phone: '换电话', exchange_wechat: '换微信' };
-  if (!Array.isArray(types) || types.length === 0) return '求简历';
-  return types.map((t) => labelMap[t] || t).join('、');
+  return formatAutomationInteractionTypes(types);
 }
 
 function handleTimeRangeChange(idx, type, timeStr) {
@@ -4537,7 +4732,7 @@ async function saveWorkConfig() {
 }
 
 async function submitScheduleModal() {
-  const { mode, form, scheduleId } = state.scheduleModal;
+  const { mode, form } = state.scheduleModal;
 
   if (!form.jobKey) {
     state.scheduleModal.error = '请选择一个岗位。';
@@ -4550,16 +4745,34 @@ async function submitScheduleModal() {
   render();
 
   try {
-    const payload = {};
-    if (form.taskType === 'source') {
-      payload.targetCount = form.targetCount;
-      payload.recommendTab = form.recommendTab || 'default';
-    } else {
-      payload.maxThreads = form.maxThreads;
-      if (form.taskType === 'followup' && Array.isArray(form.interactionTypes) && form.interactionTypes.length > 0) {
-        payload.interactionTypes = form.interactionTypes;
+    const preservedPayload = mode === 'create'
+      ? {}
+      : pickNonTaskPayload(form.originalRaw?.payload || {});
+    const raw = buildScheduleRawSnapshot({
+      taskType: form.taskType,
+      priority: form.priority,
+      cooldownMinutes: form.cooldownMinutes,
+      dailyMaxRuns: form.dailyMaxRuns,
+      payload: {
+        ...preservedPayload,
+        ...(form.taskType === 'source'
+          ? {
+              targetCount: form.targetCount,
+              recommendTab: form.recommendTab || 'default'
+            }
+          : {
+              maxThreads: form.maxThreads,
+              interactionTypes: form.interactionTypes
+            })
       }
-    }
+    });
+    const shouldPreserveOriginal = mode !== 'create'
+      && !form.advancedTouched
+      && form.originalRaw
+      && buildScheduleModalSimpleSnapshot(form) === form.originalSimpleSnapshot;
+    const finalRaw = shouldPreserveOriginal
+      ? form.originalRaw
+      : raw;
     await fetchJson('/api/schedules', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -4567,11 +4780,12 @@ async function submitScheduleModal() {
         jobKey: form.jobKey,
         taskType: form.taskType,
         cronExpression: '',
-        enabled: true,
-        payload,
-        priority: form.priority ?? 5,
-        cooldownMinutes: form.cooldownMinutes ?? 60,
-        dailyMaxRuns: form.dailyMaxRuns ?? 0
+        enabled: form.enabled !== false,
+        pace: form.pace,
+        payload: finalRaw.payload,
+        priority: finalRaw.priority,
+        cooldownMinutes: finalRaw.cooldownMinutes,
+        dailyMaxRuns: finalRaw.dailyMaxRuns
       })
     });
 

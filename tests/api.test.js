@@ -1101,6 +1101,63 @@ test('POST /api/schedules upserts schedule payload', async () => {
   assert.equal(response.body.item.jobKey, '健康顾问_B0047007');
 });
 
+test('POST /api/schedules strips pace metadata and irrelevant payload keys', async () => {
+  let capturedPayload = null;
+
+  const app = createApp({
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return []; } },
+      agent: {
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return { allowed: true }; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; }
+      },
+      scheduler: {
+        async listSchedules() { return []; },
+        async upsertSchedule(payload) {
+          capturedPayload = payload;
+          return { id: 1, ...payload };
+        }
+      }
+    },
+    config: {
+      agentToken: 'search-boss-local-agent'
+    }
+  });
+
+  const response = await request(app)
+    .post('/api/schedules')
+    .send({
+      jobKey: '健康顾问_B0047007',
+      taskType: 'source',
+      cronExpression: '',
+      enabled: false,
+      pace: 'aggressive',
+      custom: true,
+      payload: {
+        targetCount: 8,
+        recommendTab: 'latest',
+        maxThreads: 22,
+        interactionTypes: ['request_resume']
+      },
+      priority: 3,
+      cooldownMinutes: 20,
+      dailyMaxRuns: 0
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(capturedPayload.enabled, false);
+  assert.equal(Object.hasOwn(capturedPayload, 'pace'), false);
+  assert.equal(Object.hasOwn(capturedPayload, 'custom'), false);
+  assert.deepEqual(capturedPayload.payload, {
+    targetCount: 8,
+    recommendTab: 'latest'
+  });
+});
+
 test('POST /api/agent/runs creates a sourcing run', async () => {
   let capturedPayload = null;
 

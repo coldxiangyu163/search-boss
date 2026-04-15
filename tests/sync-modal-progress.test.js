@@ -12,6 +12,50 @@ const {
   buildSyncStages
 } = require('../public/sync-modal-progress');
 
+function createAppVmContext({ nodes, fetch = () => {}, consoleOverride = console } = {}) {
+  const noop = () => {};
+
+  return vm.createContext({
+    window: {
+      JobUiHelpers: {
+        formatJobStatus: noop,
+        getJobStatusBadgeClass: noop,
+        isJobActionEnabled: noop
+      },
+      CandidateUiHelpers: {
+        formatLifecycleStatus: noop,
+        formatResumeState: noop,
+        formatGuardStatus: noop,
+        getLifecycleBadgeClass: noop,
+        getResumeBadgeClass: noop,
+        getGuardBadgeClass: noop,
+        buildCandidateTimeline: () => [],
+        buildResumePreviewUrl: noop
+      },
+      SyncLogScroll: {
+        captureSyncLogScrollSnapshot: () => null,
+        resolveSyncLogScrollTop: () => 0
+      },
+      location: { href: '' },
+      setInterval: noop,
+      clearInterval: noop
+    },
+    document: {
+      addEventListener: noop,
+      getElementById(id) {
+        return nodes[id] || null;
+      },
+      querySelector() {
+        return null;
+      },
+      body: { appendChild: noop }
+    },
+    fetch,
+    module: undefined,
+    console: consoleOverride
+  });
+}
+
 test('buildSyncStages keeps request stage done after bootstrap event scrolls out of the visible log window', () => {
   let progress = createSyncModalProgress();
   progress = updateSyncModalProgress(progress, { eventType: 'schedule_triggered' });
@@ -704,59 +748,24 @@ test('render mounts state-driven modal backdrops from root content shell instead
     path.join(__dirname, '../public/sync-modal-progress.js'),
     'utf8'
   );
+  const scheduleHelperScript = fs.readFileSync(
+    path.join(__dirname, '../public/automation-schedule-ux.js'),
+    'utf8'
+  );
   const appScript = fs.readFileSync(
     path.join(__dirname, '../public/app.js'),
     'utf8'
   );
-
-  const noop = () => {};
   const nodes = {
     'page-eyebrow': { textContent: '' },
     'page-title': { textContent: '' },
     'page-description': { textContent: '' },
     app: { innerHTML: '' }
   };
-  const context = vm.createContext({
-    window: {
-      JobUiHelpers: {
-        formatJobStatus: noop,
-        getJobStatusBadgeClass: noop,
-        isJobActionEnabled: noop
-      },
-      CandidateUiHelpers: {
-        formatLifecycleStatus: noop,
-        formatResumeState: noop,
-        formatGuardStatus: noop,
-        getLifecycleBadgeClass: noop,
-        getResumeBadgeClass: noop,
-        getGuardBadgeClass: noop,
-        buildCandidateTimeline: () => [],
-        buildResumePreviewUrl: noop
-      },
-      SyncLogScroll: {
-        captureSyncLogScrollSnapshot: () => null,
-        resolveSyncLogScrollTop: () => 0
-      },
-      location: { href: '' },
-      setInterval: noop,
-      clearInterval: noop
-    },
-    document: {
-      addEventListener: noop,
-      getElementById(id) {
-        return nodes[id] || null;
-      },
-      querySelector() {
-        return null;
-      },
-      body: { appendChild: noop }
-    },
-    fetch: noop,
-    module: undefined,
-    console
-  });
+  const context = createAppVmContext({ nodes });
 
   vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+  vm.runInContext(scheduleHelperScript, context, { filename: 'automation-schedule-ux.js' });
   vm.runInContext(appScript, context, { filename: 'app.js' });
   vm.runInContext(`
     state.summary = { activeRun: null };
@@ -785,6 +794,112 @@ test('render mounts state-driven modal backdrops from root content shell instead
   const backdropCount = (html.match(/class=\"modal-backdrop\"/g) || []).length;
   assert.equal(backdropCount, 1);
   assert.match(html, /schedule-modal/);
+});
+
+test('renderAutomation shows simplified source fields and hides scheduling jargon by default', () => {
+  const helperScript = fs.readFileSync(
+    path.join(__dirname, '../public/sync-modal-progress.js'),
+    'utf8'
+  );
+  const scheduleHelperScript = fs.readFileSync(
+    path.join(__dirname, '../public/automation-schedule-ux.js'),
+    'utf8'
+  );
+  const appScript = fs.readFileSync(
+    path.join(__dirname, '../public/app.js'),
+    'utf8'
+  );
+
+  const nodes = {
+    'page-eyebrow': { textContent: '' },
+    'page-title': { textContent: '' },
+    'page-description': { textContent: '' },
+    app: { innerHTML: '' }
+  };
+  const context = createAppVmContext({ nodes });
+
+  vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+  vm.runInContext(scheduleHelperScript, context, { filename: 'automation-schedule-ux.js' });
+  vm.runInContext(appScript, context, { filename: 'app.js' });
+  vm.runInContext(`
+    state.summary = { activeRun: null };
+    state.view = 'automation';
+    state.jobs = [{ job_key: 'job-1', job_name: '健康顾问', city: '上海', status: 'open' }];
+    state.schedules = [{
+      id: 1,
+      job_key: 'job-1',
+      task_type: 'source',
+      enabled: true,
+      last_run_at: null,
+      priority: 5,
+      cooldown_minutes: 60,
+      daily_max_runs: 0,
+      payload: { targetCount: 5, recommendTab: 'default' }
+    }];
+    state.scheduleModal.open = true;
+    state.scheduleModal.mode = 'create';
+    manageOverviewPolling = () => {};
+    render();
+  `, context);
+
+  const html = nodes.app.innerHTML;
+  assert.match(html, /自动化助手/);
+  assert.match(html, /执行节奏/);
+  assert.match(html, /单次打招呼人数/);
+  assert.match(html, /推荐列表模式/);
+  assert.doesNotMatch(html, /优先级/);
+  assert.doesNotMatch(html, /冷却时间/);
+  assert.doesNotMatch(html, /每日执行次数上限/);
+});
+
+test('renderScheduleModal keeps advanced scheduling fields hidden in view mode by default', () => {
+  const helperScript = fs.readFileSync(
+    path.join(__dirname, '../public/sync-modal-progress.js'),
+    'utf8'
+  );
+  const scheduleHelperScript = fs.readFileSync(
+    path.join(__dirname, '../public/automation-schedule-ux.js'),
+    'utf8'
+  );
+  const appScript = fs.readFileSync(
+    path.join(__dirname, '../public/app.js'),
+    'utf8'
+  );
+
+  const nodes = {
+    'page-eyebrow': { textContent: '' },
+    'page-title': { textContent: '' },
+    'page-description': { textContent: '' },
+    app: { innerHTML: '' }
+  };
+  const context = createAppVmContext({ nodes });
+
+  vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+  vm.runInContext(scheduleHelperScript, context, { filename: 'automation-schedule-ux.js' });
+  vm.runInContext(appScript, context, { filename: 'app.js' });
+  vm.runInContext(`
+    state.summary = { activeRun: null };
+    state.view = 'automation';
+    state.jobs = [{ job_key: 'job-1', job_name: '健康顾问', city: '上海', status: 'open' }];
+    state.schedules = [{
+      id: 1,
+      job_key: 'job-1',
+      task_type: 'source',
+      enabled: true,
+      last_run_at: null,
+      priority: 3,
+      cooldown_minutes: 20,
+      daily_max_runs: 0,
+      payload: { targetCount: 10, recommendTab: 'latest' }
+    }];
+    openScheduleModal('view', 1);
+  `, context);
+
+  const html = nodes.app.innerHTML;
+  assert.match(html, /查看高级设置/);
+  assert.doesNotMatch(html, /优先级/);
+  assert.doesNotMatch(html, /冷却时间/);
+  assert.doesNotMatch(html, /每日执行次数上限/);
 });
 
 test('render mounts legacy admin modals from root content shell and preserves open state across rerender', () => {

@@ -12,6 +12,7 @@ const {
   licenseMiddleware
 } = require('./services/license-service');
 const { buildZipArchive } = require('./services/zip-builder');
+const { sanitizePayloadByTaskType } = require('../public/automation-schedule-ux');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const RESUMES_ROOT = path.join(REPO_ROOT, 'resumes');
@@ -34,6 +35,20 @@ function canAccessRun(user, runScope) {
 
 function rejectLegacyRole(res, role) {
   return res.status(400).json(invalidRolePayload(role));
+}
+
+function normalizeScheduleUpsertInput(body = {}) {
+  const taskType = body.taskType;
+  return {
+    jobKey: body.jobKey,
+    taskType,
+    cronExpression: body.cronExpression || '',
+    enabled: body.enabled !== false,
+    payload: sanitizePayloadByTaskType(taskType, body.payload || {}),
+    priority: Number(body.priority) || 5,
+    cooldownMinutes: Number(body.cooldownMinutes) || 60,
+    dailyMaxRuns: Number.isFinite(Number(body.dailyMaxRuns)) ? Number(body.dailyMaxRuns) : 0
+  };
 }
 
 function createApp({ services = {}, config = {}, pool = null } = {}) {
@@ -817,8 +832,9 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
           });
         }
       }
+      const scheduleInput = normalizeScheduleUpsertInput(req.body);
       const item = await services.scheduler.upsertSchedule({
-        ...req.body,
+        ...scheduleInput,
         hrAccountId
       });
       res.json({ item });
