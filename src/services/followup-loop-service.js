@@ -413,7 +413,7 @@ class FollowupLoopService {
         jobKey,
         bossEncryptGeekId: encryptUid,
         name: thread.name || threadState.activeName || null,
-        status: 'in_conversation',
+        status: 'greeted',
         metadata: { source: 'deterministic_followup_loop' }
       });
       candidateId = upsertResult?.candidateId || null;
@@ -510,7 +510,7 @@ class FollowupLoopService {
         encryptUid,
         candidateName: thread.name,
         candidateId,
-        status: 'in_conversation',
+        status: 'greeted',
         resumePanel,
         resumeProfile
       }) || candidateId;
@@ -524,7 +524,7 @@ class FollowupLoopService {
         encryptUid,
         candidateName: thread.name,
         candidateId,
-        status: 'in_conversation',
+        status: 'greeted',
         resumePanel,
         resumeProfile,
         filterGate,
@@ -619,7 +619,7 @@ class FollowupLoopService {
       encryptUid,
       candidateName: thread.name,
       candidateId,
-      status: 'in_conversation',
+      status: 'greeted',
       resumePanel,
       resumeProfile,
       filterGate,
@@ -814,7 +814,7 @@ class FollowupLoopService {
         education: resumeProfile?.degree || null,
         experience: resumeProfile?.experience || null,
         school: resumeProfile?.school || null,
-        status: status || 'in_conversation',
+        status: status || 'greeted',
         metadata: buildFollowupCandidateMetadata({
           existing,
           resumePanel,

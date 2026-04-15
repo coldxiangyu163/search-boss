@@ -1280,12 +1280,12 @@ test('FollowupLoopService calls upsertCandidate for each processed thread', asyn
   assert.ok(agentService.candidateUpserts.some((item) =>
     item.name === '候选人X'
     && item.bossEncryptGeekId === 'x-0'
-    && item.status === 'in_conversation'
+    && item.status === 'greeted'
   ));
   assert.ok(agentService.candidateUpserts.some((item) =>
     item.name === '候选人Y'
     && item.bossEncryptGeekId === 'y-0'
-    && item.status === 'in_conversation'
+    && item.status === 'greeted'
   ));
 });
 

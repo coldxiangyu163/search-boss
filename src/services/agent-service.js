@@ -307,10 +307,10 @@ class AgentService {
         on conflict (job_id, person_id) do update
         set lifecycle_status = case
               when array_position(
-                array['discovered','greeted','in_conversation','responded','resume_requested','resume_received','resume_downloaded'],
+                array['discovered','greeted','responded','resume_requested','resume_received','resume_downloaded'],
                 excluded.lifecycle_status
               ) > array_position(
-                array['discovered','greeted','in_conversation','responded','resume_requested','resume_received','resume_downloaded'],
+                array['discovered','greeted','responded','resume_requested','resume_received','resume_downloaded'],
                 job_candidates.lifecycle_status
               ) then excluded.lifecycle_status
               else job_candidates.lifecycle_status
@@ -1575,7 +1575,6 @@ function normalizeJobRequirement(value) {
 const VALID_LIFECYCLE_STATUSES = [
   'discovered',
   'greeted',
-  'in_conversation',
   'responded',
   'resume_requested',
   'resume_received',
