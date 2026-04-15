@@ -4436,7 +4436,7 @@ function renderScheduleModal() {
   ` : '';
 
   return `
-    <div class="modal-backdrop" onclick="closeScheduleModal()">
+    <div class="modal-backdrop" onclick="handleScheduleModalBackdropClick(event)">
       <section class="sync-modal schedule-modal" onclick="event.stopPropagation()">
         <div class="sm-header">
           <h3 class="sm-title">${titleMap[mode]}</h3>
@@ -4562,6 +4562,12 @@ function closeScheduleModal() {
     form: createScheduleModalForm('source')
   };
   render();
+}
+
+function handleScheduleModalBackdropClick(event) {
+  if (event && event.target === event.currentTarget) {
+    return;
+  }
 }
 
 function switchScheduleModalToEdit() {

@@ -902,6 +902,59 @@ test('renderScheduleModal keeps advanced scheduling fields hidden in view mode b
   assert.doesNotMatch(html, /每日执行次数上限/);
 });
 
+test('schedule modal backdrop click does not close the modal', () => {
+  const helperScript = fs.readFileSync(
+    path.join(__dirname, '../public/sync-modal-progress.js'),
+    'utf8'
+  );
+  const scheduleHelperScript = fs.readFileSync(
+    path.join(__dirname, '../public/automation-schedule-ux.js'),
+    'utf8'
+  );
+  const appScript = fs.readFileSync(
+    path.join(__dirname, '../public/app.js'),
+    'utf8'
+  );
+
+  const nodes = {
+    'page-eyebrow': { textContent: '' },
+    'page-title': { textContent: '' },
+    'page-description': { textContent: '' },
+    app: { innerHTML: '' }
+  };
+  const context = createAppVmContext({ nodes });
+
+  vm.runInContext(helperScript, context, { filename: 'sync-modal-progress.js' });
+  vm.runInContext(scheduleHelperScript, context, { filename: 'automation-schedule-ux.js' });
+  vm.runInContext(appScript, context, { filename: 'app.js' });
+
+  vm.runInContext(`
+    state.summary = { activeRun: null };
+    state.view = 'automation';
+    state.jobs = [{ job_key: 'job-1', job_name: '健康顾问', city: '上海', status: 'open' }];
+    state.scheduleModal.open = true;
+    state.scheduleModal.mode = 'create';
+    manageOverviewPolling = () => {};
+    render();
+  `, context);
+
+  const result = vm.runInContext(`
+    ({
+      hasBackdropHandler: typeof handleScheduleModalBackdropClick === 'function',
+      stillOpenAfterBackdropClick: (() => {
+        if (typeof handleScheduleModalBackdropClick === 'function') {
+          handleScheduleModalBackdropClick({ target: 'backdrop', currentTarget: 'backdrop' });
+        }
+        return state.scheduleModal.open;
+      })()
+    })
+  `, context);
+
+  assert.equal(result.hasBackdropHandler, true);
+  assert.equal(result.stillOpenAfterBackdropClick, true);
+  assert.match(nodes.app.innerHTML, /onclick="handleScheduleModalBackdropClick\(event\)"/);
+});
+
 test('render mounts legacy admin modals from root content shell and preserves open state across rerender', () => {
   const helperScript = fs.readFileSync(
     path.join(__dirname, '../public/sync-modal-progress.js'),
