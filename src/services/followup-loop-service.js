@@ -12,6 +12,13 @@ const ACTIVITY_RANKS = new Map([
 const SALARY_RANGE_PATTERN = /(\d+)\s*-\s*(\d+)\s*K/;
 const SALARY_BELOW_PATTERN = /(\d+)\s*K以下/;
 const SALARY_ABOVE_PATTERN = /(\d+)\s*K以上/;
+const RECHAT_MAX_SCAN_DAYS = 7;
+const RECHAT_CONSECUTIVE_OUTBOUND_LIMIT = 3;
+const RECHAT_MAX_PER_DAY = 50;
+const RECHAT_ACTIVE_HOURS_START = 9;
+const RECHAT_ACTIVE_HOURS_END = 21;
+const RECHAT_REQUIRED_INFO = ['resume'];
+const RECHAT_REQUIRED_INFO_LOGIC = 'any';
 
 class FollowupLoopService {
   constructor({
@@ -24,6 +31,12 @@ class FollowupLoopService {
     threadDelayMax = 5_000,
     resumePreviewCloseDelayMin = 1_200,
     resumePreviewCloseDelayMax = 2_200,
+    rechatMaxScanDays = RECHAT_MAX_SCAN_DAYS,
+    rechatMaxPerDay = RECHAT_MAX_PER_DAY,
+    rechatActiveHoursStart = RECHAT_ACTIVE_HOURS_START,
+    rechatActiveHoursEnd = RECHAT_ACTIVE_HOURS_END,
+    rechatRequiredInfo = RECHAT_REQUIRED_INFO,
+    rechatRequiredInfoLogic = RECHAT_REQUIRED_INFO_LOGIC,
     sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   }) {
     this.bossCliRunner = bossCliRunner;
@@ -35,6 +48,12 @@ class FollowupLoopService {
     this.threadDelayMax = threadDelayMax;
     this.resumePreviewCloseDelayMin = resumePreviewCloseDelayMin;
     this.resumePreviewCloseDelayMax = resumePreviewCloseDelayMax;
+    this.rechatMaxScanDays = rechatMaxScanDays;
+    this.rechatMaxPerDay = rechatMaxPerDay;
+    this.rechatActiveHoursStart = rechatActiveHoursStart;
+    this.rechatActiveHoursEnd = rechatActiveHoursEnd;
+    this.rechatRequiredInfo = rechatRequiredInfo;
+    this.rechatRequiredInfoLogic = rechatRequiredInfoLogic;
     this.sleep = sleep;
   }
 
@@ -56,9 +75,19 @@ class FollowupLoopService {
       attachmentFound: 0,
       resumeDownloaded: 0,
       messagesSynced: 0,
+      rechatSent: 0,
       skipped: 0,
       errors: 0
     };
+
+    // Pre-check: active hours
+    if (!isWithinActiveHours(this.rechatActiveHoursStart, this.rechatActiveHoursEnd)) {
+      await this.agentService.completeRun({
+        runId,
+        payload: { ...stats, reason: 'outside_active_hours' }
+      });
+      return { ok: true, stats, reason: 'outside_active_hours' };
+    }
 
     const jobContext = await this.agentService._getJobNanobotContext(jobKey);
 
@@ -195,10 +224,19 @@ class FollowupLoopService {
         message: 'no unread threads visible',
         payload: { jobKey }
       });
+
+      if (mode === 'followup') {
+        await this.#runRechatPhase({
+          runId, jobKey, jobContext, mode,
+          effectiveInteractionTypes, runner, signal, stats,
+          processedUids
+        });
+      }
+
       await this.#resetChatPageAfterCompletion({ runId, runner });
       await this.agentService.completeRun({
         runId,
-        payload: { ...stats, reason: 'no_unread_threads' }
+        payload: { ...stats, reason: fullThreadQueue.length === 0 ? 'no_unread_threads' : 'followup_complete' }
       });
       return { ok: true, stats };
     }
@@ -320,7 +358,16 @@ class FollowupLoopService {
       return { ok: false, stats: stoppedSummary, reason: 'manually_stopped' };
     }
 
-    // Phase 7: Complete
+    // Phase 7: Re-chat phase (after processing unread threads)
+    if (mode === 'followup' && !signal?.aborted) {
+      await this.#runRechatPhase({
+        runId, jobKey, jobContext, mode,
+        effectiveInteractionTypes, runner, signal, stats,
+        processedUids
+      });
+    }
+
+    // Phase 8: Complete
     const summary = { ...stats };
 
     await this.#recordEvent(runId, {
@@ -337,7 +384,7 @@ class FollowupLoopService {
     return { ok: true, stats: summary };
   }
 
-  async #processOneThread({ runId, jobKey, jobContext, thread, mode, interactionTypes, stats, runner }) {
+  async #processOneThread({ runId, jobKey, jobContext, thread, mode, interactionTypes, stats, runner, rechat = false }) {
     const threadId = thread.dataId || `idx-${thread.index}`;
     const expectedUid = thread.encryptUid || '';
 
@@ -485,13 +532,29 @@ class FollowupLoopService {
     });
     stats.messagesSynced += synced;
 
-    // Step 6: Check if last message is from candidate (inbound)
-    const lastMessage = messages[messages.length - 1];
-    const lastMessageFromCandidate = lastMessage && lastMessage.from !== 'me';
+    // Step 6: Check message direction eligibility
+    if (rechat) {
+      // Re-chat mode: skip if last N messages are all outbound with no reply
+      if (hasConsecutiveUnrepliedMessages(messages, RECHAT_CONSECUTIVE_OUTBOUND_LIMIT)) {
+        stats.skipped += 1;
+        await this.#recordEvent(runId, {
+          eventId: `rechat-consecutive-skip:${runId}:${encryptUid}`,
+          eventType: 'rechat_consecutive_skip',
+          stage: 'rechat',
+          message: `skipped ${thread.name}: ${RECHAT_CONSECUTIVE_OUTBOUND_LIMIT} consecutive outbound messages without reply`,
+          payload: { encryptUid, candidateName: thread.name, threshold: RECHAT_CONSECUTIVE_OUTBOUND_LIMIT }
+        });
+        return;
+      }
+    } else {
+      // Normal followup: skip if last message is not from candidate
+      const lastMessage = messages[messages.length - 1];
+      const lastMessageFromCandidate = lastMessage && lastMessage.from !== 'me';
 
-    if (!lastMessageFromCandidate) {
-      stats.skipped += 1;
-      return;
+      if (!lastMessageFromCandidate) {
+        stats.skipped += 1;
+        return;
+      }
     }
 
     let resumePanel = null;
@@ -741,6 +804,386 @@ class FollowupLoopService {
     }
   }
 
+  async #runRechatPhase({ runId, jobKey, jobContext, mode, effectiveInteractionTypes, runner, signal, stats, processedUids }) {
+    // Phase R1: Switch to "全部" filter
+    try {
+      await runner.selectChatAllFilter({ runId });
+      await this.#recordEvent(runId, {
+        eventId: `rechat-started:${runId}`,
+        eventType: 'rechat_phase_started',
+        stage: 'rechat',
+        message: 'switched to all filter for re-chat phase',
+        payload: { jobKey, maxScanDays: this.rechatMaxScanDays, maxPerDay: this.rechatMaxPerDay }
+      });
+    } catch (error) {
+      await this.#recordEvent(runId, {
+        eventId: `rechat-all-filter-failed:${runId}`,
+        eventType: 'rechat_warning',
+        stage: 'rechat',
+        message: `switch to all filter failed: ${error.message}`,
+        payload: { error: error.message }
+      });
+      return;
+    }
+
+    // Phase R2: Build re-chat queue by scrolling through the visible list
+    const rechatQueue = [];
+    const seenUids = new Set(processedUids);
+    const maxScrollAttempts = 30;
+    let scrollAttempt = 0;
+    let foundPastWindow = false;
+    let noNewThreadsStreak = 0;
+
+    while (scrollAttempt < maxScrollAttempts && !foundPastWindow && !signal?.aborted) {
+      let threads = [];
+      try {
+        const listResult = await runner.inspectVisibleChatList({ runId, limit: 50 });
+        threads = Array.isArray(listResult?.threads) ? listResult.threads : [];
+      } catch (error) {
+        break;
+      }
+
+      let newThreadsFound = 0;
+      for (const thread of threads) {
+        const uid = thread.encryptUid || buildVisibleThreadKey(thread);
+        if (!uid || seenUids.has(uid)) continue;
+        seenUids.add(uid);
+        newThreadsFound += 1;
+
+        const daysAgo = parseLastTimeDaysAgo(thread.lastTime);
+
+        if (daysAgo === 0) {
+          continue;
+        }
+
+        if (daysAgo >= 1 && daysAgo <= this.rechatMaxScanDays) {
+          rechatQueue.push(thread);
+          continue;
+        }
+
+        if (daysAgo > this.rechatMaxScanDays) {
+          foundPastWindow = true;
+          break;
+        }
+      }
+
+      if (foundPastWindow) break;
+
+      if (newThreadsFound === 0) {
+        noNewThreadsStreak += 1;
+        if (noNewThreadsStreak >= 3) break;
+      } else {
+        noNewThreadsStreak = 0;
+      }
+
+      try {
+        await runner.scrollChatList({ runId });
+        await this.sleep(1000);
+      } catch (error) {
+        break;
+      }
+
+      scrollAttempt += 1;
+    }
+
+    if (rechatQueue.length === 0) {
+      await this.#recordEvent(runId, {
+        eventId: `rechat-empty:${runId}`,
+        eventType: 'rechat_empty',
+        stage: 'rechat',
+        message: 'no candidates in re-chat time window',
+        payload: { jobKey, windowDays: `1-${this.rechatMaxScanDays}` }
+      });
+      return;
+    }
+
+    await this.#recordEvent(runId, {
+      eventId: `rechat-queue-built:${runId}`,
+      eventType: 'rechat_queue_built',
+      stage: 'rechat',
+      message: `found ${rechatQueue.length} candidates for re-chat`,
+      payload: {
+        count: rechatQueue.length,
+        candidates: rechatQueue.slice(0, 30).map((t) => ({ name: t.name, lastTime: t.lastTime, encryptUid: t.encryptUid }))
+      }
+    });
+
+    // Phase R3: Process each candidate in the re-chat queue
+    let rechatProcessed = 0;
+    for (const queuedThread of rechatQueue) {
+      if (signal?.aborted) break;
+
+      // Daily limit check
+      if (stats.rechatSent >= this.rechatMaxPerDay) {
+        await this.#recordEvent(runId, {
+          eventId: `rechat-daily-limit:${runId}`,
+          eventType: 'rechat_daily_limit_reached',
+          stage: 'rechat',
+          message: `daily re-chat limit reached (${this.rechatMaxPerDay})`,
+          payload: { rechatSent: stats.rechatSent, limit: this.rechatMaxPerDay }
+        });
+        break;
+      }
+
+      // Random delay between threads
+      if (rechatProcessed > 0) {
+        const delayMs = this.threadDelayMin + Math.random() * (this.threadDelayMax - this.threadDelayMin);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+        if (this.threadDelayMin > 0 && rechatProcessed % (3 + Math.floor(Math.random() * 3)) === 0) {
+          const idleMs = 8_000 + Math.random() * 15_000;
+          await new Promise((resolve) => setTimeout(resolve, idleMs));
+        }
+      }
+
+      if (queuedThread.encryptUid && typeof runner.scrollChatListToUid === 'function') {
+        try {
+          await runner.scrollChatListToUid({ runId, encryptUid: queuedThread.encryptUid });
+          await this.sleep(800);
+        } catch (_) {
+          // scroll failed — the row may already be visible
+        }
+      }
+
+      let thread;
+      try {
+        const listResult = await runner.inspectVisibleChatList({ runId, limit: 50 });
+        const visibleThreads = Array.isArray(listResult?.threads) ? listResult.threads : [];
+        thread = queuedThread.encryptUid
+          ? visibleThreads.find((t) => t.encryptUid === queuedThread.encryptUid)
+          : visibleThreads.find((t) => buildVisibleThreadKey(t) === buildVisibleThreadKey(queuedThread));
+      } catch (_) {
+        // visible list read failed
+      }
+
+      if (!thread) {
+        stats.skipped += 1;
+        continue;
+      }
+
+      if (!thread.name && queuedThread.name) {
+        thread.name = queuedThread.name;
+      }
+
+      const sent = await this.#processRechatThread({
+        runId,
+        jobKey,
+        jobContext,
+        thread,
+        mode,
+        interactionTypes: effectiveInteractionTypes,
+        stats,
+        runner
+      });
+
+      if (sent) {
+        stats.rechatSent += 1;
+      }
+
+      rechatProcessed += 1;
+      stats.processed += 1;
+      processedUids.add(queuedThread.encryptUid || buildVisibleThreadKey(queuedThread));
+
+      await this.#recordEvent(runId, {
+        eventId: `rechat-checkpoint:${runId}:${rechatProcessed}`,
+        eventType: 'rechat_checkpoint',
+        stage: 'rechat',
+        message: `re-chat checkpoint after thread ${rechatProcessed}/${rechatQueue.length}`,
+        payload: { ...stats, lastThread: thread.name, rechatProcessed }
+      });
+    }
+
+    await this.#recordEvent(runId, {
+      eventId: `rechat-done:${runId}`,
+      eventType: 'rechat_phase_completed',
+      stage: 'rechat',
+      message: `re-chat phase completed: ${rechatProcessed}/${rechatQueue.length} processed, ${stats.rechatSent} messages sent`,
+      payload: { rechatProcessed, rechatTotal: rechatQueue.length, rechatSent: stats.rechatSent }
+    });
+  }
+
+  async #processRechatThread({ runId, jobKey, jobContext, thread, mode, interactionTypes, stats, runner }) {
+    const threadId = thread.dataId || `idx-${thread.index}`;
+    const expectedUid = thread.encryptUid || '';
+
+    // Step 1: Click the row
+    try {
+      await runner.clickChatRow({ runId, index: thread.index, dataId: thread.dataId });
+    } catch (error) {
+      stats.errors += 1;
+      return false;
+    }
+
+    // Step 2: Verify thread state
+    let threadState;
+    const maxRetries = expectedUid ? 3 : 1;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        threadState = await runner.inspectChatThreadState({ runId });
+      } catch (error) {
+        stats.errors += 1;
+        return false;
+      }
+      if (!threadState.threadOpen) { stats.errors += 1; return false; }
+      const currentUid = threadState.encryptUid || threadState.activeUid || '';
+      if (!expectedUid || currentUid === expectedUid) break;
+      if (attempt < maxRetries - 1) await this.sleep(1500);
+    }
+
+    const encryptUid = threadState.encryptUid || threadState.activeUid || threadId;
+    if (expectedUid && encryptUid !== expectedUid) {
+      stats.errors += 1;
+      return false;
+    }
+
+    // Step 3: Check required info collection status
+    const collectedInfo = await this.#inspectRequiredInfoState({ runId, runner });
+    if (isRequiredInfoCollected(collectedInfo, this.rechatRequiredInfo, this.rechatRequiredInfoLogic)) {
+      stats.skipped += 1;
+      await this.#recordEvent(runId, {
+        eventId: `rechat-info-collected:${runId}:${encryptUid}`,
+        eventType: 'rechat_info_collected_skip',
+        stage: 'rechat',
+        message: `skipped ${thread.name}: required info already collected`,
+        payload: { encryptUid, candidateName: thread.name, collectedInfo }
+      });
+      return false;
+    }
+
+    // Step 4: Read messages and check consecutive outbound
+    let messages;
+    try {
+      const msgResult = await runner.readOpenThreadMessages({ runId, limit: 50 });
+      messages = Array.isArray(msgResult?.messages) ? msgResult.messages : [];
+    } catch (error) {
+      stats.errors += 1;
+      return false;
+    }
+
+    if (messages.length === 0) {
+      stats.skipped += 1;
+      return false;
+    }
+
+    // Sync messages to DB
+    let candidateId = null;
+    try {
+      const upsertResult = await this.agentService.upsertCandidate({
+        runId,
+        eventId: `rechat-candidate:${runId}:${encryptUid}`,
+        occurredAt: new Date().toISOString(),
+        jobKey,
+        bossEncryptGeekId: encryptUid,
+        name: thread.name || threadState.activeName || null,
+        status: 'greeted',
+        metadata: { source: 'rechat_loop' }
+      });
+      candidateId = upsertResult?.candidateId || null;
+    } catch (error) {
+      candidateId = await this.#resolveCandidateId({ encryptUid });
+    }
+
+    const synced = await this.#syncAllThreadMessages({
+      runId, jobKey, encryptUid, candidateId,
+      candidateName: thread.name, messages
+    });
+    stats.messagesSynced += synced;
+
+    // Count consecutive outbound messages
+    const consecutiveOutbound = countConsecutiveOutbound(messages);
+    if (consecutiveOutbound >= RECHAT_CONSECUTIVE_OUTBOUND_LIMIT) {
+      stats.skipped += 1;
+      await this.#recordEvent(runId, {
+        eventId: `rechat-consecutive-skip:${runId}:${encryptUid}`,
+        eventType: 'rechat_consecutive_skip',
+        stage: 'rechat',
+        message: `skipped ${thread.name}: ${consecutiveOutbound} consecutive outbound messages without reply`,
+        payload: { encryptUid, candidateName: thread.name, consecutiveOutbound, threshold: RECHAT_CONSECUTIVE_OUTBOUND_LIMIT }
+      });
+      return false;
+    }
+
+    // Step 5: Determine last message read status
+    const lastOutboundMsg = findLastOutboundMessage(messages);
+    const lastReadStatus = lastOutboundMsg?.readStatus || '';
+
+    // Step 6: Determine missing required info for prompt context
+    const missingInfo = getMissingRequiredInfo(collectedInfo, this.rechatRequiredInfo);
+
+    // Step 7: Generate re-chat message via LLM
+    let decision;
+    try {
+      decision = await this.#decideRechatReply({
+        jobContext,
+        candidateName: thread.name,
+        recentMessages: messages.slice(-10).map((m) =>
+          `${m.from === 'me' ? '我' : thread.name || '对方'}：${m.text}`
+        ).join('\n'),
+        consecutiveOutbound,
+        lastReadStatus,
+        missingInfo
+      });
+    } catch (error) {
+      stats.errors += 1;
+      await this.#recordEvent(runId, {
+        eventId: `rechat-llm-error:${runId}:${encryptUid}`,
+        eventType: 'rechat_error',
+        stage: 'rechat',
+        message: `rechat llm decision failed: ${error.message}`,
+        payload: { error: error.message, encryptUid }
+      });
+      return false;
+    }
+
+    await this.#recordEvent(runId, {
+      eventId: `rechat-llm:${runId}:${encryptUid}`,
+      eventType: 'candidate_evaluated',
+      stage: 'rechat',
+      message: `rechat LLM ${decision.action}: ${thread.name} ${decision.reason}`,
+      payload: {
+        encryptUid, candidateName: thread.name,
+        action: decision.action, reason: decision.reason,
+        replyText: decision.replyText || '',
+        consecutiveOutbound, lastReadStatus, missingInfo
+      }
+    });
+
+    if (decision.action === 'skip' || !decision.replyText) {
+      stats.skipped += 1;
+      return false;
+    }
+
+    // Step 8: Send the re-chat message
+    const sent = await this.#executeSendMessage({
+      runId, jobKey, encryptUid,
+      candidateName: thread.name, candidateId,
+      text: decision.replyText, stats, runner
+    });
+
+    return sent;
+  }
+
+  async #inspectRequiredInfoState({ runId, runner }) {
+    const result = { resume: false, phone: false, wechat: false };
+
+    try {
+      const attachmentState = await runner.inspectAttachmentState({ runId });
+      result.resume = Boolean(attachmentState?.present && attachmentState?.buttonEnabled);
+    } catch (_) {
+      // Non-fatal
+    }
+
+    try {
+      const exchangeState = await runner.inspectContactExchangeState({ runId });
+      result.phone = Boolean(exchangeState?.phone?.collected);
+      result.wechat = Boolean(exchangeState?.wechat?.collected);
+    } catch (_) {
+      // Non-fatal
+    }
+
+    return result;
+  }
+
   async #decideChatReply({ jobContext, candidateName, recentMessages, canRequestResume }) {
     const systemPrompt = [
       '你是一个招聘顾问，正在跟进候选人的聊天回复。',
@@ -781,6 +1224,62 @@ class FollowupLoopService {
       '- 禁止输出`[工作地点]`、`[薪资]`这类占位符，也不要自行脑补未提供的信息。',
       '',
       '返回纯 JSON：{"action":"reply"|"request_resume"|"skip","replyText":"回复内容(reply 和 request_resume 时需要)","reason":"简要原因","requirementEvidence":["依据1","依据2"]}'
+    ].filter(Boolean).join('\n');
+
+    const raw = await this.llmEvaluator.chat({ systemPrompt, userPrompt });
+    return parseChatDecision(raw);
+  }
+
+  async #decideRechatReply({ jobContext, candidateName, recentMessages, consecutiveOutbound, lastReadStatus, missingInfo }) {
+    const systemPrompt = [
+      '你是一个招聘顾问，正在对沉默的候选人进行复聊。',
+      '根据复聊策略生成一条复聊消息。只输出纯 JSON，不要添加任何解释文字。'
+    ].join('\n');
+
+    const roundNumber = consecutiveOutbound + 1;
+    const missingInfoText = missingInfo.length > 0
+      ? `当前缺失信息：${missingInfo.map((i) => ({ resume: '简历', phone: '手机号', wechat: '微信' }[i] || i)).join('、')}`
+      : '所有目标信息均已收集';
+
+    const readStatusGuide = lastReadStatus === '已读'
+      ? '候选人已读但未回复：换一个角度介绍岗位亮点，重新吸引兴趣。'
+      : '候选人尚未阅读消息（送达未读）：简短提醒，把消息"顶上去"即可。';
+
+    const userPrompt = [
+      `## 岗位：${jobContext.jobName || '未知'}`,
+      jobContext.city ? `工作地点：${jobContext.city}` : '',
+      jobContext.salary ? `薪资范围：${jobContext.salary}` : '',
+      jobContext.jdText ? `岗位说明：${String(jobContext.jdText).slice(0, 200)}` : '',
+      jobContext.customRequirement ? `## 岗位附加要求（内部参考）\n${jobContext.customRequirement}` : '',
+      jobContext.enterpriseKnowledge ? `## 企业知识库\n${jobContext.enterpriseKnowledge}` : '',
+      `## 候选人：${candidateName}`,
+      '',
+      '## 最近对话',
+      recentMessages,
+      '',
+      '## 复聊上下文',
+      `当前是第 ${roundNumber} 次复聊（已连续发送 ${consecutiveOutbound} 条未获回复）`,
+      `最后一条消息状态：${lastReadStatus || '未知'}`,
+      missingInfoText,
+      '',
+      '## 复聊策略',
+      readStatusGuide,
+      roundNumber === 1
+        ? '第1次复聊：可适当补充岗位亮点或换角度切入。'
+        : '第2次复聊：降低门槛，直接邀请候选人提供缺失信息或简单回复。',
+      missingInfo.length > 0 ? `引导方向：优先引导候选人提供${missingInfo.includes('resume') ? '简历' : missingInfo.map((i) => ({ phone: '电话', wechat: '微信' }[i] || i)).join('或')}。` : '',
+      '',
+      '## 要求',
+      '- 使用 BOSS直聘聊天口吻，像真人招聘顾问即时沟通。',
+      '- 优先短句、口语化。',
+      '- 避免 AI/书面分析腔和模板化开场。',
+      '- 只能使用上面明确提供的岗位信息，不要脑补。',
+      '- 禁止输出 `[工作地点]`、`[薪资]` 等占位符。',
+      '- 岗位附加要求仅用于内部判断，不要机械复述给候选人。',
+      '- action 为 reply 时必须提供 replyText。',
+      '- action 为 skip 仅在认为继续复聊完全不合适时使用。',
+      '',
+      '返回纯 JSON：{"action":"reply"|"skip","replyText":"复聊消息内容","reason":"简要原因"}'
     ].filter(Boolean).join('\n');
 
     const raw = await this.llmEvaluator.chat({ systemPrompt, userPrompt });
@@ -1717,14 +2216,104 @@ function normalizeRequirementEvidence(value) {
     .slice(0, 3);
 }
 
+function parseLastTimeDaysAgo(lastTimeText) {
+  const text = normalizeString(lastTimeText);
+  if (!text) return -1;
+
+  // Time like "21:26" or "12:03" = today
+  if (/^\d{1,2}:\d{2}$/.test(text)) return 0;
+
+  // "昨天" = yesterday
+  if (text === '昨天') return 1;
+
+  // "MM月DD日" format like "04月13日"
+  const dateMatch = text.match(/^(\d{1,2})月(\d{1,2})日$/);
+  if (dateMatch) {
+    const month = parseInt(dateMatch[1], 10);
+    const day = parseInt(dateMatch[2], 10);
+    const now = new Date();
+    const year = now.getFullYear();
+    const targetDate = new Date(year, month - 1, day);
+    const today = new Date(year, now.getMonth(), now.getDate());
+    const diffMs = today.getTime() - targetDate.getTime();
+    const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+    // Handle year boundary: if target date is in the future, it was last year
+    return diffDays >= 0 ? diffDays : diffDays + 365;
+  }
+
+  return -1;
+}
+
+function hasConsecutiveUnrepliedMessages(messages, threshold = 3) {
+  if (!Array.isArray(messages) || messages.length === 0) return false;
+
+  let consecutiveOutbound = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].from === 'me') {
+      consecutiveOutbound += 1;
+    } else {
+      break;
+    }
+  }
+
+  return consecutiveOutbound >= threshold;
+}
+
 function buildLlmEvaluationMessage({ action, candidateName, reason, requirementEvidence }) {
   const evidence = Array.isArray(requirementEvidence) ? requirementEvidence.filter(Boolean) : [];
   const basisText = evidence.length > 0 ? ` 依据: ${evidence.join('；')}` : '';
   return `LLM ${action}: ${candidateName} ${reason}${basisText}`.trim();
 }
 
+function countConsecutiveOutbound(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return 0;
+  let count = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].from === 'me') {
+      count += 1;
+    } else {
+      break;
+    }
+  }
+  return count;
+}
+
+function findLastOutboundMessage(messages) {
+  if (!Array.isArray(messages)) return null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].from === 'me') return messages[i];
+  }
+  return null;
+}
+
+function isWithinActiveHours(startHour, endHour) {
+  const now = new Date();
+  const hour = now.getHours();
+  return hour >= startHour && hour < endHour;
+}
+
+function isRequiredInfoCollected(collectedInfo, requiredInfo, logic) {
+  if (!Array.isArray(requiredInfo) || requiredInfo.length === 0) return false;
+  if (logic === 'all') {
+    return requiredInfo.every((key) => Boolean(collectedInfo[key]));
+  }
+  return requiredInfo.some((key) => Boolean(collectedInfo[key]));
+}
+
+function getMissingRequiredInfo(collectedInfo, requiredInfo) {
+  if (!Array.isArray(requiredInfo)) return [];
+  return requiredInfo.filter((key) => !collectedInfo[key]);
+}
+
 module.exports = {
   FollowupLoopService,
   parseChatDecision,
-  extractJobNameShort
+  extractJobNameShort,
+  parseLastTimeDaysAgo,
+  hasConsecutiveUnrepliedMessages,
+  countConsecutiveOutbound,
+  findLastOutboundMessage,
+  isWithinActiveHours,
+  isRequiredInfoCollected,
+  getMissingRequiredInfo
 };

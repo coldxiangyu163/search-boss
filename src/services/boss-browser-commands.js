@@ -1537,6 +1537,52 @@ function buildSelectChatUnreadFilterExpression() {
   })()`;
 }
 
+async function selectChatAllFilter({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildSelectChatAllFilterExpression()
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_chat_all_filter_failed');
+  }
+
+  await randomDelay(1_500, 2_500);
+  return result;
+}
+
+function buildSelectChatAllFilterExpression() {
+  return `(() => {
+    try {
+      const filterLeft = document.querySelector('.chat-message-filter-left');
+      if (!filterLeft) {
+        return JSON.stringify({ ok: false, reason: 'boss_chat_filter_area_not_found' });
+      }
+
+      const spans = Array.from(filterLeft.querySelectorAll('span'));
+      const allSpan = spans.find((s) => (s.textContent || '').trim() === '全部');
+      if (!allSpan) {
+        return JSON.stringify({ ok: false, reason: 'boss_chat_all_tab_not_found' });
+      }
+
+      if (allSpan.classList.contains('active')) {
+        return JSON.stringify({ ok: true, alreadyActive: true });
+      }
+
+      allSpan.click();
+      return JSON.stringify({ ok: true, alreadyActive: false });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_chat_all_filter_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
 async function inspectVisibleChatList({
   cdpClient,
   targetId,
@@ -2194,8 +2240,14 @@ function buildReadOpenThreadMessagesExpression({ limit }) {
         const isSelf = item.classList.contains('item-myself');
         const textSpan = item.querySelector('.text span');
         const textDiv = item.querySelector('.text');
-        const text = (textSpan?.textContent || '').replace(/\\s+/g, ' ').trim()
-          || (textDiv?.textContent || '').replace(/(送达|已读|未读)/g, '').replace(/\\s+/g, ' ').trim();
+        const rawText = (textSpan?.textContent || '').replace(/\\s+/g, ' ').trim()
+          || (textDiv?.textContent || '').trim();
+        let readStatus = '';
+        if (isSelf && rawText) {
+          const statusMatch = rawText.match(/(已读|送达|未读)/);
+          if (statusMatch) readStatus = statusMatch[1];
+        }
+        const text = rawText.replace(/(送达|已读|未读)/g, '').replace(/\\s+/g, ' ').trim();
         const parentItem = item.closest('.message-item') || item;
         const timeEl = parentItem.querySelector('.message-time .time, .time');
         const time = (timeEl?.textContent || '').trim();
@@ -2217,7 +2269,8 @@ function buildReadOpenThreadMessagesExpression({ limit }) {
           text,
           time,
           type: 'text',
-          domKey
+          domKey,
+          readStatus: readStatus || undefined
         };
       }).filter((m) => m.text.length > 0);
 
@@ -3505,12 +3558,67 @@ function buildClickFilterItemOptionExpr(filterLabel, optionText) {
   })()`;
 }
 
+async function inspectContactExchangeState({
+  cdpClient,
+  targetId,
+  urlPrefix
+} = {}) {
+  const result = await evaluateJson({
+    cdpClient,
+    targetId,
+    urlPrefix,
+    expression: buildInspectContactExchangeStateExpression()
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || 'boss_contact_exchange_state_unavailable');
+  }
+
+  return result;
+}
+
+function buildInspectContactExchangeStateExpression() {
+  return `(() => {
+    try {
+      const normalize = (value) => String(value || '').replace(/\\s+/g, '').trim();
+      const operateArea = document.querySelector('.chat-operate, .conversation-operate, .chat-conversation');
+      if (!operateArea) {
+        return JSON.stringify({ ok: true, phone: { found: false, collected: false }, wechat: { found: false, collected: false } });
+      }
+
+      const items = Array.from(operateArea.querySelectorAll('.operate-icon-item, .operate-item, button, a, span, div'));
+
+      const findExchangeState = (exchangeText, viewText) => {
+        for (const item of items) {
+          const text = normalize(item.textContent || '');
+          if (item.offsetWidth <= 0 || item.offsetHeight <= 0) continue;
+          if (text === viewText || text.includes(viewText)) {
+            return { found: true, collected: true, buttonText: text };
+          }
+          if (text === exchangeText || text.includes(exchangeText)) {
+            return { found: true, collected: false, buttonText: text };
+          }
+        }
+        return { found: false, collected: false, buttonText: '' };
+      };
+
+      const phone = findExchangeState('换电话', '查看电话');
+      const wechat = findExchangeState('换微信', '查看微信');
+
+      return JSON.stringify({ ok: true, phone, wechat });
+    } catch (err) {
+      return JSON.stringify({ ok: false, reason: 'boss_contact_exchange_state_error:' + (err && err.message || String(err)) });
+    }
+  })()`;
+}
+
 module.exports = {
   getUrl,
   evaluateJson,
   bossFetch,
   selectChatJobFilter,
   selectChatUnreadFilter,
+  selectChatAllFilter,
   inspectVisibleChatList,
   clickChatRow,
   navigateTo,
@@ -3533,6 +3641,7 @@ module.exports = {
   clickRequestResume,
   clickExchangeAction,
   inspectResumeRequestState,
+  inspectContactExchangeState,
   readOpenThreadMessages,
   selectRecommendJob,
   clickFirstRecommendCard,

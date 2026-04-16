@@ -456,6 +456,20 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
     };
   }
 
+  if (options.command === 'chat-select-all') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.selectChatAllFilter({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
   if (options.command === 'chat-visible-list') {
     const session = await sessionStore.loadSession(options.runId);
     const result = await browserCommands.inspectVisibleChatList({
@@ -766,6 +780,20 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
   if (options.command === 'attachment-state') {
     const session = await sessionStore.loadSession(options.runId);
     const result = await browserCommands.inspectAttachmentState({
+      cdpClient,
+      targetId: session.targetId,
+      urlPrefix: config.bossCdpTargetUrlPrefix
+    });
+
+    return {
+      ok: true,
+      ...result
+    };
+  }
+
+  if (options.command === 'contact-exchange-state') {
+    const session = await sessionStore.loadSession(options.runId);
+    const result = await browserCommands.inspectContactExchangeState({
       cdpClient,
       targetId: session.targetId,
       urlPrefix: config.bossCdpTargetUrlPrefix

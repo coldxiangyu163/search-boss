@@ -181,6 +181,14 @@ class BossCliRunner {
     ]);
   }
 
+  async selectChatAllFilter({ runId }) {
+    return this.#run([
+      'chat-select-all',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
   async inspectVisibleChatList({ runId, limit = 30 }) {
     return this.#run([
       'chat-visible-list',
@@ -360,6 +368,14 @@ class BossCliRunner {
   async inspectAttachmentState({ runId }) {
     return this.#run([
       'attachment-state',
+      '--run-id',
+      String(runId)
+    ]);
+  }
+
+  async inspectContactExchangeState({ runId }) {
+    return this.#run([
+      'contact-exchange-state',
       '--run-id',
       String(runId)
     ]);
