@@ -168,7 +168,10 @@ class BossCdpClient {
     }
     const targets = await response.json();
     const pages = (Array.isArray(targets) ? targets : []).filter(
-      (t) => t.type === 'page' && t.url !== 'about:blank' && !t.url.startsWith('devtools://')
+      (t) => t.type === 'page' && t.url !== 'about:blank'
+        && !t.url.startsWith('devtools://')
+        && !t.url.startsWith('chrome://')
+        && !t.url.startsWith('chrome-extension://')
     );
     if (!pages.length) {
       throw new Error('boss_no_page_target');
