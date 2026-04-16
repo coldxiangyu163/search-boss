@@ -138,10 +138,36 @@ class FollowupLoopService {
       return { ok: false, stats, reason: 'chat_page_unavailable' };
     }
 
-    // Phase 3: Select job filter
+    // Phase 3: Select job filter (with page refresh retry)
     try {
       const jobNameShort = extractJobNameShort(jobContext.jobName);
-      await runner.selectChatJobFilter({ runId, jobName: jobNameShort });
+      let jobFilterOk = false;
+      let lastFilterError;
+
+      try {
+        await runner.selectChatJobFilter({ runId, jobName: jobNameShort });
+        jobFilterOk = true;
+      } catch (err) {
+        lastFilterError = err;
+      }
+
+      if (!jobFilterOk) {
+        await this.#recordEvent(runId, {
+          eventId: `followup-loop-job-filter-retry:${runId}`,
+          eventType: 'followup_loop_warning',
+          stage: 'followup_loop',
+          message: `job filter failed (${lastFilterError.message}), refreshing page and retrying`,
+          payload: { firstError: lastFilterError.message }
+        });
+
+        await runner.navigateTo({
+          runId,
+          url: 'https://www.zhipin.com/web/chat/index'
+        });
+        await this.sleep(3_000);
+
+        await runner.selectChatJobFilter({ runId, jobName: jobNameShort });
+      }
 
       await this.#recordEvent(runId, {
         eventId: `followup-loop-job-filtered:${runId}`,
@@ -1051,13 +1077,88 @@ class FollowupLoopService {
     // Step 3: Check required info collection status
     const collectedInfo = await this.#inspectRequiredInfoState({ runId, runner });
     if (isRequiredInfoCollected(collectedInfo, this.rechatRequiredInfo, this.rechatRequiredInfoLogic)) {
+      let resumeDownloadStatus = 'no_resume_on_page';
+
+      if (collectedInfo.resume) {
+        let alreadyDownloaded = false;
+        try {
+          alreadyDownloaded = await this.agentService.hasDownloadedAttachment(encryptUid, jobKey);
+        } catch (_) {
+          // Non-fatal: default to not downloaded
+        }
+
+        if (alreadyDownloaded) {
+          resumeDownloadStatus = 'already_downloaded';
+        } else {
+          resumeDownloadStatus = 'not_downloaded';
+
+          await this.#recordEvent(runId, {
+            eventId: `rechat-resume-check:${runId}:${encryptUid}`,
+            eventType: 'rechat_resume_not_downloaded',
+            stage: 'rechat',
+            message: `${thread.name}: resume visible but not downloaded, attempting download`,
+            payload: { encryptUid, candidateName: thread.name }
+          });
+
+          let candidateId = null;
+          try {
+            const upsertResult = await this.agentService.upsertCandidate({
+              runId,
+              eventId: `rechat-candidate:${runId}:${encryptUid}`,
+              occurredAt: new Date().toISOString(),
+              jobKey,
+              bossEncryptGeekId: encryptUid,
+              name: thread.name || threadState.activeName || null,
+              status: 'greeted',
+              metadata: { source: 'rechat_loop' }
+            });
+            candidateId = upsertResult?.candidateId || null;
+          } catch (error) {
+            candidateId = await this.#resolveCandidateId({ encryptUid });
+          }
+
+          // Accept resume consent if pending (mirrors #processOneThread Step 2c)
+          await this.#handleResumeConsentIfNeeded({ runId, encryptUid, candidateName: thread.name, stats, runner });
+
+          // Re-check attachment state after consent handling
+          let attachmentState;
+          try {
+            attachmentState = await runner.inspectAttachmentState({ runId });
+          } catch (error) {
+            attachmentState = { present: false, buttonEnabled: false };
+          }
+
+          if (attachmentState.present && attachmentState.buttonEnabled) {
+            await this.#executeResumeDownload({
+              runId,
+              jobKey,
+              encryptUid,
+              candidateName: thread.name,
+              candidateId,
+              stats,
+              runner
+            });
+            resumeDownloadStatus = 'download_attempted';
+          } else {
+            resumeDownloadStatus = 'attachment_not_ready';
+            await this.#recordEvent(runId, {
+              eventId: `rechat-resume-not-ready:${runId}:${encryptUid}`,
+              eventType: 'rechat_resume_attachment_not_ready',
+              stage: 'rechat',
+              message: `${thread.name}: resume not downloadable (present=${attachmentState.present}, enabled=${attachmentState.buttonEnabled})`,
+              payload: { encryptUid, candidateName: thread.name, attachmentState }
+            });
+          }
+        }
+      }
+
       stats.skipped += 1;
       await this.#recordEvent(runId, {
         eventId: `rechat-info-collected:${runId}:${encryptUid}`,
         eventType: 'rechat_info_collected_skip',
         stage: 'rechat',
-        message: `skipped ${thread.name}: required info already collected`,
-        payload: { encryptUid, candidateName: thread.name, collectedInfo }
+        message: `skipped ${thread.name}: required info already collected (resume: ${resumeDownloadStatus})`,
+        payload: { encryptUid, candidateName: thread.name, collectedInfo, resumeDownloadStatus }
       });
       return false;
     }
@@ -1199,6 +1300,40 @@ class FollowupLoopService {
       candidateName: thread.name, candidateId,
       text: decision.replyText, stats, runner
     });
+
+    // Step 9: Execute configured interaction types after rechat reply
+    if (sent) {
+      const hasResumeRequest = interactionTypes.includes('request_resume');
+      if (hasResumeRequest && !collectedInfo.resume) {
+        await this.#requestResumeWhenReady({
+          runId,
+          jobKey,
+          encryptUid,
+          candidateName: thread.name,
+          candidateId,
+          replyText: '',
+          allowWarmupReply: false,
+          stats,
+          runner
+        });
+      }
+      const extraTypes = interactionTypes.filter((t) => t !== 'request_resume');
+      for (let ei = 0; ei < extraTypes.length; ei++) {
+        const actionType = extraTypes[ei];
+        const alreadyCollected =
+          (actionType === 'exchange_phone' && collectedInfo.phone) ||
+          (actionType === 'exchange_wechat' && collectedInfo.wechat);
+        if (alreadyCollected) continue;
+
+        const actionGap = this.threadDelayMin + Math.random() * (this.threadDelayMax - this.threadDelayMin);
+        await this.sleep(actionGap);
+        await this.#executeExchangeAction({
+          runId, jobKey, encryptUid,
+          candidateName: thread.name, candidateId,
+          actionType, stats, runner
+        });
+      }
+    }
 
     return sent;
   }

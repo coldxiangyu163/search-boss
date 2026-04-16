@@ -1046,6 +1046,24 @@ class AgentService {
     return false;
   }
 
+  async hasDownloadedAttachment(bossEncryptGeekId, jobKey) {
+    const result = await this.pool.query(
+      `
+        select 1
+        from candidate_attachments ca
+        join job_candidates jc on jc.id = ca.job_candidate_id
+        join people p on p.id = jc.person_id
+        join jobs j on j.id = jc.job_id
+        where p.boss_encrypt_geek_id = $1
+          and j.job_key = $2
+          and ca.status = 'downloaded'
+        limit 1
+      `,
+      [bossEncryptGeekId, jobKey]
+    );
+    return result.rows.length > 0;
+  }
+
   async findLatestCandidateByGeekId(bossEncryptGeekId, jobKey) {
     if (jobKey) {
       const result = await this.pool.query(
