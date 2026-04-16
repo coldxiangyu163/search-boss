@@ -228,7 +228,7 @@ class FollowupLoopService {
       if (mode === 'followup') {
         await this.#runRechatPhase({
           runId, jobKey, jobContext, mode,
-          effectiveInteractionTypes, runner, signal, stats,
+          effectiveMaxThreads, effectiveInteractionTypes, runner, signal, stats,
           processedUids
         });
       }
@@ -362,7 +362,7 @@ class FollowupLoopService {
     if (mode === 'followup' && !signal?.aborted) {
       await this.#runRechatPhase({
         runId, jobKey, jobContext, mode,
-        effectiveInteractionTypes, runner, signal, stats,
+        effectiveMaxThreads, effectiveInteractionTypes, runner, signal, stats,
         processedUids
       });
     }
@@ -804,7 +804,7 @@ class FollowupLoopService {
     }
   }
 
-  async #runRechatPhase({ runId, jobKey, jobContext, mode, effectiveInteractionTypes, runner, signal, stats, processedUids }) {
+  async #runRechatPhase({ runId, jobKey, jobContext, mode, effectiveMaxThreads, effectiveInteractionTypes, runner, signal, stats, processedUids }) {
     // Phase R1: Switch to "全部" filter
     try {
       await runner.selectChatAllFilter({ runId });
@@ -912,6 +912,18 @@ class FollowupLoopService {
     let rechatProcessed = 0;
     for (const queuedThread of rechatQueue) {
       if (signal?.aborted) break;
+
+      // Per-run processing limit (shared with unread phase)
+      if (stats.processed >= effectiveMaxThreads) {
+        await this.#recordEvent(runId, {
+          eventId: `rechat-max-threads:${runId}`,
+          eventType: 'rechat_max_threads_reached',
+          stage: 'rechat',
+          message: `per-run processing limit reached (${effectiveMaxThreads})`,
+          payload: { processed: stats.processed, limit: effectiveMaxThreads }
+        });
+        break;
+      }
 
       // Daily limit check
       if (stats.rechatSent >= this.rechatMaxPerDay) {
@@ -1050,7 +1062,35 @@ class FollowupLoopService {
       return false;
     }
 
-    // Step 4: Read messages and check consecutive outbound
+    // Step 4: Read resume panel and check job requirement filters
+    let resumePanel = null;
+    try {
+      const panelResult = await runner.getResumePanel({ runId, uid: encryptUid });
+      resumePanel = panelResult?.resume || panelResult || null;
+    } catch (error) {
+      resumePanel = null;
+    }
+
+    const filterGate = evaluateRecommendFilters(jobContext.recommendFilters, resumePanel);
+    if (filterGate.definitiveMismatch) {
+      stats.skipped += 1;
+      await this.#recordEvent(runId, {
+        eventId: `rechat-filter-skip:${runId}:${encryptUid}`,
+        eventType: 'rechat_filter_skipped',
+        stage: 'rechat',
+        message: `skipped ${thread.name}: filter mismatch: ${filterGate.reasons.join(', ')}`,
+        payload: {
+          encryptUid,
+          candidateName: thread.name,
+          reasons: filterGate.reasons,
+          unsupportedFilters: filterGate.unsupportedFilters,
+          profile: buildFilterProfileEvidence(resumePanel)
+        }
+      });
+      return false;
+    }
+
+    // Step 5: Read messages and check consecutive outbound
     let messages;
     try {
       const msgResult = await runner.readOpenThreadMessages({ runId, limit: 50 });
@@ -1103,14 +1143,14 @@ class FollowupLoopService {
       return false;
     }
 
-    // Step 5: Determine last message read status
+    // Step 6: Determine last message read status
     const lastOutboundMsg = findLastOutboundMessage(messages);
     const lastReadStatus = lastOutboundMsg?.readStatus || '';
 
-    // Step 6: Determine missing required info for prompt context
+    // Step 7: Determine missing required info for prompt context
     const missingInfo = getMissingRequiredInfo(collectedInfo, this.rechatRequiredInfo);
 
-    // Step 7: Generate re-chat message via LLM
+    // Step 8: Generate re-chat message via LLM
     let decision;
     try {
       decision = await this.#decideRechatReply({
