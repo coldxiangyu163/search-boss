@@ -3465,8 +3465,28 @@ async function applyRecommendFilters({
     throw new Error('recommend_filter_panel_not_expanded');
   }
 
-  // Step 2: Click each configured filter option via .filter-item .option matching
+  // Step 2a: Apply age filter via slider if configured
   const applied = [];
+  const ageMin = Number(filters.ageMin);
+  const ageMax = Number(filters.ageMax);
+  const hasAgeFilter = (Number.isFinite(ageMin) && ageMin > 16) || (Number.isFinite(ageMax) && ageMax < 99);
+
+  if (hasAgeFilter) {
+    const ageResult = await evaluateJson({
+      cdpClient,
+      targetId,
+      urlPrefix,
+      expression: buildApplyAgeFilterExpr(ageMin || 16, ageMax || 99)
+    });
+    await randomDelay(300, 500);
+
+    if (ageResult?.ok && ageResult?.applied) {
+      applied.push({ key: 'age', label: '年龄', value: `${ageResult.appliedMin}-${ageResult.appliedMax}` });
+      await randomDelay(500, 800);
+    }
+  }
+
+  // Step 2b: Click each configured filter option via .filter-item .option matching
   const filterMap = {
     school: '院校',
     activity: '活跃度',
@@ -3540,6 +3560,42 @@ async function applyRecommendFilters({
   return { ok: true, applied: true, filters: applied };
 }
 
+function buildApplyAgeFilterExpr(ageMin, ageMax) {
+  return `(() => {
+    try {
+      const recFrame = document.querySelector('iframe[name="recommendFrame"], iframe[src*="/web/frame/recommend/"]');
+      const recDoc = recFrame?.contentDocument;
+      if (!recFrame || !recDoc) return JSON.stringify({ ok: false, reason: 'frame_unavailable' });
+
+      const items = recDoc.querySelectorAll('.filter-item');
+      let ageItem = null;
+      items.forEach(item => {
+        const n = item.querySelector('.name');
+        if (n && (n.textContent || '').trim().includes('年龄')) ageItem = item;
+      });
+      if (!ageItem) return JSON.stringify({ ok: false, reason: 'age_filter_not_found' });
+
+      const slider = ageItem.querySelector('.vue-slider');
+      if (!slider) return JSON.stringify({ ok: false, reason: 'slider_not_found' });
+
+      const vue = slider.__vue__;
+      if (!vue || typeof vue.setValue !== 'function') {
+        return JSON.stringify({ ok: false, reason: 'vue_instance_unavailable' });
+      }
+
+      const sliderMin = vue.min ?? 16;
+      const sliderMax = vue.max ?? 46;
+
+      const clampedMin = Math.max(sliderMin, Math.min(${ageMin}, sliderMax - 1));
+      const clampedMax = ${ageMax} >= sliderMax ? sliderMax : Math.max(clampedMin, Math.min(${ageMax}, sliderMax));
+
+      vue.setValue([clampedMin, clampedMax]);
+
+      return JSON.stringify({ ok: true, applied: true, appliedMin: clampedMin, appliedMax: clampedMax, sliderMin, sliderMax });
+    } catch (err) { return JSON.stringify({ ok: false, reason: err.message }); }
+  })()`;
+}
+
 function buildClickFilterItemOptionExpr(filterLabel, optionText) {
   const safeLabel = JSON.stringify(filterLabel);
   const safeOption = JSON.stringify(optionText.replace(/\s+/g, ''));
@@ -3555,7 +3611,7 @@ function buildClickFilterItemOptionExpr(filterLabel, optionText) {
         return (nameEl.textContent || '').trim().includes(${safeLabel});
       });
       if (!row) return JSON.stringify({ ok: false, found: false, reason: 'row_not_found:' + ${safeLabel} });
-      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      row.scrollIntoView({ behavior: 'auto', block: 'center' });
       const options = Array.from(row.querySelectorAll('.option'));
       const target = options.find(o => (o.textContent || '').replace(/\\s+/g, '').trim() === ${safeOption} && o.offsetWidth > 0);
       if (!target) return JSON.stringify({ ok: false, found: false, reason: 'option_not_found:' + ${safeOption} });
