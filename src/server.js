@@ -1,3 +1,7 @@
+if (typeof globalThis.WebSocket === 'undefined') {
+  globalThis.WebSocket = require('ws');
+}
+
 const { createApp } = require('./app');
 const { config } = require('./config');
 const { pool } = require('./db/pool');
