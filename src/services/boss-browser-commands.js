@@ -1449,7 +1449,7 @@ async function selectChatJobFilter({
 
     if (result?.ok) break;
 
-    if (result?.reason === 'boss_chat_job_dropdown_not_found' && attempt < maxRetries) {
+    if ((result?.reason === 'boss_chat_job_dropdown_not_found' || result?.reason === 'boss_chat_job_not_in_filter') && attempt < maxRetries) {
       await new Promise((r) => setTimeout(r, retryInterval));
       continue;
     }
@@ -1462,7 +1462,7 @@ async function selectChatJobFilter({
 }
 
 function buildSelectChatJobFilterExpression({ jobName }) {
-  return `(() => {
+  return `(async () => {
     try {
       const chatTopJob = document.querySelector('.chat-top-job');
       if (!chatTopJob) {
@@ -1473,7 +1473,15 @@ function buildSelectChatJobFilterExpression({ jobName }) {
       if (label) label.click();
 
       const targetJobName = ${JSON.stringify(jobName || '')};
-      const items = Array.from(chatTopJob.querySelectorAll('.ui-dropmenu-list li'));
+
+      // Poll for dropdown items to render (up to 2s after click)
+      let items = [];
+      for (let i = 0; i < 10; i++) {
+        await new Promise((r) => setTimeout(r, 200));
+        items = Array.from(chatTopJob.querySelectorAll('.ui-dropmenu-list li'));
+        if (items.length > 0) break;
+      }
+
       const match = items.find((li) => {
         const text = (li.textContent || '').replace(/\\s+/g, ' ').trim();
         return targetJobName && text.includes(targetJobName);
