@@ -534,7 +534,29 @@ class SourceLoopService {
         stats.alreadyChatting += 1;
       } else {
         stats.errors += 1;
+        await this.#recordEvent(runId, {
+          eventId: `source-loop-greet-failed:${runId}:${bossEncryptGeekId}`,
+          eventType: 'greet_failed',
+          stage: 'source_loop',
+          message: `greet failed: ${candidateName} - ${greetResult.reason || 'unknown'}`,
+          payload: {
+            bossEncryptGeekId,
+            candidateName,
+            tier: decision.tier,
+            reason: greetResult.reason || 'unknown',
+            resultText: greetResult.resultText || ''
+          }
+        });
       }
+    } else if (decision.action === 'greet' && !popupOpened) {
+      stats.errors += 1;
+      await this.#recordEvent(runId, {
+        eventId: `source-loop-greet-no-popup:${runId}:${bossEncryptGeekId}`,
+        eventType: 'greet_failed',
+        stage: 'source_loop',
+        message: `greet failed: ${candidateName} - popup not opened`,
+        payload: { bossEncryptGeekId, candidateName, tier: decision.tier, reason: 'popup_not_opened' }
+      });
     } else {
       // Close popup if it was opened but we're skipping
       if (popupOpened) {

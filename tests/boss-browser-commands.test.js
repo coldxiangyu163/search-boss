@@ -298,7 +298,7 @@ test('clickRecommendGreet no longer reports success when post-click state stays 
     }
   ];
 
-  for (let index = 0; index < 12; index += 1) {
+  for (let index = 0; index < 30; index += 1) {
     evaluateResponses.push({
       type: 'string',
       value: JSON.stringify({

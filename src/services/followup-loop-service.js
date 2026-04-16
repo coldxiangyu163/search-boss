@@ -1016,10 +1016,10 @@ class FollowupLoopService {
 
       if (sent) {
         stats.rechatSent += 1;
+        rechatProcessed += 1;
+        stats.processed += 1;
       }
 
-      rechatProcessed += 1;
-      stats.processed += 1;
       processedUids.add(queuedThread.encryptUid || buildVisibleThreadKey(queuedThread));
 
       await this.#recordEvent(runId, {

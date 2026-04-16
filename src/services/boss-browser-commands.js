@@ -1195,7 +1195,7 @@ async function clickRecommendGreet({
   const clickedAt = Date.now();
   let settled = false;
   let pendingReason = 'boss_recommend_greet_result_pending';
-  while (!settled && Date.now() - clickedAt < 2_000) {
+  while (!settled && Date.now() - clickedAt < 5_000) {
     await new Promise((resolve) => setTimeout(resolve, 200));
     try {
       const quotaState = await inspectRecommendQuotaState({
