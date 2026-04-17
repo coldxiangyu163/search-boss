@@ -113,14 +113,34 @@ class SourceLoopService {
     }
 
     // Phase 1c: Always reset to recommend initial URL to clear stale tab state
-    try {
-      await runner.navigateTo({
-        runId,
-        url: buildRecommendInitialUrl(jobContext.bossEncryptJobId)
-      });
-    } catch (error) {
-      await this.#failRun(runId, `recommend_page_navigation_failed:${error.message}`, stats);
-      return { ok: false, stats, reason: 'recommend_page_unavailable' };
+    {
+      const recommendUrl = buildRecommendInitialUrl(jobContext.bossEncryptJobId);
+      const maxNavRetries = 3;
+      let navError = null;
+      let navDone = false;
+      for (let attempt = 0; attempt < maxNavRetries; attempt++) {
+        try {
+          await runner.navigateTo({ runId, url: recommendUrl });
+          navDone = true;
+          break;
+        } catch (error) {
+          navError = error;
+          if (attempt < maxNavRetries - 1) {
+            await this.#recordEvent(runId, {
+              eventId: `source-loop-nav-retry:${runId}:${attempt + 1}`,
+              eventType: 'source_loop_warning',
+              stage: 'source_loop',
+              message: `recommend page navigation retry ${attempt + 1}: ${error.message}`,
+              payload: { attempt: attempt + 1, error: error.message }
+            });
+            await new Promise((r) => setTimeout(r, 2_000 * (attempt + 1)));
+          }
+        }
+      }
+      if (!navDone) {
+        await this.#failRun(runId, `recommend_page_navigation_failed:${navError.message}`, stats);
+        return { ok: false, stats, reason: 'recommend_page_unavailable' };
+      }
     }
 
     // Phase 2: Wait for recommend iframe to load (poll up to 10s)

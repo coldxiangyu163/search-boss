@@ -1704,17 +1704,35 @@ async function navigateTo({
   cdpClient,
   targetId,
   urlPrefix,
-  url
+  url,
+  timeoutMs = 30_000,
+  skipIfMatches = true
 } = {}) {
   if (!url) {
     throw new Error('boss_navigate_url_required');
+  }
+
+  if (skipIfMatches) {
+    try {
+      const existingUrl = await getUrl({ cdpClient, targetId, urlPrefix });
+      if (existingUrl && isSameNavigationUrl(existingUrl, url)) {
+        return {
+          ok: true,
+          url: existingUrl,
+          skipped: true
+        };
+      }
+    } catch (_) {
+      // Fall through and perform navigation anyway
+    }
   }
 
   await cdpClient.sendCommand({
     targetId,
     urlPrefix,
     method: 'Page.navigate',
-    params: { url }
+    params: { url },
+    timeoutMs
   });
 
   // Wait for page to stabilize
@@ -1724,8 +1742,29 @@ async function navigateTo({
 
   return {
     ok: true,
-    url: currentUrl
+    url: currentUrl,
+    skipped: false
   };
+}
+
+function isSameNavigationUrl(currentUrl, targetUrl) {
+  try {
+    const current = new URL(currentUrl);
+    const target = new URL(targetUrl);
+
+    if (current.origin !== target.origin || current.pathname !== target.pathname) {
+      return false;
+    }
+
+    const targetJobId = target.searchParams.get('jobid');
+    if (targetJobId) {
+      return current.searchParams.get('jobid') === targetJobId;
+    }
+
+    return true;
+  } catch (_) {
+    return currentUrl === targetUrl;
+  }
 }
 
 async function sendChatMessage({
