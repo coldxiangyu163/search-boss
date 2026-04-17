@@ -110,6 +110,59 @@ test('LlmEvaluator evaluateCandidate calls API and parses response', async () =>
   assert.equal(body.messages.length, 2);
 });
 
+test('LlmEvaluator wraps fetch abort/timeout errors into llm_request_timeout', async () => {
+  const mockFetch = async () => {
+    const error = new Error('The operation was aborted');
+    error.name = 'AbortError';
+    throw error;
+  };
+
+  const evaluator = new LlmEvaluator({
+    apiBase: 'https://example.com/v1',
+    apiKey: 'test-key',
+    requestImpl: mockFetch,
+    requestTimeoutMs: 50
+  });
+
+  await assert.rejects(
+    () => evaluator.evaluateCandidate({
+      jobRequirement: '测试',
+      candidateDetail: { name: '测试', detailText: '' },
+      customRequirement: null
+    }),
+    /llm_request_timeout/
+  );
+});
+
+test('LlmEvaluator passes AbortSignal to fetch when timeout is configured', async () => {
+  const calls = [];
+  const mockFetch = async (url, options) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: '{"action":"skip","tier":"C","reason":"ok","facts":{}}' } }]
+      })
+    };
+  };
+
+  const evaluator = new LlmEvaluator({
+    apiBase: 'https://example.com/v1',
+    apiKey: 'test-key',
+    requestImpl: mockFetch,
+    requestTimeoutMs: 5_000
+  });
+
+  await evaluator.evaluateCandidate({
+    jobRequirement: '测试',
+    candidateDetail: { name: '测试', detailText: '' },
+    customRequirement: null
+  });
+
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].options.signal, 'fetch should receive an AbortSignal when timeout configured');
+});
+
 test('LlmEvaluator throws on API error', async () => {
   const mockFetch = async () => ({
     ok: false,

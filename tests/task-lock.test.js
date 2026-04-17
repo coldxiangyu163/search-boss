@@ -72,3 +72,48 @@ test('TaskLock acquire-release-acquire cycle works', () => {
   assert.equal(acquired, true);
   assert.equal(lock.getHolder().runId, 2);
 });
+
+test('TaskLock heartbeat refreshes activity timestamp', () => {
+  let now = 1_000;
+  const lock = new TaskLock({ staleMs: 500, clock: () => now });
+  lock.tryAcquire({ runId: 1, jobKey: 'j1', taskType: 'source' });
+
+  now = 1_400;
+  assert.equal(lock.heartbeat(1), true);
+
+  now = 1_800;
+  // 400ms since last heartbeat, below 500ms threshold
+  assert.deepEqual(lock.reapStale(), []);
+  assert.equal(lock.isBusy(), true);
+});
+
+test('TaskLock heartbeat returns false for unknown runId', () => {
+  const lock = new TaskLock();
+  lock.tryAcquire({ runId: 1, jobKey: 'j1', taskType: 'source' });
+  assert.equal(lock.heartbeat(999), false);
+});
+
+test('TaskLock reapStale removes holders idle beyond TTL', () => {
+  let now = 0;
+  const lock = new TaskLock({ staleMs: 1_000, clock: () => now });
+  lock.tryAcquire({ runId: 7, jobKey: 'j7', taskType: 'source', hrAccountId: 42 });
+
+  now = 1_500;
+  const reaped = lock.reapStale();
+
+  assert.equal(reaped.length, 1);
+  assert.equal(reaped[0].runId, 7);
+  assert.equal(reaped[0].hrAccountId, 42);
+  assert.ok(reaped[0].idleMs >= 1_000);
+  assert.equal(lock.isBusy(42), false);
+});
+
+test('TaskLock reapStale with staleMs=0 is a no-op', () => {
+  let now = 0;
+  const lock = new TaskLock({ staleMs: 0, clock: () => now });
+  lock.tryAcquire({ runId: 1, jobKey: 'j1', taskType: 'source' });
+
+  now = 999_999;
+  assert.deepEqual(lock.reapStale(), []);
+  assert.equal(lock.isBusy(), true);
+});

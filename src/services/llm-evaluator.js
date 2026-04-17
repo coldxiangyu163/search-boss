@@ -5,7 +5,8 @@ class LlmEvaluator {
     model = 'gpt-5.4',
     maxTokens = 1024,
     temperature = 0.3,
-    requestImpl = fetch
+    requestImpl = fetch,
+    requestTimeoutMs = 60_000
   } = {}) {
     this.apiBase = apiBase.replace(/\/+$/, '');
     this.apiKey = apiKey;
@@ -13,6 +14,9 @@ class LlmEvaluator {
     this.maxTokens = maxTokens;
     this.temperature = temperature;
     this.requestImpl = requestImpl;
+    this.requestTimeoutMs = Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
+      ? requestTimeoutMs
+      : 0;
   }
 
   async evaluateCandidate({ jobRequirement, candidateDetail, customRequirement, enterpriseKnowledge }) {
@@ -44,7 +48,7 @@ class LlmEvaluator {
       ]
     };
 
-    const response = await this.requestImpl(url, {
+    const fetchOptions = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -52,7 +56,23 @@ class LlmEvaluator {
         'User-Agent': 'search-boss/source-loop'
       },
       body: JSON.stringify(body)
-    });
+    };
+
+    if (this.requestTimeoutMs > 0 && typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+      fetchOptions.signal = AbortSignal.timeout(this.requestTimeoutMs);
+    }
+
+    let response;
+    try {
+      response = await this.requestImpl(url, fetchOptions);
+    } catch (error) {
+      const name = error?.name || '';
+      const message = error?.message || String(error);
+      if (name === 'AbortError' || name === 'TimeoutError' || /aborted|timeout/i.test(message)) {
+        throw new Error(`llm_request_timeout:${this.requestTimeoutMs}ms`);
+      }
+      throw error;
+    }
 
     if (!response.ok) {
       const text = await response.text().catch(() => '');

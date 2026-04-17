@@ -1,7 +1,15 @@
 const { config } = require('../config');
 
 class SchedulerService {
-  constructor({ pool, agentService, sourceLoopService = null, followupLoopService = null, taskLock = null, browserInstanceManager = null }) {
+  constructor({
+    pool,
+    agentService,
+    sourceLoopService = null,
+    followupLoopService = null,
+    taskLock = null,
+    browserInstanceManager = null,
+    staleLockMs = 30 * 60 * 1000
+  }) {
     this.pool = pool;
     this.agentService = agentService;
     this.sourceLoopService = sourceLoopService;
@@ -12,6 +20,9 @@ class SchedulerService {
     this._abortControllers = new Map();
     this._workConfigCache = new Map();
     this._workConfigCacheTime = 0;
+    this._staleLockMs = Number.isFinite(staleLockMs) && staleLockMs > 0
+      ? staleLockMs
+      : 0;
   }
 
   async listSchedules({ hrAccountId, departmentId } = {}) {
@@ -147,6 +158,39 @@ class SchedulerService {
 
   async #tick() {
     try {
+      // Reap stale task locks so that hung runs don't block subsequent tasks forever.
+      // A lock is considered stale when its last heartbeat is older than _staleLockMs.
+      if (this.taskLock && this._staleLockMs > 0 && typeof this.taskLock.reapStale === 'function') {
+        const reaped = this.taskLock.reapStale({ staleMs: this._staleLockMs });
+        for (const holder of reaped) {
+          const idleSec = Math.round((holder.idleMs || 0) / 1000);
+          console.warn(
+            `[scheduler] reaped stale task lock: run ${holder.runId} (${holder.jobKey}/${holder.taskType}) idle ${idleSec}s`
+          );
+          const ac = this._abortControllers.get(Number(holder.runId));
+          if (ac) {
+            try { ac.abort(); } catch (_) { /* non-fatal */ }
+            this._abortControllers.delete(Number(holder.runId));
+          }
+          try {
+            await this.agentService.failRun({
+              runId: holder.runId,
+              message: 'stale_lock_reaped',
+              payload: {
+                reason: 'stale_lock_reaped',
+                idleMs: holder.idleMs || null,
+                staleLockMs: this._staleLockMs,
+                hrAccountId: holder.hrAccountId || null,
+                jobKey: holder.jobKey || null,
+                taskType: holder.taskType || null
+              }
+            });
+          } catch (err) {
+            console.error(`[scheduler] failRun for reaped run ${holder.runId} failed:`, err.message);
+          }
+        }
+      }
+
       const now = new Date();
       const currentHour = now.getHours();
       const workStart = config.workHoursStart;
@@ -534,11 +578,16 @@ class SchedulerService {
         }
       }
 
+      const heartbeat = this.taskLock && typeof this.taskLock.heartbeat === 'function'
+        ? () => this.taskLock.heartbeat(runId)
+        : null;
+
       if (taskType === 'source' && this.sourceLoopService) {
         const overrides = {};
         if (schedulePayload.targetCount) overrides.targetCount = schedulePayload.targetCount;
         if (schedulePayload.recommendTab) overrides.recommendTab = schedulePayload.recommendTab;
         if (runnerOverride) overrides.bossCliRunner = runnerOverride;
+        if (heartbeat) overrides.heartbeat = heartbeat;
         const loopResult = await this.sourceLoopService.run({ runId, jobKey, signal, ...overrides });
         if (loopResult?.reason === 'manually_stopped' || loopResult?.reason === 'boss_chat_quota_exhausted') {
           await this.#finalizeStoppedScheduledRun({ schedule, scheduledRunId });
@@ -561,6 +610,7 @@ class SchedulerService {
           overrides.rechatConsecutiveOutboundLimit = schedulePayload.rechatConsecutiveOutboundLimit;
         }
         if (runnerOverride) overrides.bossCliRunner = runnerOverride;
+        if (heartbeat) overrides.heartbeat = heartbeat;
         const loopResult = await this.followupLoopService.run({ runId, jobKey, mode: taskType, signal, ...overrides });
         if (loopResult?.reason === 'manually_stopped') {
           await this.#finalizeStoppedScheduledRun({ schedule, scheduledRunId });

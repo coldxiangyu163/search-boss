@@ -68,7 +68,8 @@ class FollowupLoopService {
     rechatMaxScanDays: overrideRechatMaxScanDays,
     rechatConsecutiveOutboundLimit: overrideRechatConsecutiveOutboundLimit,
     bossCliRunner: runnerOverride,
-    signal
+    signal,
+    heartbeat
   } = {}) {
     const runner = runnerOverride || this.bossCliRunner;
     const effectiveMaxThreads = overrideMaxThreads || this.maxThreads;
@@ -90,11 +91,16 @@ class FollowupLoopService {
       effectiveRechatMaxScanDays,
       effectiveRechatConsecutiveOutboundLimit,
       runner,
-      signal
+      signal,
+      heartbeat
     });
   }
 
-  async #runImpl({ runId, jobKey, mode, effectiveMaxThreads, effectiveInteractionTypes, effectiveRechatMaxScanDays, effectiveRechatConsecutiveOutboundLimit, runner, signal }) {
+  async #runImpl({ runId, jobKey, mode, effectiveMaxThreads, effectiveInteractionTypes, effectiveRechatMaxScanDays, effectiveRechatConsecutiveOutboundLimit, runner, signal, heartbeat }) {
+    const safeHeartbeat = () => {
+      if (typeof heartbeat !== 'function') return;
+      try { heartbeat(); } catch (_) { /* non-fatal */ }
+    };
     const stats = {
       processed: 0,
       replied: 0,
@@ -315,6 +321,8 @@ class FollowupLoopService {
     for (const queuedThread of fullThreadQueue) {
       if (signal?.aborted) break;
       if (stats.processed >= effectiveMaxThreads) break;
+
+      safeHeartbeat();
 
       const threadUid = queuedThread.encryptUid || buildVisibleThreadKey(queuedThread);
       if (!threadUid || processedUids.has(threadUid)) continue;
@@ -975,6 +983,8 @@ class FollowupLoopService {
     let rechatProcessed = 0;
     for (const queuedThread of rechatQueue) {
       if (signal?.aborted) break;
+
+      safeHeartbeat();
 
       // Per-run processing limit (shared with unread phase)
       if (stats.processed >= effectiveMaxThreads) {

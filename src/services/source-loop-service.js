@@ -38,7 +38,8 @@ class SourceLoopService {
     candidateDelayMin = 2_000,
     candidateDelayMax = 5_000,
     readingDelayMin,
-    readingDelayMax
+    readingDelayMax,
+    maxRunMs = 60 * 60 * 1000
   }) {
     this.bossCliRunner = bossCliRunner;
     this.agentService = agentService;
@@ -49,16 +50,22 @@ class SourceLoopService {
     this.candidateDelayMax = candidateDelayMax;
     this.readingDelayMin = readingDelayMin ?? (candidateDelayMin > 0 ? 5_000 : 0);
     this.readingDelayMax = readingDelayMax ?? (candidateDelayMax > 0 ? 15_000 : 0);
+    this.maxRunMs = Number.isFinite(maxRunMs) && maxRunMs > 0 ? maxRunMs : 0;
   }
 
-  async run({ runId, jobKey, targetCount: overrideTargetCount, recommendTab, bossCliRunner: runnerOverride, signal } = {}) {
+  async run({ runId, jobKey, targetCount: overrideTargetCount, recommendTab, bossCliRunner: runnerOverride, signal, heartbeat } = {}) {
     const effectiveTargetCount = overrideTargetCount || this.targetCount;
     const effectiveRecommendTab = recommendTab || 'default';
     const runner = runnerOverride || this.bossCliRunner;
-    return this.#runImpl({ runId, jobKey, effectiveTargetCount, effectiveRecommendTab, runner, signal });
+    return this.#runImpl({ runId, jobKey, effectiveTargetCount, effectiveRecommendTab, runner, signal, heartbeat });
   }
 
-  async #runImpl({ runId, jobKey, effectiveTargetCount, effectiveRecommendTab, runner, signal }) {
+  async #runImpl({ runId, jobKey, effectiveTargetCount, effectiveRecommendTab, runner, signal, heartbeat }) {
+    const safeHeartbeat = () => {
+      if (typeof heartbeat !== 'function') return;
+      try { heartbeat(); } catch (_) { /* non-fatal */ }
+    };
+    const deadline = this.maxRunMs > 0 ? Date.now() + this.maxRunMs : null;
     const stats = {
       greeted: 0,
       skipped: 0,
@@ -239,10 +246,17 @@ class SourceLoopService {
     const processedGeekIds = new Set();
     let sawAnyCandidate = false;
 
+    let deadlineExceeded = false;
     while (true) {
       if (signal?.aborted) break;
       if (stats.greeted >= effectiveTargetCount) break;
       if ((stats.skipped + stats.errors) >= this.maxSkips) break;
+      if (deadline && Date.now() > deadline) {
+        deadlineExceeded = true;
+        break;
+      }
+
+      safeHeartbeat();
 
       if (stats.totalEvaluated > 0) {
         const delayMs = this.candidateDelayMin + Math.random() * (this.candidateDelayMax - this.candidateDelayMin);
@@ -311,6 +325,37 @@ class SourceLoopService {
         message: `checkpoint after candidate ${stats.totalEvaluated}`,
         payload: { ...stats }
       });
+    }
+
+    // Handle global deadline exceeded (watchdog)
+    if (deadlineExceeded) {
+      const timeoutSummary = {
+        targetCount: effectiveTargetCount,
+        achievedCount: stats.greeted,
+        ...stats,
+        reason: 'max_runtime_exceeded',
+        maxRunMs: this.maxRunMs
+      };
+
+      await this.#recordEvent(runId, {
+        eventId: `source-loop-deadline:${runId}`,
+        eventType: 'source_loop_failed',
+        stage: 'source_loop',
+        message: `source loop exceeded max runtime (${this.maxRunMs}ms)`,
+        payload: timeoutSummary
+      });
+
+      try {
+        await this.#resetRecommendPageAfterCompletion({ runId, runner, jobContext });
+      } catch (_) { /* non-fatal */ }
+
+      await this.agentService.failRun({
+        runId,
+        message: 'source_loop_deadline_exceeded',
+        payload: timeoutSummary
+      });
+
+      return { ok: false, stats: timeoutSummary, reason: 'max_runtime_exceeded' };
     }
 
     // Handle manual stop

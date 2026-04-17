@@ -1,6 +1,8 @@
 class TaskLock {
-  constructor() {
+  constructor({ staleMs = 15 * 60 * 1000, clock = () => Date.now() } = {}) {
     this._holders = new Map();
+    this._staleMs = staleMs;
+    this._clock = clock;
   }
 
   tryAcquire({ runId, jobKey, taskType, hrAccountId }) {
@@ -10,12 +12,15 @@ class TaskLock {
       return false;
     }
 
+    const nowMs = this._clock();
     this._holders.set(lockKey, {
       runId,
       jobKey,
       taskType,
       hrAccountId: hrAccountId || null,
-      acquiredAt: new Date().toISOString()
+      acquiredAt: new Date(nowMs).toISOString(),
+      acquiredAtMs: nowMs,
+      heartbeatAtMs: nowMs
     });
 
     return true;
@@ -28,6 +33,38 @@ class TaskLock {
         return;
       }
     }
+  }
+
+  heartbeat(runId) {
+    if (runId === undefined || runId === null) return false;
+    const nowMs = this._clock();
+    for (const holder of this._holders.values()) {
+      if (holder.runId === runId) {
+        holder.heartbeatAtMs = nowMs;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  reapStale({ staleMs, now } = {}) {
+    const effectiveStaleMs = Number.isFinite(staleMs) ? staleMs : this._staleMs;
+    if (!Number.isFinite(effectiveStaleMs) || effectiveStaleMs <= 0) {
+      return [];
+    }
+    const nowMs = Number.isFinite(now) ? now : this._clock();
+    const reaped = [];
+    for (const [key, holder] of this._holders) {
+      const lastActive = Number.isFinite(holder.heartbeatAtMs)
+        ? holder.heartbeatAtMs
+        : (Number.isFinite(holder.acquiredAtMs) ? holder.acquiredAtMs : nowMs);
+      const idleMs = nowMs - lastActive;
+      if (idleMs >= effectiveStaleMs) {
+        reaped.push({ ...holder, idleMs });
+        this._holders.delete(key);
+      }
+    }
+    return reaped;
   }
 
   getHolder(hrAccountId) {
