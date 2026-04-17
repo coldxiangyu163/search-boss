@@ -14,12 +14,15 @@ class SchedulerService {
     this._workConfigCacheTime = 0;
   }
 
-  async listSchedules({ hrAccountId } = {}) {
+  async listSchedules({ hrAccountId, departmentId } = {}) {
     const values = [];
     let whereClause = '';
     if (hrAccountId) {
       values.push(hrAccountId);
       whereClause = `where hr_account_id = $${values.length}`;
+    } else if (departmentId) {
+      values.push(departmentId);
+      whereClause = `where hr_account_id in (select id from hr_accounts where department_id = $${values.length})`;
     }
 
     const result = await this.pool.query(`

@@ -170,6 +170,31 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
     };
   }
 
+  async function getScheduleScope(scheduleId) {
+    if (!pool) {
+      return null;
+    }
+
+    const result = await pool.query(
+      `select sj.hr_account_id, ha.department_id
+       from scheduled_jobs sj
+       left join hr_accounts ha on ha.id = sj.hr_account_id
+       where sj.id = $1
+       limit 1`,
+      [Number(scheduleId)]
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+
+    return {
+      hrAccountId: row.hr_account_id,
+      departmentId: row.department_id
+    };
+  }
+
   if (pool) {
     app.use(async (req, _res, next) => {
       if (req.path.startsWith('/api/')
@@ -826,8 +851,11 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.get('/api/schedules', async (req, res, next) => {
     try {
-      const hrAccountId = req.user?.role === 'hr' ? req.user.hr_account_id : undefined;
-      const items = await services.scheduler.listSchedules({ hrAccountId });
+      const scope = resolveHrScope(req) || {};
+      const items = await services.scheduler.listSchedules({
+        hrAccountId: scope.hrAccountId,
+        departmentId: scope.departmentId
+      });
       res.json({ items });
     } catch (error) {
       next(error);
@@ -861,6 +889,10 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.post('/api/schedules/:id/trigger', async (req, res, next) => {
     try {
+      const scheduleScope = await getScheduleScope(req.params.id);
+      if (scheduleScope && !canAccessRun(req.user, scheduleScope)) {
+        return res.status(403).json({ error: 'forbidden', message: '无权触发该调度任务。' });
+      }
       const result = await services.scheduler.triggerSchedule(req.params.id, { manualTrigger: true });
       res.json(result);
     } catch (error) {
@@ -870,6 +902,10 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.delete('/api/schedules/:id', async (req, res, next) => {
     try {
+      const scheduleScope = await getScheduleScope(req.params.id);
+      if (scheduleScope && !canAccessRun(req.user, scheduleScope)) {
+        return res.status(403).json({ error: 'forbidden', message: '无权删除该调度任务。' });
+      }
       const item = await services.scheduler.deleteSchedule(req.params.id);
       res.json({ ok: true, item });
     } catch (error) {
@@ -879,6 +915,10 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
 
   app.patch('/api/schedules/:id/toggle', async (req, res, next) => {
     try {
+      const scheduleScope = await getScheduleScope(req.params.id);
+      if (scheduleScope && !canAccessRun(req.user, scheduleScope)) {
+        return res.status(403).json({ error: 'forbidden', message: '无权启停该调度任务。' });
+      }
       const item = await services.scheduler.toggleSchedule(req.params.id, req.body.enabled);
       res.json({ item });
     } catch (error) {

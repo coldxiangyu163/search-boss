@@ -5639,6 +5639,235 @@ test('POST /api/candidates/bulk-resume-download scopes dept_admin to current dep
   assert.equal(capturedParams.departmentId, 12);
 });
 
+test('GET /api/schedules scopes dept_admin to current department', async () => {
+  let capturedParams = null;
+
+  const app = createAuthedApp({
+    user: { id: 7, role: 'dept_admin', department_id: 12 },
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return { items: [], pagination: {} }; } },
+      scheduler: {
+        async listSchedules(params) {
+          capturedParams = params;
+          return [];
+        }
+      },
+      agent: {
+        async listRuns() { return { items: [], pagination: {} }; },
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return {}; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; }
+      }
+    }
+  });
+
+  const response = await request(app).get('/api/schedules');
+
+  assert.equal(response.status, 200);
+  assert.equal(capturedParams.hrAccountId, undefined);
+  assert.equal(capturedParams.departmentId, 12);
+});
+
+test('GET /api/schedules scopes hr role to own hr_account_id', async () => {
+  let capturedParams = null;
+
+  const app = createAuthedApp({
+    user: { id: 9, role: 'hr', department_id: 12, hr_account_id: 42 },
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return { items: [], pagination: {} }; } },
+      scheduler: {
+        async listSchedules(params) {
+          capturedParams = params;
+          return [];
+        }
+      },
+      agent: {
+        async listRuns() { return { items: [], pagination: {} }; },
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return {}; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; }
+      }
+    }
+  });
+
+  const response = await request(app).get('/api/schedules');
+
+  assert.equal(response.status, 200);
+  assert.equal(capturedParams.hrAccountId, 42);
+  assert.equal(capturedParams.departmentId, undefined);
+});
+
+test('POST /api/schedules/:id/trigger rejects dept_admin from other department', async () => {
+  let triggerCalled = false;
+  const pool = {
+    query(sql) {
+      if (sql.includes('from scheduled_jobs sj') && sql.includes('left join hr_accounts ha')) {
+        return { rows: [{ hr_account_id: 5, department_id: 99 }] };
+      }
+      if (sql.includes('connect_pg_simple') || sql.includes('"session"')) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    }
+  };
+
+  const app = createAuthedApp({
+    user: { id: 7, role: 'dept_admin', department_id: 12 },
+    pool,
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return { items: [], pagination: {} }; } },
+      scheduler: {
+        async listSchedules() { return []; },
+        async triggerSchedule() { triggerCalled = true; return { ok: true }; }
+      },
+      agent: {
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return {}; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; }
+      }
+    }
+  });
+
+  const response = await request(app).post('/api/schedules/1/trigger');
+
+  assert.equal(response.status, 403);
+  assert.equal(response.body.error, 'forbidden');
+  assert.equal(triggerCalled, false);
+});
+
+test('DELETE /api/schedules/:id rejects dept_admin from other department', async () => {
+  let deleteCalled = false;
+  const pool = {
+    query(sql) {
+      if (sql.includes('from scheduled_jobs sj') && sql.includes('left join hr_accounts ha')) {
+        return { rows: [{ hr_account_id: 5, department_id: 99 }] };
+      }
+      if (sql.includes('connect_pg_simple') || sql.includes('"session"')) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    }
+  };
+
+  const app = createAuthedApp({
+    user: { id: 7, role: 'dept_admin', department_id: 12 },
+    pool,
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return { items: [], pagination: {} }; } },
+      scheduler: {
+        async listSchedules() { return []; },
+        async deleteSchedule() { deleteCalled = true; return {}; }
+      },
+      agent: {
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return {}; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; }
+      }
+    }
+  });
+
+  const response = await request(app).delete('/api/schedules/1');
+
+  assert.equal(response.status, 403);
+  assert.equal(response.body.error, 'forbidden');
+  assert.equal(deleteCalled, false);
+});
+
+test('PATCH /api/schedules/:id/toggle rejects hr from other hr_account', async () => {
+  let toggleCalled = false;
+  const pool = {
+    query(sql) {
+      if (sql.includes('from scheduled_jobs sj') && sql.includes('left join hr_accounts ha')) {
+        return { rows: [{ hr_account_id: 77, department_id: 12 }] };
+      }
+      if (sql.includes('connect_pg_simple') || sql.includes('"session"')) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    }
+  };
+
+  const app = createAuthedApp({
+    user: { id: 9, role: 'hr', department_id: 12, hr_account_id: 42 },
+    pool,
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return { items: [], pagination: {} }; } },
+      scheduler: {
+        async listSchedules() { return []; },
+        async toggleSchedule() { toggleCalled = true; return {}; }
+      },
+      agent: {
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return {}; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; }
+      }
+    }
+  });
+
+  const response = await request(app)
+    .patch('/api/schedules/1/toggle')
+    .send({ enabled: false });
+
+  assert.equal(response.status, 403);
+  assert.equal(response.body.error, 'forbidden');
+  assert.equal(toggleCalled, false);
+});
+
+test('POST /api/schedules/:id/trigger allows dept_admin for same-department schedule', async () => {
+  let triggerCalled = false;
+  const pool = {
+    query(sql) {
+      if (sql.includes('from scheduled_jobs sj') && sql.includes('left join hr_accounts ha')) {
+        return { rows: [{ hr_account_id: 5, department_id: 12 }] };
+      }
+      if (sql.includes('connect_pg_simple') || sql.includes('"session"')) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    }
+  };
+
+  const app = createAuthedApp({
+    user: { id: 7, role: 'dept_admin', department_id: 12 },
+    pool,
+    services: {
+      dashboard: { async getSummary() { return { kpis: {}, queues: {}, health: {} }; } },
+      jobs: { async listJobs() { return []; } },
+      candidates: { async listCandidates() { return { items: [], pagination: {} }; } },
+      scheduler: {
+        async listSchedules() { return []; },
+        async triggerSchedule() { triggerCalled = true; return { ok: true, scheduledRunId: 11 }; }
+      },
+      agent: {
+        async recordAction() { return { ok: true }; },
+        async getFollowupDecision() { return {}; },
+        async recordMessage() { return { ok: true }; },
+        async recordAttachment() { return { ok: true }; }
+      }
+    }
+  });
+
+  const response = await request(app).post('/api/schedules/1/trigger');
+
+  assert.equal(response.status, 200);
+  assert.equal(triggerCalled, true);
+});
+
 test('PATCH /api/admin/users/:id rejects legacy enterprise_admin role with invalid_role', async () => {
   const app = createAuthedApp({
     user: { id: 1, role: 'system_admin', department_id: 1 },
