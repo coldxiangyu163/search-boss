@@ -33,6 +33,7 @@ class FollowupLoopService {
     resumePreviewCloseDelayMax = 2_200,
     rechatMaxScanDays = RECHAT_MAX_SCAN_DAYS,
     rechatMaxPerDay = RECHAT_MAX_PER_DAY,
+    rechatConsecutiveOutboundLimit = RECHAT_CONSECUTIVE_OUTBOUND_LIMIT,
     rechatActiveHoursStart = RECHAT_ACTIVE_HOURS_START,
     rechatActiveHoursEnd = RECHAT_ACTIVE_HOURS_END,
     rechatRequiredInfo = RECHAT_REQUIRED_INFO,
@@ -50,6 +51,7 @@ class FollowupLoopService {
     this.resumePreviewCloseDelayMax = resumePreviewCloseDelayMax;
     this.rechatMaxScanDays = rechatMaxScanDays;
     this.rechatMaxPerDay = rechatMaxPerDay;
+    this.rechatConsecutiveOutboundLimit = rechatConsecutiveOutboundLimit;
     this.rechatActiveHoursStart = rechatActiveHoursStart;
     this.rechatActiveHoursEnd = rechatActiveHoursEnd;
     this.rechatRequiredInfo = rechatRequiredInfo;
@@ -57,16 +59,42 @@ class FollowupLoopService {
     this.sleep = sleep;
   }
 
-  async run({ runId, jobKey, mode = 'followup', maxThreads: overrideMaxThreads, interactionTypes, bossCliRunner: runnerOverride, signal } = {}) {
+  async run({
+    runId,
+    jobKey,
+    mode = 'followup',
+    maxThreads: overrideMaxThreads,
+    interactionTypes,
+    rechatMaxScanDays: overrideRechatMaxScanDays,
+    rechatConsecutiveOutboundLimit: overrideRechatConsecutiveOutboundLimit,
+    bossCliRunner: runnerOverride,
+    signal
+  } = {}) {
     const runner = runnerOverride || this.bossCliRunner;
     const effectiveMaxThreads = overrideMaxThreads || this.maxThreads;
     const effectiveInteractionTypes = Array.isArray(interactionTypes) && interactionTypes.length > 0
       ? interactionTypes
       : ['request_resume'];
-    return this.#runImpl({ runId, jobKey, mode, effectiveMaxThreads, effectiveInteractionTypes, runner, signal });
+    const effectiveRechatMaxScanDays = Number.isFinite(Number(overrideRechatMaxScanDays)) && Number(overrideRechatMaxScanDays) > 0
+      ? Math.round(Number(overrideRechatMaxScanDays))
+      : this.rechatMaxScanDays;
+    const effectiveRechatConsecutiveOutboundLimit = Number.isFinite(Number(overrideRechatConsecutiveOutboundLimit)) && Number(overrideRechatConsecutiveOutboundLimit) > 0
+      ? Math.round(Number(overrideRechatConsecutiveOutboundLimit))
+      : this.rechatConsecutiveOutboundLimit;
+    return this.#runImpl({
+      runId,
+      jobKey,
+      mode,
+      effectiveMaxThreads,
+      effectiveInteractionTypes,
+      effectiveRechatMaxScanDays,
+      effectiveRechatConsecutiveOutboundLimit,
+      runner,
+      signal
+    });
   }
 
-  async #runImpl({ runId, jobKey, mode, effectiveMaxThreads, effectiveInteractionTypes, runner, signal }) {
+  async #runImpl({ runId, jobKey, mode, effectiveMaxThreads, effectiveInteractionTypes, effectiveRechatMaxScanDays, effectiveRechatConsecutiveOutboundLimit, runner, signal }) {
     const stats = {
       processed: 0,
       replied: 0,
@@ -254,7 +282,9 @@ class FollowupLoopService {
       if (mode === 'followup') {
         await this.#runRechatPhase({
           runId, jobKey, jobContext, mode,
-          effectiveMaxThreads, effectiveInteractionTypes, runner, signal, stats,
+          effectiveMaxThreads, effectiveInteractionTypes,
+          effectiveRechatMaxScanDays, effectiveRechatConsecutiveOutboundLimit,
+          runner, signal, stats,
           processedUids
         });
       }
@@ -388,7 +418,9 @@ class FollowupLoopService {
     if (mode === 'followup' && !signal?.aborted) {
       await this.#runRechatPhase({
         runId, jobKey, jobContext, mode,
-        effectiveMaxThreads, effectiveInteractionTypes, runner, signal, stats,
+        effectiveMaxThreads, effectiveInteractionTypes,
+        effectiveRechatMaxScanDays, effectiveRechatConsecutiveOutboundLimit,
+        runner, signal, stats,
         processedUids
       });
     }
@@ -561,14 +593,15 @@ class FollowupLoopService {
     // Step 6: Check message direction eligibility
     if (rechat) {
       // Re-chat mode: skip if last N messages are all outbound with no reply
-      if (hasConsecutiveUnrepliedMessages(messages, RECHAT_CONSECUTIVE_OUTBOUND_LIMIT)) {
+      const limit = this.rechatConsecutiveOutboundLimit;
+      if (hasConsecutiveUnrepliedMessages(messages, limit)) {
         stats.skipped += 1;
         await this.#recordEvent(runId, {
           eventId: `rechat-consecutive-skip:${runId}:${encryptUid}`,
           eventType: 'rechat_consecutive_skip',
           stage: 'rechat',
-          message: `skipped ${thread.name}: ${RECHAT_CONSECUTIVE_OUTBOUND_LIMIT} consecutive outbound messages without reply`,
-          payload: { encryptUid, candidateName: thread.name, threshold: RECHAT_CONSECUTIVE_OUTBOUND_LIMIT }
+          message: `skipped ${thread.name}: ${limit} consecutive outbound messages without reply`,
+          payload: { encryptUid, candidateName: thread.name, threshold: limit }
         });
         return;
       }
@@ -830,7 +863,9 @@ class FollowupLoopService {
     }
   }
 
-  async #runRechatPhase({ runId, jobKey, jobContext, mode, effectiveMaxThreads, effectiveInteractionTypes, runner, signal, stats, processedUids }) {
+  async #runRechatPhase({ runId, jobKey, jobContext, mode, effectiveMaxThreads, effectiveInteractionTypes, effectiveRechatMaxScanDays, effectiveRechatConsecutiveOutboundLimit, runner, signal, stats, processedUids }) {
+    const rechatMaxScanDays = effectiveRechatMaxScanDays || this.rechatMaxScanDays;
+    const rechatConsecutiveOutboundLimit = effectiveRechatConsecutiveOutboundLimit || this.rechatConsecutiveOutboundLimit;
     // Phase R1: Switch to "全部" filter
     try {
       await runner.selectChatAllFilter({ runId });
@@ -839,7 +874,7 @@ class FollowupLoopService {
         eventType: 'rechat_phase_started',
         stage: 'rechat',
         message: 'switched to all filter for re-chat phase',
-        payload: { jobKey, maxScanDays: this.rechatMaxScanDays, maxPerDay: this.rechatMaxPerDay }
+        payload: { jobKey, maxScanDays: rechatMaxScanDays, maxPerDay: this.rechatMaxPerDay, consecutiveOutboundLimit: rechatConsecutiveOutboundLimit }
       });
     } catch (error) {
       await this.#recordEvent(runId, {
@@ -882,12 +917,12 @@ class FollowupLoopService {
           continue;
         }
 
-        if (daysAgo >= 1 && daysAgo <= this.rechatMaxScanDays) {
+        if (daysAgo >= 1 && daysAgo <= rechatMaxScanDays) {
           rechatQueue.push(thread);
           continue;
         }
 
-        if (daysAgo > this.rechatMaxScanDays) {
+        if (daysAgo > rechatMaxScanDays) {
           foundPastWindow = true;
           break;
         }
@@ -918,7 +953,7 @@ class FollowupLoopService {
         eventType: 'rechat_empty',
         stage: 'rechat',
         message: 'no candidates in re-chat time window',
-        payload: { jobKey, windowDays: `1-${this.rechatMaxScanDays}` }
+        payload: { jobKey, windowDays: `1-${rechatMaxScanDays}` }
       });
       return;
     }
@@ -1010,6 +1045,7 @@ class FollowupLoopService {
         thread,
         mode,
         interactionTypes: effectiveInteractionTypes,
+        rechatConsecutiveOutboundLimit,
         stats,
         runner
       });
@@ -1040,9 +1076,12 @@ class FollowupLoopService {
     });
   }
 
-  async #processRechatThread({ runId, jobKey, jobContext, thread, mode, interactionTypes, stats, runner }) {
+  async #processRechatThread({ runId, jobKey, jobContext, thread, mode, interactionTypes, rechatConsecutiveOutboundLimit, stats, runner }) {
     const threadId = thread.dataId || `idx-${thread.index}`;
     const expectedUid = thread.encryptUid || '';
+    const effectiveConsecutiveLimit = Number.isFinite(Number(rechatConsecutiveOutboundLimit)) && Number(rechatConsecutiveOutboundLimit) > 0
+      ? Math.round(Number(rechatConsecutiveOutboundLimit))
+      : this.rechatConsecutiveOutboundLimit;
 
     // Step 1: Click the row
     try {
@@ -1232,14 +1271,14 @@ class FollowupLoopService {
 
     // Count consecutive outbound messages
     const consecutiveOutbound = countConsecutiveOutbound(messages);
-    if (consecutiveOutbound >= RECHAT_CONSECUTIVE_OUTBOUND_LIMIT) {
+    if (consecutiveOutbound >= effectiveConsecutiveLimit) {
       stats.skipped += 1;
       await this.#recordEvent(runId, {
         eventId: `rechat-consecutive-skip:${runId}:${encryptUid}`,
         eventType: 'rechat_consecutive_skip',
         stage: 'rechat',
         message: `skipped ${thread.name}: ${consecutiveOutbound} consecutive outbound messages without reply`,
-        payload: { encryptUid, candidateName: thread.name, consecutiveOutbound, threshold: RECHAT_CONSECUTIVE_OUTBOUND_LIMIT }
+        payload: { encryptUid, candidateName: thread.name, consecutiveOutbound, threshold: effectiveConsecutiveLimit }
       });
       return false;
     }

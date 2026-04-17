@@ -70,7 +70,24 @@ test('automation schedule helpers strip irrelevant payload keys by task type', (
     }),
     {
       maxThreads: 12,
-      interactionTypes: ['request_resume', 'exchange_wechat']
+      interactionTypes: ['request_resume', 'exchange_wechat'],
+      rechatMaxScanDays: 7,
+      rechatConsecutiveOutboundLimit: 3
+    }
+  );
+
+  assert.deepEqual(
+    sanitizePayloadByTaskType('followup', {
+      maxThreads: 15,
+      interactionTypes: ['request_resume'],
+      rechatMaxScanDays: 10,
+      rechatConsecutiveOutboundLimit: 5
+    }),
+    {
+      maxThreads: 15,
+      interactionTypes: ['request_resume'],
+      rechatMaxScanDays: 10,
+      rechatConsecutiveOutboundLimit: 5
     }
   );
 });

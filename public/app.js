@@ -127,6 +127,8 @@ const state = {
       maxThreads: 20,
       recommendTab: 'default',
       interactionTypes: ['request_resume'],
+      rechatMaxScanDays: 7,
+      rechatConsecutiveOutboundLimit: 3,
       priority: 5,
       cooldownMinutes: 60,
       dailyMaxRuns: 0,
@@ -256,7 +258,9 @@ const automationScheduleUx = window.AutomationScheduleUx || {
         dailyMaxRuns: 0,
         payload: {
           maxThreads: 20,
-          interactionTypes: ['request_resume']
+          interactionTypes: ['request_resume'],
+          rechatMaxScanDays: 7,
+          rechatConsecutiveOutboundLimit: 3
         }
       };
     }
@@ -282,7 +286,9 @@ const automationScheduleUx = window.AutomationScheduleUx || {
       return {
         ...payload,
         maxThreads: payload.maxThreads ?? 20,
-        interactionTypes: Array.isArray(payload.interactionTypes) && payload.interactionTypes.length ? payload.interactionTypes : ['request_resume']
+        interactionTypes: Array.isArray(payload.interactionTypes) && payload.interactionTypes.length ? payload.interactionTypes : ['request_resume'],
+        rechatMaxScanDays: payload.rechatMaxScanDays ?? 7,
+        rechatConsecutiveOutboundLimit: payload.rechatConsecutiveOutboundLimit ?? 3
       };
     }
 
@@ -310,6 +316,8 @@ const automationScheduleUx = window.AutomationScheduleUx || {
     delete nextPayload.recommendTab;
     delete nextPayload.maxThreads;
     delete nextPayload.interactionTypes;
+    delete nextPayload.rechatMaxScanDays;
+    delete nextPayload.rechatConsecutiveOutboundLimit;
     return nextPayload;
   }
 };
@@ -4278,7 +4286,9 @@ function buildScheduleModalSimpleSnapshot(form = {}) {
     targetCount: form.targetCount ?? 5,
     maxThreads: form.maxThreads ?? 20,
     recommendTab: form.recommendTab || 'default',
-    interactionTypes: Array.isArray(form.interactionTypes) ? form.interactionTypes : ['request_resume']
+    interactionTypes: Array.isArray(form.interactionTypes) ? form.interactionTypes : ['request_resume'],
+    rechatMaxScanDays: form.rechatMaxScanDays ?? 7,
+    rechatConsecutiveOutboundLimit: form.rechatConsecutiveOutboundLimit ?? 3
   });
 }
 
@@ -4295,6 +4305,8 @@ function createScheduleModalForm(taskType = 'source') {
     interactionTypes: Array.isArray(payload.interactionTypes) && payload.interactionTypes.length
       ? payload.interactionTypes
       : ['request_resume'],
+    rechatMaxScanDays: payload.rechatMaxScanDays ?? 7,
+    rechatConsecutiveOutboundLimit: payload.rechatConsecutiveOutboundLimit ?? 3,
     priority: preset.priority ?? 5,
     cooldownMinutes: preset.cooldownMinutes ?? 60,
     dailyMaxRuns: preset.dailyMaxRuns ?? 0,
@@ -4538,6 +4550,30 @@ function renderScheduleModal() {
             </div>
           `}
         </div>
+        <div class="sm-row" style="margin-top:10px">
+          <label class="sm-field">
+            <span class="sm-label">复聊扫描天数</span>
+            ${isView ? `<div class="sm-value">${form.rechatMaxScanDays || 7} 天</div>` : `
+              <div class="sm-input-group">
+                <input class="sm-input" type="number" min="1" max="30" value="${form.rechatMaxScanDays ?? 7}"
+                  onchange="updateScheduleModalForm('rechatMaxScanDays', Number(this.value))" />
+                <span class="sm-input-suffix">天</span>
+              </div>
+            `}
+            <span class="sm-hint">复聊阶段扫描最近 N 天内有过聊天的候选人</span>
+          </label>
+          <label class="sm-field">
+            <span class="sm-label">最多连续复聊次数</span>
+            ${isView ? `<div class="sm-value">${form.rechatConsecutiveOutboundLimit || 3} 次</div>` : `
+              <div class="sm-input-group">
+                <input class="sm-input" type="number" min="1" max="10" value="${form.rechatConsecutiveOutboundLimit ?? 3}"
+                  onchange="updateScheduleModalForm('rechatConsecutiveOutboundLimit', Number(this.value))" />
+                <span class="sm-input-suffix">次</span>
+              </div>
+            `}
+            <span class="sm-hint">同一候选人累计连续未回复超过该阈值则跳过复聊</span>
+          </label>
+        </div>
         ` : ''}
       </div>
     `;
@@ -4669,6 +4705,8 @@ function openScheduleModal(mode, scheduleId) {
     form.interactionTypes = Array.isArray(payload.interactionTypes) && payload.interactionTypes.length
       ? payload.interactionTypes
       : form.interactionTypes;
+    form.rechatMaxScanDays = payload.rechatMaxScanDays ?? form.rechatMaxScanDays;
+    form.rechatConsecutiveOutboundLimit = payload.rechatConsecutiveOutboundLimit ?? form.rechatConsecutiveOutboundLimit;
     form.priority = raw.priority;
     form.cooldownMinutes = raw.cooldownMinutes;
     form.dailyMaxRuns = raw.dailyMaxRuns;
@@ -4747,6 +4785,8 @@ function applySchedulePacePreset(pace) {
     state.scheduleModal.form.interactionTypes = Array.isArray(payload.interactionTypes) && payload.interactionTypes.length
       ? [...payload.interactionTypes]
       : state.scheduleModal.form.interactionTypes;
+    state.scheduleModal.form.rechatMaxScanDays = payload.rechatMaxScanDays ?? state.scheduleModal.form.rechatMaxScanDays;
+    state.scheduleModal.form.rechatConsecutiveOutboundLimit = payload.rechatConsecutiveOutboundLimit ?? state.scheduleModal.form.rechatConsecutiveOutboundLimit;
   }
   state.scheduleModal.form.advancedTouched = false;
   render();
@@ -4908,7 +4948,9 @@ async function submitScheduleModal() {
             }
           : {
               maxThreads: form.maxThreads,
-              interactionTypes: form.interactionTypes
+              interactionTypes: form.interactionTypes,
+              rechatMaxScanDays: form.rechatMaxScanDays,
+              rechatConsecutiveOutboundLimit: form.rechatConsecutiveOutboundLimit
             })
       }
     });

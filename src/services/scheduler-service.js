@@ -551,6 +551,12 @@ class SchedulerService {
         if (Array.isArray(schedulePayload.interactionTypes) && schedulePayload.interactionTypes.length > 0) {
           overrides.interactionTypes = schedulePayload.interactionTypes;
         }
+        if (schedulePayload.rechatMaxScanDays) {
+          overrides.rechatMaxScanDays = schedulePayload.rechatMaxScanDays;
+        }
+        if (schedulePayload.rechatConsecutiveOutboundLimit) {
+          overrides.rechatConsecutiveOutboundLimit = schedulePayload.rechatConsecutiveOutboundLimit;
+        }
         if (runnerOverride) overrides.bossCliRunner = runnerOverride;
         const loopResult = await this.followupLoopService.run({ runId, jobKey, mode: taskType, signal, ...overrides });
         if (loopResult?.reason === 'manually_stopped') {

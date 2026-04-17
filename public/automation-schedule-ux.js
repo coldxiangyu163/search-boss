@@ -1,5 +1,8 @@
 (function initAutomationScheduleUx(globalScope) {
-  const TASK_SPECIFIC_KEYS = ['targetCount', 'recommendTab', 'maxThreads', 'interactionTypes'];
+  const TASK_SPECIFIC_KEYS = ['targetCount', 'recommendTab', 'maxThreads', 'interactionTypes', 'rechatMaxScanDays', 'rechatConsecutiveOutboundLimit'];
+
+  const DEFAULT_RECHAT_MAX_SCAN_DAYS = 7;
+  const DEFAULT_RECHAT_CONSECUTIVE_OUTBOUND_LIMIT = 3;
 
   const PACE_OPTIONS = [
     { value: 'conservative', label: '保守' },
@@ -45,7 +48,9 @@
         dailyMaxRuns: 3,
         payload: {
           maxThreads: 10,
-          interactionTypes: ['request_resume']
+          interactionTypes: ['request_resume'],
+          rechatMaxScanDays: DEFAULT_RECHAT_MAX_SCAN_DAYS,
+          rechatConsecutiveOutboundLimit: DEFAULT_RECHAT_CONSECUTIVE_OUTBOUND_LIMIT
         }
       },
       standard: {
@@ -54,7 +59,9 @@
         dailyMaxRuns: 0,
         payload: {
           maxThreads: 20,
-          interactionTypes: ['request_resume']
+          interactionTypes: ['request_resume'],
+          rechatMaxScanDays: DEFAULT_RECHAT_MAX_SCAN_DAYS,
+          rechatConsecutiveOutboundLimit: DEFAULT_RECHAT_CONSECUTIVE_OUTBOUND_LIMIT
         }
       },
       aggressive: {
@@ -63,7 +70,9 @@
         dailyMaxRuns: 0,
         payload: {
           maxThreads: 30,
-          interactionTypes: ['request_resume', 'exchange_phone', 'exchange_wechat']
+          interactionTypes: ['request_resume', 'exchange_phone', 'exchange_wechat'],
+          rechatMaxScanDays: DEFAULT_RECHAT_MAX_SCAN_DAYS,
+          rechatConsecutiveOutboundLimit: DEFAULT_RECHAT_CONSECUTIVE_OUTBOUND_LIMIT
         }
       }
     }
@@ -111,6 +120,11 @@
     delete sourcePayload.recommendTab;
     sourcePayload.maxThreads = normalizePositiveInt(sourcePayload.maxThreads, 20);
     sourcePayload.interactionTypes = sanitizeInteractionTypes(sourcePayload.interactionTypes);
+    sourcePayload.rechatMaxScanDays = normalizePositiveInt(sourcePayload.rechatMaxScanDays, DEFAULT_RECHAT_MAX_SCAN_DAYS);
+    sourcePayload.rechatConsecutiveOutboundLimit = normalizePositiveInt(
+      sourcePayload.rechatConsecutiveOutboundLimit,
+      DEFAULT_RECHAT_CONSECUTIVE_OUTBOUND_LIMIT
+    );
     return sourcePayload;
   }
 
