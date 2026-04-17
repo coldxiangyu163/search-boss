@@ -319,14 +319,18 @@ class BossCliRunner {
     return this.#run(args);
   }
 
-  async navigateTo({ runId, url }) {
-    return this.#run([
+  async navigateTo({ runId, url, force = false }) {
+    const args = [
       'navigate',
       '--run-id',
       String(runId),
       '--url',
       String(url)
-    ]);
+    ];
+    if (force) {
+      args.push('--force');
+    }
+    return this.#run(args);
   }
 
   async sendChatMessage({ runId, text }) {

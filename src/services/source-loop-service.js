@@ -120,7 +120,7 @@ class SourceLoopService {
       let navDone = false;
       for (let attempt = 0; attempt < maxNavRetries; attempt++) {
         try {
-          await runner.navigateTo({ runId, url: recommendUrl });
+          await runner.navigateTo({ runId, url: recommendUrl, force: true });
           navDone = true;
           break;
         } catch (error) {
@@ -296,7 +296,9 @@ class SourceLoopService {
           runId,
           effectiveTargetCount,
           stats,
-          quotaInfo: candidateResult
+          quotaInfo: candidateResult,
+          runner,
+          jobContext
         });
       }
 
@@ -313,12 +315,7 @@ class SourceLoopService {
 
     // Handle manual stop
     if (signal?.aborted) {
-      try {
-        await runner.navigateTo({
-          runId,
-          url: buildRecommendInitialUrl(jobContext.bossEncryptJobId)
-        });
-      } catch (_) {}
+      await this.#resetRecommendPageAfterCompletion({ runId, runner, jobContext });
 
       const stoppedSummary = {
         targetCount: effectiveTargetCount,
@@ -367,12 +364,32 @@ class SourceLoopService {
       payload: summary
     });
 
+    await this.#resetRecommendPageAfterCompletion({ runId, runner, jobContext });
+
     await this.agentService.completeRun({
       runId,
       payload: summary
     });
 
     return { ok: true, stats: summary };
+  }
+
+  async #resetRecommendPageAfterCompletion({ runId, runner, jobContext }) {
+    try {
+      await runner.navigateTo({
+        runId,
+        url: buildRecommendInitialUrl(jobContext?.bossEncryptJobId || null),
+        force: true
+      });
+    } catch (error) {
+      await this.#recordEvent(runId, {
+        eventId: `source-loop-reset-warn:${runId}`,
+        eventType: 'source_loop_warning',
+        stage: 'source_loop',
+        message: `final recommend reset failed: ${error.message}`,
+        payload: { error: error.message }
+      });
+    }
   }
 
   async #processCandidate({ runId, jobKey, jobRequirement, customRequirement, enterpriseKnowledge, candidate, processedGeekIds, stats, runner }) {
@@ -668,14 +685,34 @@ class SourceLoopService {
         return { greeted: false, alreadyChatting: true };
       }
       if (!greetResult.greeted) {
-        try { await runner.closeRecommendPopup({ runId }); } catch (_) {}
-        return {
-          greeted: false,
-          alreadyChatting: false,
-          quotaExhausted: false,
-          reason: greetResult.reason || 'boss_recommend_greet_result_pending',
-          resultText: greetResult.resultText || ''
-        };
+        // Second-chance confirmation: Boss may not flip the button text within the
+        // click-time polling window. Re-inspect the recommend state to see whether the
+        // detail action has moved to a post-greet state (继续沟通/已沟通/已打招呼) or the
+        // detail has closed. Treat those as success to avoid false GREET_FAILED reports.
+        const confirmed = await this.#confirmGreetViaState({ runId, runner });
+        if (confirmed) {
+          await this.#recordEvent(runId, {
+            eventId: `source-loop-greet-confirmed:${runId}:${bossEncryptGeekId}`,
+            eventType: 'greet_confirmed_by_state',
+            stage: 'source_loop',
+            message: `greet confirmed via state re-check: ${candidateName}`,
+            payload: {
+              bossEncryptGeekId,
+              candidateName,
+              initialReason: greetResult.reason || 'boss_recommend_greet_result_pending'
+            }
+          });
+          // Fall through to the post-greet bookkeeping below (close popup + record action).
+        } else {
+          try { await runner.closeRecommendPopup({ runId }); } catch (_) {}
+          return {
+            greeted: false,
+            alreadyChatting: false,
+            quotaExhausted: false,
+            reason: greetResult.reason || 'boss_recommend_greet_result_pending',
+            resultText: greetResult.resultText || ''
+          };
+        }
       }
     } catch (error) {
       try { await runner.closeRecommendPopup({ runId }); } catch (_) {}
@@ -720,7 +757,26 @@ class SourceLoopService {
     return { greeted: true, alreadyChatting: false };
   }
 
-  async #handleQuotaExhausted({ runId, effectiveTargetCount, stats, quotaInfo }) {
+  async #confirmGreetViaState({ runId, runner, maxAttempts = 4, intervalMs = 1_000 } = {}) {
+    const postGreetPattern = /(继续沟通|已沟通|已打招呼|打招呼成功|已发送|沟通中)/;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      await new Promise((r) => setTimeout(r, intervalMs));
+      let state;
+      try {
+        state = await runner.inspectRecommendState({ runId });
+      } catch (_) {
+        continue;
+      }
+      if (!state?.ok) continue;
+      if (state.detailOpen === false) return true;
+      if (state.currentActionText && postGreetPattern.test(String(state.currentActionText))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async #handleQuotaExhausted({ runId, effectiveTargetCount, stats, quotaInfo, runner, jobContext }) {
     const hrAccountId = typeof this.agentService._resolveHrAccountIdFromRun === 'function'
       ? await this.agentService._resolveHrAccountIdFromRun(runId)
       : null;
@@ -754,6 +810,10 @@ class SourceLoopService {
       message: `source blocked: ${summary.quotaMessage}`,
       payload: summary
     });
+
+    if (runner) {
+      await this.#resetRecommendPageAfterCompletion({ runId, runner, jobContext });
+    }
 
     const stopFn = this.agentService.stopRun || this.agentService.failRun;
     await stopFn.call(this.agentService, {

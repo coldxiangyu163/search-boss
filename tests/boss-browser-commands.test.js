@@ -298,25 +298,33 @@ test('clickRecommendGreet no longer reports success when post-click state stays 
     }
   ];
 
-  for (let index = 0; index < 30; index += 1) {
-    evaluateResponses.push({
+  const pollingResponses = [
+    {
       type: 'string',
       value: JSON.stringify({
         ok: true,
         blocked: false
       })
-    });
-    evaluateResponses.push({
+    },
+    {
       type: 'string',
       value: JSON.stringify({
         ok: false,
         reason: 'boss_recommend_greet_result_pending'
       })
-    });
-  }
+    }
+  ];
+  let pollingIndex = 0;
 
   const cdpClient = {
-    evaluate: async () => evaluateResponses.shift(),
+    evaluate: async () => {
+      if (evaluateResponses.length > 0) {
+        return evaluateResponses.shift();
+      }
+      const response = pollingResponses[pollingIndex % pollingResponses.length];
+      pollingIndex += 1;
+      return response;
+    },
     dispatchMouseClick: async (payload) => {
       dispatchCalls.push(payload);
     }

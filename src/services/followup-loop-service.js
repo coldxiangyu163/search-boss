@@ -159,7 +159,8 @@ class FollowupLoopService {
     try {
       await runner.navigateTo({
         runId,
-        url: 'https://www.zhipin.com/web/chat/index'
+        url: 'https://www.zhipin.com/web/chat/index',
+        force: true
       });
     } catch (error) {
       await this.#failRun(runId, `chat_page_navigation_failed:${error.message}`, stats);
@@ -190,7 +191,8 @@ class FollowupLoopService {
 
         await runner.navigateTo({
           runId,
-          url: 'https://www.zhipin.com/web/chat/index'
+          url: 'https://www.zhipin.com/web/chat/index',
+          force: true
         });
         await this.sleep(3_000);
 
@@ -2063,7 +2065,8 @@ class FollowupLoopService {
     try {
       await runner.navigateTo({
         runId,
-        url: 'https://www.zhipin.com/web/chat/index'
+        url: 'https://www.zhipin.com/web/chat/index',
+        force: true
       });
     } catch (error) {
       await this.#recordEvent(runId, {

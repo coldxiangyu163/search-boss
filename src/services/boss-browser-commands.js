@@ -1195,7 +1195,7 @@ async function clickRecommendGreet({
   const clickedAt = Date.now();
   let settled = false;
   let pendingReason = 'boss_recommend_greet_result_pending';
-  while (!settled && Date.now() - clickedAt < 5_000) {
+  while (!settled && Date.now() - clickedAt < 10_000) {
     await new Promise((resolve) => setTimeout(resolve, 200));
     try {
       const quotaState = await inspectRecommendQuotaState({
@@ -1222,11 +1222,15 @@ async function clickRecommendGreet({
       });
       if (state?.ok) {
         settled = true;
+        // Post-click success: regardless of whether the button now says
+        // "继续沟通"/"已沟通" or a toast appeared, this very click is what triggered
+        // the transition, so it counts as a fresh greet. `alreadyChatting` is reserved
+        // for the pre-click case (candidate was already chatting before we clicked).
         return {
           ok: true,
           greeted: true,
           resultText: state.resultText || '',
-          alreadyChatting: state.alreadyChatting || false
+          alreadyChatting: false
         };
       }
       pendingReason = state?.reason || pendingReason;
@@ -1408,19 +1412,64 @@ function buildRecommendGreetResultExpression() {
         return JSON.stringify({ ok: false, reason: 'boss_recommend_frame_unavailable' });
       }
 
+      const postGreetTextPattern = /(继续沟通|已沟通|已打招呼|打招呼成功|已发送|沟通中)/;
+      const normalize = (t) => (t || '').replace(/\\s+/g, '').trim();
+
       const detailWrap = recDoc.querySelector('.resume-detail-wrap');
       if (!detailWrap) {
         return JSON.stringify({ ok: true, resultText: 'detail_closed_after_greet', alreadyChatting: false });
       }
 
-      const buttons = Array.from(detailWrap.querySelectorAll('button, a, .btn, .btn-v2'));
-      const postGreetBtn = buttons.find((btn) => {
-        const text = (btn.textContent || '').replace(/\\s+/g, '').trim();
-        return text === '继续沟通' || text === '已沟通';
-      });
+      // 1) Search inside detailWrap for an indicator button
+      const detailButtons = Array.from(detailWrap.querySelectorAll('button, a, .btn, .btn-v2'));
+      const detailHit = detailButtons.find((btn) => postGreetTextPattern.test(normalize(btn.textContent)));
+      if (detailHit) {
+        return JSON.stringify({
+          ok: true,
+          resultText: normalize(detailHit.textContent),
+          alreadyChatting: /(继续沟通|已沟通|已打招呼)/.test(normalize(detailHit.textContent))
+        });
+      }
 
-      if (postGreetBtn) {
-        return JSON.stringify({ ok: true, resultText: (postGreetBtn.textContent || '').trim(), alreadyChatting: true });
+      // 2) Fallback: detail-panel greet button outside detailWrap (mirrors target selector fallback)
+      const fallbackButtons = Array.from(
+        recDoc.querySelectorAll('button.btn-greet, .btn-v2.btn-greet, .btn-sure-v2, .btn, button')
+      );
+      const fallbackHit = fallbackButtons.find((btn) => {
+        const inCard = btn.closest('.candidate-card-wrap, .card-inner');
+        if (inCard) return false;
+        return postGreetTextPattern.test(normalize(btn.textContent));
+      });
+      if (fallbackHit) {
+        return JSON.stringify({
+          ok: true,
+          resultText: normalize(fallbackHit.textContent),
+          alreadyChatting: /(继续沟通|已沟通|已打招呼)/.test(normalize(fallbackHit.textContent))
+        });
+      }
+
+      // 3) Toast based success indicator (Boss commonly shows a transient "已打招呼" toast)
+      const toastSelectors = [
+        '.boss-toast',
+        '.toast-text',
+        '.boss-toast__text',
+        '.bsi-toast',
+        '.iui-message'
+      ];
+      const toastNodes = toastSelectors
+        .flatMap((sel) => Array.from(recDoc.querySelectorAll(sel)))
+        .concat(toastSelectors.flatMap((sel) => Array.from(document.querySelectorAll(sel))));
+      const toastHit = toastNodes.find((el) => {
+        if (!el) return false;
+        const text = normalize(el.innerText || el.textContent);
+        return text && /(打招呼成功|已打招呼|沟通已建立|招呼已发出)/.test(text);
+      });
+      if (toastHit) {
+        return JSON.stringify({
+          ok: true,
+          resultText: normalize(toastHit.innerText || toastHit.textContent),
+          alreadyChatting: true
+        });
       }
 
       return JSON.stringify({ ok: false, reason: 'boss_recommend_greet_result_pending' });

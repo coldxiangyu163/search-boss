@@ -69,7 +69,7 @@ function parseOptions(args, initialOptions) {
       throw new Error(`Unexpected argument: ${key}`);
     }
 
-    const booleanFlags = ['--prefer-chat'];
+    const booleanFlags = ['--prefer-chat', '--force'];
     if (booleanFlags.includes(key)) {
       options[toCamelCase(key.slice(2))] = true;
       continue;
@@ -691,7 +691,8 @@ async function runCommand({ options, config, cdpClient, sessionStore, browserCom
       cdpClient,
       targetId: session.targetId,
       urlPrefix: config.bossCdpTargetUrlPrefix,
-      url: options.url
+      url: options.url,
+      skipIfMatches: !options.force
     });
 
     return {
