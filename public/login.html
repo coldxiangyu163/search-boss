@@ -98,6 +98,42 @@
         text-align: center;
         min-height: 20px;
       }
+      .login-captcha-row {
+        display: flex;
+        gap: 8px;
+        align-items: stretch;
+      }
+      .login-captcha-row input {
+        flex: 1;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+      }
+      .login-captcha-image {
+        flex: 0 0 120px;
+        height: 40px;
+        border: 1px solid var(--border, #ddd);
+        border-radius: 6px;
+        background: #fafafa;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        user-select: none;
+      }
+      .login-captcha-image img {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      .login-captcha-hint {
+        font-size: 12px;
+        color: var(--text-muted, #999);
+        margin-top: 4px;
+      }
+      .hidden {
+        display: none !important;
+      }
     </style>
   </head>
   <body>
@@ -119,12 +155,63 @@
             <label for="password">密码</label>
             <input type="password" id="password" name="password" required placeholder="请输入密码" autocomplete="current-password" />
           </div>
+          <div class="login-field hidden" id="captcha-field">
+            <label for="captcha">图形验证码</label>
+            <div class="login-captcha-row">
+              <input type="text" id="captcha" name="captcha" placeholder="请输入验证码" autocomplete="off" maxlength="6" />
+              <div class="login-captcha-image" id="captcha-image" title="点击刷新验证码" onclick="refreshCaptcha()"></div>
+            </div>
+            <p class="login-captcha-hint">看不清？点击图片刷新</p>
+          </div>
           <div class="login-error" id="login-error"></div>
           <button type="submit" class="login-btn" id="login-btn">登录</button>
         </form>
       </div>
     </div>
     <script>
+      const captchaField = document.getElementById('captcha-field');
+      const captchaImage = document.getElementById('captcha-image');
+      const captchaInput = document.getElementById('captcha');
+      const emailInput = document.getElementById('email');
+      let captchaVisible = false;
+
+      function showCaptcha() {
+        if (captchaVisible) return;
+        captchaVisible = true;
+        captchaField.classList.remove('hidden');
+        refreshCaptcha();
+      }
+
+      function hideCaptcha() {
+        captchaVisible = false;
+        captchaField.classList.add('hidden');
+        captchaInput.value = '';
+        captchaImage.innerHTML = '';
+      }
+
+      function refreshCaptcha() {
+        if (!captchaVisible) return;
+        captchaInput.value = '';
+        const img = new Image();
+        img.alt = '图形验证码';
+        img.src = '/api/auth/captcha?t=' + Date.now();
+        captchaImage.innerHTML = '';
+        captchaImage.appendChild(img);
+      }
+
+      async function probeLoginStatus() {
+        const email = emailInput.value.trim();
+        if (!email) return;
+        try {
+          const res = await fetch('/api/auth/login-status?email=' + encodeURIComponent(email));
+          if (!res.ok) return;
+          const data = await res.json();
+          if (data.needCaptcha) showCaptcha();
+        } catch {}
+      }
+
+      emailInput.addEventListener('blur', probeLoginStatus);
+
       async function handleLogin(e) {
         e.preventDefault();
         const btn = document.getElementById('login-btn');
@@ -134,26 +221,48 @@
         btn.textContent = '登录中...';
 
         try {
+          const payload = {
+            email: emailInput.value,
+            password: document.getElementById('password').value
+          };
+          if (captchaVisible) {
+            payload.captcha = captchaInput.value;
+          }
+
           const res = await fetch('/api/auth/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              email: document.getElementById('email').value,
-              password: document.getElementById('password').value
-            })
+            body: JSON.stringify(payload)
           });
 
           const data = await res.json();
           if (data.ok) {
             window.location.href = '/';
-          } else {
-            const msgs = {
-              invalid_credentials: '邮箱或密码错误',
-              account_disabled: '账号已被禁用',
-              missing_credentials: '请输入邮箱和密码'
-            };
-            errorEl.textContent = msgs[data.error] || '登录失败';
+            return;
           }
+
+          if (data.needCaptcha) {
+            showCaptcha();
+            refreshCaptcha();
+          }
+
+          const msgs = {
+            invalid_credentials: '邮箱或密码错误',
+            account_disabled: '账号已被禁用',
+            account_expired: '账号已过期，请联系管理员',
+            missing_credentials: '请输入邮箱和密码',
+            invalid_captcha: '验证码错误或已过期，请重试',
+            account_locked: '账号因多次登录失败已被临时锁定，请稍后再试',
+            too_many_attempts: '登录尝试过于频繁，请稍后再试'
+          };
+          let msg = msgs[data.error] || data.message || '登录失败';
+          if (data.error === 'invalid_credentials' && typeof data.attemptsLeft === 'number') {
+            msg += '（剩余 ' + data.attemptsLeft + ' 次尝试）';
+          }
+          if (data.error === 'too_many_attempts' && data.retryAfter) {
+            msg += '（约 ' + data.retryAfter + ' 秒后可重试）';
+          }
+          errorEl.textContent = msg;
         } catch (err) {
           errorEl.textContent = '网络错误，请重试';
         } finally {

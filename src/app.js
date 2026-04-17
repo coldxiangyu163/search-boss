@@ -6,6 +6,9 @@ const session = require('express-session');
 const PgStore = require('connect-pg-simple')(session);
 const { authMiddleware, requireRole, resolveHrScope, isSystemAdmin, isAdminRole } = require('./middleware/auth');
 const { assertSupportedUserRole } = require('./services/auth-service');
+const { createLoginRateLimit } = require('./middleware/login-rate-limit');
+const { createLoginAttemptTracker } = require('./services/login-attempt-tracker');
+const { randomCaptchaCode, renderCaptchaSvg, normalizeCaptchaInput } = require('./services/captcha');
 const {
   LicenseService,
   getHrAccountLicenseStatus,
@@ -56,6 +59,22 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
   const licenseService = config.licenseFile
     ? new LicenseService({ licensePath: config.licenseFile })
     : null;
+
+  const loginSecurityOptions = config.loginSecurity || {};
+  const loginRateLimit = createLoginRateLimit({
+    windowMs: loginSecurityOptions.ipWindowMs,
+    max: loginSecurityOptions.ipMax || 20,
+    disabled: loginSecurityOptions.ipRateLimitDisabled === true
+  });
+  const loginAttemptTracker = loginSecurityOptions.tracker || createLoginAttemptTracker({
+    maxAttempts: loginSecurityOptions.maxAttempts || 5,
+    lockoutMs: loginSecurityOptions.lockoutMs,
+    attemptWindowMs: loginSecurityOptions.attemptWindowMs
+  });
+  const captchaFailThreshold = Number.isFinite(loginSecurityOptions.captchaFailThreshold)
+    ? loginSecurityOptions.captchaFailThreshold
+    : 2;
+  const captchaTtlMs = Number(loginSecurityOptions.captchaTtlMs) || 5 * 60 * 1000;
 
   app.use(express.json());
 
@@ -213,6 +232,19 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
     });
   }
 
+  if (pool) {
+    const gatedEntryPaths = new Set(['/', '/index.html', '/app.js']);
+    app.use((req, res, next) => {
+      if (!gatedEntryPaths.has(req.path)) return next();
+      if (req.user) return next();
+      if (req.path === '/app.js') {
+        res.status(401).type('application/javascript').send('// unauthorized');
+        return;
+      }
+      res.redirect('/login.html');
+    });
+  }
+
   app.use(express.static('public'));
 
   // --- Setup routes (first-run wizard, no auth required) ---
@@ -311,19 +343,109 @@ function createApp({ services = {}, config = {}, pool = null } = {}) {
   }
 
   // --- Auth routes (no auth required) ---
-  app.post('/api/auth/login', async (req, res, next) => {
+  app.get('/api/auth/captcha', (req, res) => {
+    const code = randomCaptchaCode(4);
+    if (req.session) {
+      req.session.captchaCode = code;
+      req.session.captchaExpiresAt = Date.now() + captchaTtlMs;
+    }
+    res.type('image/svg+xml');
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.set('Pragma', 'no-cache');
+    res.send(renderCaptchaSvg(code));
+  });
+
+  app.get('/api/auth/login-status', (req, res) => {
+    const email = typeof req.query.email === 'string' ? req.query.email : '';
+    const status = loginAttemptTracker.getStatus(email);
+    const sessionFailCount = Number(req.session?.loginFailCount) || 0;
+    const needCaptcha = captchaFailThreshold > 0
+      && (sessionFailCount >= captchaFailThreshold || status.attempts >= captchaFailThreshold);
+    res.json({
+      needCaptcha,
+      locked: status.locked === true,
+      lockedUntil: status.lockedUntil || null
+    });
+  });
+
+  app.post('/api/auth/login', loginRateLimit, async (req, res, next) => {
     try {
       if (!services.auth) {
         return res.status(501).json({ error: 'auth_not_configured' });
       }
 
-      const result = await services.auth.login(req.body);
-      if (!result.ok) {
-        return res.status(401).json({ error: result.error });
+      const body = req.body || {};
+      const email = body.email;
+      const password = body.password;
+      const submittedCaptcha = body.captcha;
+
+      const accountStatus = loginAttemptTracker.getStatus(email);
+      if (accountStatus.locked) {
+        return res.status(423).json({
+          error: 'account_locked',
+          message: '账号因多次登录失败已被临时锁定，请稍后再试',
+          lockedUntil: accountStatus.lockedUntil || null,
+          needCaptcha: captchaFailThreshold > 0
+        });
       }
 
+      const sessionFailCount = Number(req.session?.loginFailCount) || 0;
+      const captchaRequired = captchaFailThreshold > 0
+        && (sessionFailCount >= captchaFailThreshold
+          || accountStatus.attempts >= captchaFailThreshold);
+
+      if (captchaRequired) {
+        const storedCode = req.session?.captchaCode;
+        const expiresAt = Number(req.session?.captchaExpiresAt) || 0;
+        if (req.session) {
+          req.session.captchaCode = null;
+          req.session.captchaExpiresAt = 0;
+        }
+        const captchaOk = storedCode
+          && Date.now() <= expiresAt
+          && submittedCaptcha
+          && normalizeCaptchaInput(submittedCaptcha) === String(storedCode).toUpperCase();
+        if (!captchaOk) {
+          return res.status(400).json({
+            error: 'invalid_captcha',
+            message: '验证码错误或已过期，请刷新后重试',
+            needCaptcha: true
+          });
+        }
+      }
+
+      const result = await services.auth.login({ email, password });
+      if (!result.ok) {
+        let tracked = { attempts: accountStatus.attempts || 0, attemptsLeft: undefined, locked: false, lockedUntil: null };
+        if (result.error === 'invalid_credentials') {
+          tracked = loginAttemptTracker.recordFailure(email);
+        }
+        if (req.session) {
+          req.session.loginFailCount = sessionFailCount + 1;
+        }
+        const needCaptcha = captchaFailThreshold > 0
+          && ((sessionFailCount + 1) >= captchaFailThreshold
+            || (tracked.attempts || 0) >= captchaFailThreshold);
+        const statusCode = tracked.locked ? 423 : 401;
+        const payload = {
+          error: tracked.locked ? 'account_locked' : result.error,
+          needCaptcha
+        };
+        if (tracked.locked) {
+          payload.message = '账号因多次登录失败已被临时锁定，请稍后再试';
+          payload.lockedUntil = tracked.lockedUntil || null;
+        } else if (typeof tracked.attemptsLeft === 'number') {
+          payload.attemptsLeft = tracked.attemptsLeft;
+        }
+        return res.status(statusCode).json(payload);
+      }
+
+      loginAttemptTracker.recordSuccess(email);
       if (req.session) {
         req.session.userId = result.user.id;
+        req.session.loginFailCount = 0;
+        req.session.captchaCode = null;
+        req.session.captchaExpiresAt = 0;
       }
 
       res.json({ ok: true, user: result.user });
