@@ -293,7 +293,8 @@ class FollowupLoopService {
           effectiveMaxThreads, effectiveInteractionTypes,
           effectiveRechatMaxScanDays, effectiveRechatConsecutiveOutboundLimit,
           runner, signal, stats,
-          processedUids
+          processedUids,
+          heartbeat
         });
       }
 
@@ -431,7 +432,8 @@ class FollowupLoopService {
         effectiveMaxThreads, effectiveInteractionTypes,
         effectiveRechatMaxScanDays, effectiveRechatConsecutiveOutboundLimit,
         runner, signal, stats,
-        processedUids
+        processedUids,
+        heartbeat
       });
     }
 
@@ -873,7 +875,11 @@ class FollowupLoopService {
     }
   }
 
-  async #runRechatPhase({ runId, jobKey, jobContext, mode, effectiveMaxThreads, effectiveInteractionTypes, effectiveRechatMaxScanDays, effectiveRechatConsecutiveOutboundLimit, runner, signal, stats, processedUids }) {
+  async #runRechatPhase({ runId, jobKey, jobContext, mode, effectiveMaxThreads, effectiveInteractionTypes, effectiveRechatMaxScanDays, effectiveRechatConsecutiveOutboundLimit, runner, signal, stats, processedUids, heartbeat }) {
+    const safeHeartbeat = () => {
+      if (typeof heartbeat !== 'function') return;
+      try { heartbeat(); } catch (_) { /* non-fatal */ }
+    };
     const rechatMaxScanDays = effectiveRechatMaxScanDays || this.rechatMaxScanDays;
     const rechatConsecutiveOutboundLimit = effectiveRechatConsecutiveOutboundLimit || this.rechatConsecutiveOutboundLimit;
     // Phase R1: Switch to "全部" filter
